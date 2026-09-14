@@ -11,13 +11,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { MapPin, Search, X, Contact, User } from "lucide-react";
+import { MapPin, Search, X, Contact, User, Loader2, Wrench } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { TechnicianRecord } from "@/components/technicians/TechnicianDialog";
 import { TechnicianDetailsContent } from "@/components/map/TechnicianDetailsContent";
 import { fetchAllTechnicians, TECHNICIANS_QUERY_KEY } from "@/lib/technicians";
-import { haversineMiles, isValidLatLng, LatLng } from "@/lib/geo";
+import { haversineMiles, isValidLatLng, LatLng, geocodeArea } from "@/lib/geo";
 import { resolveZip, lookupZipCentroidSync, preloadZipDataset, ZipCentroid } from "@/lib/zipCentroids";
 import { STATUS_LABELS } from "@/lib/constants";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -65,6 +65,12 @@ interface SearchableTech extends TechnicianRecord {
   locationUnavailable: boolean;
 }
 
+// A row in the unified search dropdown.
+type OmniItem =
+  | { kind: "tech"; tech: SearchableTech }
+  | { kind: "customer"; lead: MappedLead }
+  | { kind: "location" };
+
 type CanvasPinKind = "lead" | "tech";
 
 interface CanvasPin {
@@ -86,6 +92,10 @@ interface CanvasHitTarget extends CanvasPin {
 // each other collapse into one cluster point. Techs in a city share one ZIP
 // centroid, so without this they stack and hide each other.
 const CLUSTER_RADIUS_PX = 26;
+
+// At/above this zoom, multi-member clusters fan out automatically (no click
+// needed) — the map is close enough that showing every tech is readable.
+const AUTO_SPIDER_ZOOM = 12;
 
 interface ProjectedCluster {
   x: number;
@@ -289,17 +299,19 @@ class MapPinCanvasLayer extends L.Layer {
 
     // Techs cluster: a stack of techs on one point becomes a single cluster
     // point that fans its members out in a ring when clicked (spiderfied).
+    const autoExpand = (this.map.getZoom() ?? 0) >= AUTO_SPIDER_ZOOM;
     const techClusters = this.clusterPins(this.pins.filter((p) => p.kind === "tech"));
     for (const cluster of techClusters) {
-      const isSpiderfied = this.spiderIds !== null
+      const manuallyOpen = this.spiderIds !== null
         && cluster.members.length === this.spiderIds.size
         && cluster.members.every((m) => this.spiderIds!.has(m.id));
 
-      if (isSpiderfied) {
-        this.drawSpider(ctx, cluster);
-      } else if (cluster.members.length === 1) {
+      if (cluster.members.length === 1) {
         const pin = cluster.members[0];
         this.drawPin(ctx, pin, pin.selected ? "#2563eb" : "#3b82f6", pin.selected ? 34 : 30);
+      } else if (manuallyOpen || autoExpand) {
+        // Fanned out either by a click or automatically once zoomed in close.
+        this.drawSpider(ctx, cluster);
       } else {
         this.drawClusterBadge(ctx, cluster);
       }
@@ -564,6 +576,19 @@ class MapPinCanvasLayer extends L.Layer {
   };
 }
 
+// Pinpoint marker for a specific-address search. A divIcon avoids Leaflet's
+// default-marker image, which does not resolve under the bundler.
+const searchPinIcon = L.divIcon({
+  className: "marshmallow-search-marker",
+  html:
+    `<svg width="26" height="34" viewBox="0 0 24 32" xmlns="http://www.w3.org/2000/svg">` +
+    `<path d="M12 0.75C5.65 0.75 0.75 5.65 0.75 12C0.75 20.5 12 31.25 12 31.25C12 31.25 23.25 20.5 23.25 12C23.25 5.65 18.35 0.75 12 0.75Z" fill="#7c3aed" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/>` +
+    `<circle cx="12" cy="12" r="4.25" fill="#ffffff"/></svg>`,
+  iconSize: [26, 34],
+  iconAnchor: [13, 32],
+  popupAnchor: [0, -30],
+});
+
 function escapeHtml(v: string) {
   return String(v ?? "")
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
@@ -594,6 +619,9 @@ export default function MapViewPage() {
   const mapEl = useRef<HTMLDivElement | null>(null);
   const pinLayerRef = useRef<MapPinCanvasLayer | null>(null);
   const radiusLayer = useRef<L.Circle | null>(null);
+  // The searched area's outline (city / ZIP / county) and the pinpoint marker.
+  const boundaryLayerRef = useRef<L.Layer | null>(null);
+  const searchMarkerRef = useRef<L.Marker | null>(null);
   const leadDataRefs = useRef<Map<string, MappedLead>>(new Map());
   const techDataRefs = useRef<Map<string, SearchableTech>>(new Map());
   const selectedTechRef = useRef<SearchableTech | null>(null);
@@ -610,19 +638,20 @@ export default function MapViewPage() {
 
   const [selectedTechId, setSelectedTechId] = useState<string | null>(null);
   const [serviceFilter, setServiceFilter] = useState<string>("all");
-  const [techSearch, setTechSearch] = useState("");
-  const [showTechSuggestions, setShowTechSuggestions] = useState(false);
-  const [techActiveIndex, setTechActiveIndex] = useState(0);
+  // One unified search box handles technicians, customers, and locations.
+  const [omniSearch, setOmniSearch] = useState("");
+  const [showOmni, setShowOmni] = useState(false);
+  const [omniActiveIndex, setOmniActiveIndex] = useState(0);
+  const [geocoding, setGeocoding] = useState(false);
   const [pendingFocusTechId, setPendingFocusTechId] = useState<string | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [zipDatasetReady, setZipDatasetReady] = useState(false);
   const [mapVisible, setMapVisible] = useState(false);
   const [viewMode, setViewMode] = useState<"leads" | "techs" | "both">("both");
-  const [customerSearch, setCustomerSearch] = useState("");
-  const [showSuggestions, setShowSuggestions] = useState(false);
   const [pendingFocusLeadId, setPendingFocusLeadId] = useState<string | null>(null);
-  const [areaSearch, setAreaSearch] = useState("");
-  const [areaQuery, setAreaQuery] = useState(""); // applied on Search Area click
+  // Kept for the tech/lead list filters, which now stay unfiltered by area
+  // (location search draws a boundary instead of filtering the pins).
+  const [areaQuery] = useState("");
   const [stateFilter, setStateFilter] = useState<string>("all");
   const [mapReady, setMapReady] = useState(false);
   const [pinRenderVersion, setPinRenderVersion] = useState(0);
@@ -1118,6 +1147,8 @@ export default function MapViewPage() {
       mapRef.current = null;
       pinLayerRef.current = null;
       radiusLayer.current = null;
+      boundaryLayerRef.current = null;
+      searchMarkerRef.current = null;
     };
   }, [cancelLeadVisibilityWork, handleTechMarkerClick, mapVisible, openLeadPopup]);
 
@@ -1242,15 +1273,33 @@ export default function MapViewPage() {
   };
 
   const customerMatches = useMemo(() => {
-    const q = customerSearch.trim().toLowerCase();
+    const q = omniSearch.trim().toLowerCase();
     if (!q) return [] as MappedLead[];
     return mappedLeads
       .filter((l) => (l.customer_name ?? "").toLowerCase().includes(q))
-      .slice(0, 25);
-  }, [customerSearch, mappedLeads]);
+      .slice(0, 6);
+  }, [omniSearch, mappedLeads]);
 
-  const [activeIndex, setActiveIndex] = useState(0);
-  useEffect(() => { setActiveIndex(0); }, [customerSearch]);
+  const techMatches = useMemo(() => {
+    const q = omniSearch.trim().toLowerCase();
+    if (!q) return [] as SearchableTech[];
+    return searchableTechs.filter((t) => {
+      if (serviceFilter !== "all" && (t.service ?? "") !== serviceFilter) return false;
+      return (t.name ?? "").toLowerCase().includes(q);
+    }).slice(0, 6);
+  }, [omniSearch, searchableTechs, serviceFilter]);
+
+  // Combined suggestion list: technicians, then customers, then a location
+  // action that geocodes the query into a boundary or a pinpoint marker.
+  const omniItems = useMemo<OmniItem[]>(() => {
+    const items: OmniItem[] = [];
+    for (const t of techMatches) items.push({ kind: "tech", tech: t });
+    for (const l of customerMatches) items.push({ kind: "customer", lead: l });
+    if (omniSearch.trim()) items.push({ kind: "location" });
+    return items;
+  }, [techMatches, customerMatches, omniSearch]);
+
+  useEffect(() => { setOmniActiveIndex(0); }, [omniSearch]);
 
   const selectCustomer = (lead: MappedLead) => {
     if (!mapVisible) setMapVisible(true);
@@ -1259,49 +1308,16 @@ export default function MapViewPage() {
       const inRange = leadsInRange.some((l) => l.id === lead.id);
       if (!inRange) clearSelectedTech();
     }
-    setShowSuggestions(false);
-    setCustomerSearch(lead.customer_name || "");
+    setShowOmni(false);
+    setOmniSearch(lead.customer_name || "");
     setPendingFocusLeadId(lead.id);
   };
-
-  const performCustomerSearch = () => {
-    const q = customerSearch.trim();
-    if (!q) return;
-    if (customerMatches.length === 0) {
-      toast("No customer found");
-      return;
-    }
-    if (customerMatches.length === 1) {
-      selectCustomer(customerMatches[0]);
-    } else {
-      const target = customerMatches[activeIndex] ?? customerMatches[0];
-      selectCustomer(target);
-    }
-  };
-
-  const clearCustomerSearch = () => {
-    setCustomerSearch("");
-    setShowSuggestions(false);
-    setPendingFocusLeadId(null);
-  };
-
-  // Technician search
-  const techMatches = useMemo(() => {
-    const q = techSearch.trim().toLowerCase();
-    if (!q) return [] as SearchableTech[];
-    return searchableTechs.filter((t) => {
-      if (serviceFilter !== "all" && (t.service ?? "") !== serviceFilter) return false;
-      return (t.name ?? "").toLowerCase().includes(q);
-    }).slice(0, 25);
-  }, [techSearch, searchableTechs, serviceFilter]);
-
-  useEffect(() => { setTechActiveIndex(0); }, [techSearch]);
 
   const selectTech = (tech: SearchableTech) => {
     if (!mapVisible) setMapVisible(true);
     if (viewMode === "leads") setViewMode("both");
-    setShowTechSuggestions(false);
-    setTechSearch(tech.name || "");
+    setShowOmni(false);
+    setOmniSearch(tech.name || "");
     setSelectedTechId(tech.id);
     selectedTechRef.current = tech;
     if (tech.coords) {
@@ -1313,65 +1329,91 @@ export default function MapViewPage() {
     if (isMobile) setSheetOpen(true);
   };
 
-  const performTechSearch = () => {
-    const q = techSearch.trim();
-    if (!q) return;
-    // Exact case-insensitive match wins
-    const exact = techMatches.find((t) => (t.name ?? "").toLowerCase() === q.toLowerCase());
-    if (exact) { selectTech(exact); return; }
-    if (techMatches.length === 0) {
-      toast("No technician found");
-      return;
-    }
-    if (techMatches.length === 1) {
-      selectTech(techMatches[0]);
-    } else {
-      setShowTechSuggestions(true);
-    }
-  };
-
-  const clearTechSearch = () => {
-    setTechSearch("");
-    setShowTechSuggestions(false);
-  };
-
-  const performAreaSearch = () => {
-    if (!mapVisible) setMapVisible(true);
-    setAreaQuery(areaSearch);
-    // Compute matches based on current filters + this area query
-    const q = areaSearch.trim().toLowerCase();
-    const techs = mappedTechs.filter((t) => {
-      if (serviceFilter !== "all" && (t.service ?? "") !== serviceFilter) return false;
-      if (!techMatchesState(t, stateFilter)) return false;
-      return !q || techMatchesArea(t, q);
-    });
-    const leads = mappedLeads.filter((l) => {
-      if (!leadMatchesState(l, stateFilter)) return false;
-      return !q || leadMatchesArea(l, q);
-    });
-    const pts: L.LatLngExpression[] = [];
-    if (viewMode !== "leads") techs.forEach((t) => pts.push([t.coords.latitude, t.coords.longitude]));
-    if (viewMode !== "techs") leads.forEach((l) => pts.push([l.coords.latitude, l.coords.longitude]));
-    if (pts.length === 0) {
-      toast("No technicians or customers found in this area");
-      return;
-    }
+  const clearSearchOverlays = useCallback(() => {
     const map = mapRef.current;
-    if (!map) return;
-    setTimeout(() => {
+    if (boundaryLayerRef.current) {
+      map?.removeLayer(boundaryLayerRef.current);
+      boundaryLayerRef.current = null;
+    }
+    if (searchMarkerRef.current) {
+      map?.removeLayer(searchMarkerRef.current);
+      searchMarkerRef.current = null;
+    }
+  }, []);
+
+  // Geocode the typed query: a city / ZIP / area draws a boundary outline; a
+  // specific address drops a pinpoint marker. Then frame the map on the result.
+  const runLocationSearch = useCallback(async (rawQuery: string) => {
+    const q = rawQuery.trim();
+    if (!q) return;
+    if (!mapVisible) setMapVisible(true);
+    setShowOmni(false);
+    setGeocoding(true);
+    try {
+      const result = await geocodeArea(q);
       const m = mapRef.current;
       if (!m) return;
-      if (pts.length === 1) {
-        m.flyTo(pts[0] as L.LatLngTuple, 11, { duration: 0.6 });
-      } else {
-        m.fitBounds(L.latLngBounds(pts as L.LatLngTuple[]), { padding: [40, 40], maxZoom: 12 });
+      if (!result) {
+        toast("No matching location found");
+        return;
       }
-    }, 60);
+      clearSearchOverlays();
+
+      if (result.isArea) {
+        let bounds: L.LatLngBounds | null = null;
+        if (result.geojson) {
+          const layer = L.geoJSON(result.geojson as unknown as GeoJSON.GeoJsonObject, {
+            style: { color: "#2563eb", weight: 2, fillColor: "#3b82f6", fillOpacity: 0.08 },
+            interactive: false,
+          });
+          layer.addTo(m);
+          boundaryLayerRef.current = layer;
+          bounds = layer.getBounds();
+        } else if (result.boundingBox) {
+          const [south, north, west, east] = result.boundingBox;
+          const rect = L.rectangle([[south, west], [north, east]], {
+            color: "#2563eb", weight: 2, fillColor: "#3b82f6", fillOpacity: 0.08, interactive: false,
+          });
+          rect.addTo(m);
+          boundaryLayerRef.current = rect;
+          bounds = rect.getBounds();
+        }
+        if (bounds && bounds.isValid()) {
+          m.fitBounds(bounds, { padding: [40, 40], maxZoom: 13 });
+        } else {
+          m.flyTo([result.latitude, result.longitude], 11, { duration: 0.6 });
+        }
+        toast(`Showing area: ${result.displayName.split(",").slice(0, 2).join(",").trim()}`);
+      } else {
+        const marker = L.marker([result.latitude, result.longitude], { icon: searchPinIcon, keyboard: false });
+        marker.addTo(m);
+        marker.bindPopup(`<div style="font-weight:600;font-size:12px;max-width:220px">${escapeHtml(result.displayName)}</div>`);
+        searchMarkerRef.current = marker;
+        m.flyTo([result.latitude, result.longitude], 14, { duration: 0.6 });
+        marker.openPopup();
+      }
+    } catch {
+      toast("Location search failed. Please try again.");
+    } finally {
+      setGeocoding(false);
+    }
+  }, [clearSearchOverlays, mapVisible]);
+
+  // Enter / activation: run the highlighted suggestion, else search the location.
+  const runOmniActivate = () => {
+    const item = omniItems[omniActiveIndex] ?? omniItems[0];
+    if (!item || item.kind === "location") { void runLocationSearch(omniSearch); return; }
+    if (item.kind === "tech") selectTech(item.tech);
+    else selectCustomer(item.lead);
   };
 
-  const resetLocationFilters = () => {
-    setAreaSearch("");
-    setAreaQuery("");
+  const resetSearch = () => {
+    setOmniSearch("");
+    setShowOmni(false);
+    setPendingFocusLeadId(null);
+    setPendingFocusTechId(null);
+    clearSearchOverlays();
+    clearSelectedTech();
     setStateFilter("all");
     const map = mapRef.current;
     if (map) map.flyTo([39.5, -98.35], 4, { duration: 0.6 });
@@ -1393,16 +1435,16 @@ export default function MapViewPage() {
   }, [filteredTechs, mapReady, openTechPopup, pendingFocusTechId, viewMode]);
 
 
-  // Portal-positioned dropdown anchoring
-  const customerInputWrapRef = useRef<HTMLDivElement | null>(null);
-  const [anchorRect, setAnchorRect] = useState<{ top: number; left: number; width: number } | null>(null);
+  // Portal-positioned dropdown anchoring for the unified search input.
+  const omniInputWrapRef = useRef<HTMLDivElement | null>(null);
+  const [omniAnchorRect, setOmniAnchorRect] = useState<{ top: number; left: number; width: number } | null>(null);
   useLayoutEffect(() => {
-    if (!showSuggestions) return;
+    if (!showOmni) return;
     const update = () => {
-      const el = customerInputWrapRef.current;
+      const el = omniInputWrapRef.current;
       if (!el) return;
       const r = el.getBoundingClientRect();
-      setAnchorRect({ top: r.bottom + 4, left: r.left, width: r.width });
+      setOmniAnchorRect({ top: r.bottom + 4, left: r.left, width: r.width });
     };
     update();
     window.addEventListener("resize", update);
@@ -1411,26 +1453,7 @@ export default function MapViewPage() {
       window.removeEventListener("resize", update);
       window.removeEventListener("scroll", update, true);
     };
-  }, [showSuggestions, customerSearch]);
-
-  const techInputWrapRef = useRef<HTMLDivElement | null>(null);
-  const [techAnchorRect, setTechAnchorRect] = useState<{ top: number; left: number; width: number } | null>(null);
-  useLayoutEffect(() => {
-    if (!showTechSuggestions) return;
-    const update = () => {
-      const el = techInputWrapRef.current;
-      if (!el) return;
-      const r = el.getBoundingClientRect();
-      setTechAnchorRect({ top: r.bottom + 4, left: r.left, width: r.width });
-    };
-    update();
-    window.addEventListener("resize", update);
-    window.addEventListener("scroll", update, true);
-    return () => {
-      window.removeEventListener("resize", update);
-      window.removeEventListener("scroll", update, true);
-    };
-  }, [showTechSuggestions, techSearch]);
+  }, [showOmni, omniSearch]);
 
 
   const highlightMatch = (name: string, query: string) => {
@@ -1448,112 +1471,94 @@ export default function MapViewPage() {
     );
   };
 
-  const renderSuggestionsDropdown = () => {
-    if (!showSuggestions || !customerSearch.trim() || !anchorRect) return null;
-    const width = Math.max(360, anchorRect.width);
+  const renderOmniDropdown = () => {
+    if (!showOmni || !omniSearch.trim() || !omniAnchorRect) return null;
+    const width = Math.max(360, omniAnchorRect.width);
     return createPortal(
       <div
         role="listbox"
-        style={{ position: "fixed", top: anchorRect.top, left: anchorRect.left, width, zIndex: 2000 }}
+        style={{ position: "fixed", top: omniAnchorRect.top, left: omniAnchorRect.left, width, zIndex: 2000 }}
         className="rounded-md border bg-popover text-popover-foreground shadow-xl overflow-hidden"
         onMouseDown={(e) => e.preventDefault()}
       >
-        {customerMatches.length === 0 ? (
-          <div className="px-3 py-4 text-xs text-muted-foreground text-center">
-            No matching customers found
-          </div>
-        ) : (
-          <ul className="max-h-72 overflow-y-auto py-1 divide-y divide-border">
-            {customerMatches.map((l, i) => {
+        <ul className="max-h-80 overflow-y-auto py-1">
+          {omniItems.map((item, i) => {
+            const isActive = i === omniActiveIndex;
+            const activeCls = isActive ? "bg-accent text-accent-foreground" : "hover:bg-accent/60";
+            if (item.kind === "tech") {
+              const t = item.tech;
+              const svcArea = [t.service, t.area].filter(Boolean).join(" \u00b7 ");
+              return (
+                <li key={`t-${t.id}`} role="option" aria-selected={isActive}>
+                  <button
+                    type="button"
+                    onMouseEnter={() => setOmniActiveIndex(i)}
+                    onClick={() => selectTech(t)}
+                    className={`w-full text-left px-3 py-2 text-xs flex items-start gap-2 transition-colors ${activeCls}`}
+                  >
+                    <Wrench className="h-3.5 w-3.5 mt-0.5 shrink-0 text-blue-500" />
+                    <span className="min-w-0">
+                      <span className="block font-semibold text-sm text-foreground truncate">
+                        {highlightMatch(t.name || "Unnamed", omniSearch)}
+                      </span>
+                      <span className="block text-[11px] text-muted-foreground truncate">
+                        {t.phone_number || "No phone number"}{svcArea ? ` \u00b7 ${svcArea}` : ""}
+                      </span>
+                      {t.locationUnavailable && (
+                        <span className="block text-[11px] text-amber-600">Location unavailable</span>
+                      )}
+                    </span>
+                  </button>
+                </li>
+              );
+            }
+            if (item.kind === "customer") {
+              const l = item.lead;
               const loc = [l.city, l.state].filter(Boolean).join(", ");
               const zip = l.zip_code || l.zip;
               const locLine = [loc, zip].filter(Boolean).join(" ");
-              const isActive = i === activeIndex;
               return (
-                <li key={l.id} role="option" aria-selected={isActive}>
+                <li key={`c-${l.id}`} role="option" aria-selected={isActive}>
                   <button
                     type="button"
-                    onMouseEnter={() => setActiveIndex(i)}
+                    onMouseEnter={() => setOmniActiveIndex(i)}
                     onClick={() => selectCustomer(l)}
-                    className={`w-full text-left px-3 py-2.5 text-xs transition-colors ${
-                      isActive ? "bg-accent text-accent-foreground" : "hover:bg-accent/60"
-                    }`}
+                    className={`w-full text-left px-3 py-2 text-xs flex items-start gap-2 transition-colors ${activeCls}`}
                   >
-                    <div className="font-semibold text-sm text-foreground truncate">
-                      {highlightMatch(l.customer_name || "Unnamed", customerSearch)}
-                    </div>
-                    <div className="text-[11px] text-muted-foreground truncate mt-0.5">
-                      Job {l.job_id}
-                      {locLine ? ` · ${locLine}` : ""}
-                    </div>
-                    {l.service_type && (
-                      <div className="text-[11px] text-muted-foreground/90 truncate mt-0.5">
-                        {l.service_type}
-                      </div>
-                    )}
+                    <User className="h-3.5 w-3.5 mt-0.5 shrink-0 text-red-500" />
+                    <span className="min-w-0">
+                      <span className="block font-semibold text-sm text-foreground truncate">
+                        {highlightMatch(l.customer_name || "Unnamed", omniSearch)}
+                      </span>
+                      <span className="block text-[11px] text-muted-foreground truncate">
+                        Job {l.job_id}{locLine ? ` \u00b7 ${locLine}` : ""}
+                      </span>
+                      {l.service_type && (
+                        <span className="block text-[11px] text-muted-foreground/90 truncate">{l.service_type}</span>
+                      )}
+                    </span>
                   </button>
                 </li>
               );
-            })}
-          </ul>
-        )}
-      </div>,
-      document.body,
-    );
-  };
-
-  const renderTechSuggestionsDropdown = () => {
-    if (!showTechSuggestions || !techSearch.trim() || !techAnchorRect) return null;
-    const width = Math.max(360, techAnchorRect.width);
-    return createPortal(
-      <div
-        role="listbox"
-        style={{ position: "fixed", top: techAnchorRect.top, left: techAnchorRect.left, width, zIndex: 2000 }}
-        className="rounded-md border bg-popover text-popover-foreground shadow-xl overflow-hidden"
-        onMouseDown={(e) => e.preventDefault()}
-      >
-        {techMatches.length === 0 ? (
-          <div className="px-3 py-4 text-xs text-muted-foreground text-center">
-            No matching technicians found
-          </div>
-        ) : (
-          <ul className="max-h-72 overflow-y-auto py-1 divide-y divide-border">
-            {techMatches.map((t, i) => {
-              const isActive = i === techActiveIndex;
-              const svcArea = [t.service, t.area].filter(Boolean).join(" · ");
-              return (
-                <li key={t.id} role="option" aria-selected={isActive}>
-                  <button
-                    type="button"
-                    onMouseEnter={() => setTechActiveIndex(i)}
-                    onClick={() => selectTech(t)}
-                    className={`w-full text-left px-3 py-2.5 text-xs transition-colors ${
-                      isActive ? "bg-accent text-accent-foreground" : "hover:bg-accent/60"
-                    }`}
-                  >
-                    <div className="font-semibold text-sm text-foreground truncate">
-                      {highlightMatch(t.name || "Unnamed", techSearch)}
-                    </div>
-                    <div className="text-[11px] text-muted-foreground truncate mt-0.5">
-                      {t.phone_number ? t.phone_number : "No phone number"}
-                    </div>
-
-                    {svcArea && (
-                      <div className="text-[11px] text-muted-foreground/90 truncate mt-0.5">
-                        {svcArea}
-                      </div>
-                    )}
-                    {t.locationUnavailable && (
-                      <div className="text-[11px] text-amber-600 truncate mt-0.5">
-                        Location unavailable
-                      </div>
-                    )}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        )}
+            }
+            return (
+              <li key="omni-location" role="option" aria-selected={isActive} className="border-t border-border mt-1 pt-1">
+                <button
+                  type="button"
+                  onMouseEnter={() => setOmniActiveIndex(i)}
+                  onClick={() => void runLocationSearch(omniSearch)}
+                  className={`w-full text-left px-3 py-2.5 text-xs flex items-center gap-2 transition-colors ${activeCls}`}
+                >
+                  <MapPin className="h-3.5 w-3.5 shrink-0 text-violet-500" />
+                  <span className="min-w-0 truncate">
+                    Search location <span className="font-semibold text-foreground">&ldquo;{omniSearch.trim()}&rdquo;</span>
+                    <span className="text-muted-foreground"> &mdash; area boundary or pinpoint</span>
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
       </div>,
       document.body,
     );
@@ -1682,126 +1687,52 @@ export default function MapViewPage() {
                   ))}
                 </SelectContent>
               </Select>
-              <div className="flex items-center gap-1">
-                <div className="relative">
-                  <MapPin className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+              <div className="relative flex items-center gap-1 flex-1 min-w-[240px]" ref={omniInputWrapRef}>
+                <div className="relative flex-1">
+                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                   <Input
-                    value={areaSearch}
-                    onChange={(e) => setAreaSearch(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); performAreaSearch(); } }}
-                    placeholder="City, ZIP, or area"
-                    className="h-10 w-full pl-8 pr-8 text-sm sm:h-8 sm:w-[200px] sm:text-xs"
-                    aria-label="Area search"
+                    value={omniSearch}
+                    onChange={(e) => { setOmniSearch(e.target.value); setShowOmni(true); }}
+                    onFocus={() => { if (omniSearch.trim()) setShowOmni(true); }}
+                    onBlur={() => { setTimeout(() => setShowOmni(false), 150); }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        runOmniActivate();
+                      } else if (e.key === "Escape") {
+                        setShowOmni(false);
+                      } else if (e.key === "ArrowDown") {
+                        e.preventDefault();
+                        setShowOmni(true);
+                        setOmniActiveIndex((i) => Math.min(i + 1, Math.max(0, omniItems.length - 1)));
+                      } else if (e.key === "ArrowUp") {
+                        e.preventDefault();
+                        setShowOmni(true);
+                        setOmniActiveIndex((i) => Math.max(i - 1, 0));
+                      }
+                    }}
+                    placeholder="Search technician, customer, or city / ZIP / area"
+                    className="h-10 w-full pl-8 pr-16 text-sm sm:h-8 sm:text-xs"
+                    aria-autocomplete="list"
+                    aria-expanded={showOmni}
                   />
-                  {areaSearch && (
+                  {geocoding && (
+                    <Loader2 className="absolute right-8 top-1/2 -translate-y-1/2 h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                  )}
+                  {omniSearch && (
                     <button
                       type="button"
-                      onClick={() => { setAreaSearch(""); setAreaQuery(""); }}
-                      aria-label="Clear area search"
+                      onClick={resetSearch}
+                      aria-label="Clear search"
                       className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted"
                     >
                       <X className="h-3.5 w-3.5" />
                     </button>
                   )}
                 </div>
-                <Button size="sm" variant="outline" className="h-10 text-sm sm:h-8 sm:text-xs" onClick={performAreaSearch}>Search Area</Button>
-                <Button size="sm" variant="ghost" className="h-10 text-sm sm:h-8 sm:text-xs" onClick={resetLocationFilters}>Reset</Button>
+                <Button size="sm" className="h-10 text-sm sm:h-8 sm:text-xs" onClick={runOmniActivate}>Search</Button>
               </div>
-              <div className="relative" ref={techInputWrapRef}>
-                <div className="flex items-center gap-1">
-                  <div className="relative">
-                    <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-                    <Input
-                      value={techSearch}
-                      onChange={(e) => { setTechSearch(e.target.value); setShowTechSuggestions(true); }}
-                      onFocus={() => { if (techSearch.trim()) setShowTechSuggestions(true); }}
-                      onBlur={() => { setTimeout(() => setShowTechSuggestions(false), 150); }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          if (showTechSuggestions && techMatches.length > 0) {
-                            const target = techMatches[techActiveIndex] ?? techMatches[0];
-                            selectTech(target);
-                          } else {
-                            performTechSearch();
-                          }
-                        } else if (e.key === "Escape") {
-                          setShowTechSuggestions(false);
-                        } else if (e.key === "ArrowDown") {
-                          e.preventDefault();
-                          setShowTechSuggestions(true);
-                          setTechActiveIndex((i) => Math.min(i + 1, Math.max(0, techMatches.length - 1)));
-                        } else if (e.key === "ArrowUp") {
-                          e.preventDefault();
-                          setShowTechSuggestions(true);
-                          setTechActiveIndex((i) => Math.max(i - 1, 0));
-                        }
-                      }}
-                      placeholder="Search technician"
-                      className="h-10 w-full pl-8 pr-8 text-sm sm:h-8 sm:w-[220px] sm:text-xs"
-                      aria-autocomplete="list"
-                      aria-expanded={showTechSuggestions}
-                    />
-                    {techSearch && (
-                      <button
-                        type="button"
-                        onClick={clearTechSearch}
-                        aria-label="Clear technician search"
-                        className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted"
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                  </div>
-                  <Button size="sm" variant="outline" className="h-10 text-sm sm:h-8 sm:text-xs" onClick={performTechSearch}>Search</Button>
-                </div>
-              </div>
-              {renderTechSuggestionsDropdown()}
-              <div className="relative" ref={customerInputWrapRef}>
-                <div className="flex items-center gap-1">
-                  <div className="relative">
-                    <User className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-                    <Input
-                      value={customerSearch}
-                      onChange={(e) => { setCustomerSearch(e.target.value); setShowSuggestions(true); }}
-                      onFocus={() => { if (customerSearch.trim()) setShowSuggestions(true); }}
-                      onBlur={() => { setTimeout(() => setShowSuggestions(false), 150); }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          performCustomerSearch();
-                        } else if (e.key === "Escape") {
-                          setShowSuggestions(false);
-                        } else if (e.key === "ArrowDown") {
-                          e.preventDefault();
-                          setShowSuggestions(true);
-                          setActiveIndex((i) => Math.min(i + 1, Math.max(0, customerMatches.length - 1)));
-                        } else if (e.key === "ArrowUp") {
-                          e.preventDefault();
-                          setShowSuggestions(true);
-                          setActiveIndex((i) => Math.max(i - 1, 0));
-                        }
-                      }}
-                      placeholder="Search customer name"
-                      className="h-10 w-full pl-8 pr-8 text-sm sm:h-8 sm:w-[240px] sm:text-xs"
-                      aria-autocomplete="list"
-                      aria-expanded={showSuggestions}
-                    />
-                    {customerSearch && (
-                      <button
-                        type="button"
-                        onClick={clearCustomerSearch}
-                        aria-label="Clear customer search"
-                        className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted"
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                  </div>
-                  <Button size="sm" className="h-10 text-sm sm:h-8 sm:text-xs" onClick={performCustomerSearch}>Search</Button>
-                </div>
-              </div>
-              {renderSuggestionsDropdown()}
+              {renderOmniDropdown()}
               <div className="ml-auto flex items-center gap-3 text-[11px] text-muted-foreground">
                 <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-blue-500 border border-white" /> Technician</span>
                 <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-red-500 border border-white" /> Urgent Lead</span>

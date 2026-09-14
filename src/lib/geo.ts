@@ -148,6 +148,63 @@ export function buildGeocodeQueries(input: {
   return out;
 }
 
+// Place types that represent an *area* (draw a boundary) rather than a single
+// point (drop a marker).
+const AREA_ADDRESS_TYPES = new Set([
+  "city", "town", "village", "hamlet", "suburb", "neighbourhood", "quarter",
+  "state", "region", "province", "county", "municipality", "district",
+  "postcode", "administrative", "borough", "city_district", "locality", "island",
+]);
+
+export interface AreaGeocodeResult {
+  latitude: number;
+  longitude: number;
+  /** [south, north, west, east] in degrees, when Nominatim provides it. */
+  boundingBox: [number, number, number, number] | null;
+  /** Polygon / MultiPolygon geometry for the area outline, when available. */
+  geojson: unknown | null;
+  /** true → draw an area boundary; false → drop a pinpoint marker. */
+  isArea: boolean;
+  displayName: string;
+}
+
+/**
+ * Geocode a free-form place query for Map View search. Returns the point plus,
+ * for areas (city / ZIP / county / …), a boundary outline and bounding box so
+ * the caller can draw the region; a specific address resolves to a point.
+ */
+export async function geocodeArea(query: string): Promise<AreaGeocodeResult | null> {
+  const q = query.trim();
+  if (!q) return null;
+  const url =
+    `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=us` +
+    `&polygon_geojson=1&addressdetails=1&q=${encodeURIComponent(q)}`;
+  const res = await fetch(url, { headers: { Accept: "application/json" } });
+  if (!res.ok) throw new Error(`geocode http ${res.status}`);
+  const data = await res.json();
+  if (!Array.isArray(data) || data.length === 0) return null;
+  const r = data[0] as {
+    lat: string; lon: string; boundingbox?: string[]; geojson?: { type?: string };
+    addresstype?: string; type?: string; class?: string; category?: string; display_name?: string;
+  };
+  const lat = parseFloat(r.lat);
+  const lng = parseFloat(r.lon);
+  if (!isValidLatLng(lat, lng)) return null;
+
+  const boundingBox = Array.isArray(r.boundingbox) && r.boundingbox.length === 4
+    ? [parseFloat(r.boundingbox[0]), parseFloat(r.boundingbox[1]), parseFloat(r.boundingbox[2]), parseFloat(r.boundingbox[3])] as [number, number, number, number]
+    : null;
+
+  const geoType = r.geojson?.type;
+  const geojson = geoType === "Polygon" || geoType === "MultiPolygon" ? r.geojson : null;
+
+  const addressType = String(r.addresstype ?? r.type ?? "").toLowerCase();
+  const category = String(r.class ?? r.category ?? "").toLowerCase();
+  const isArea = Boolean(geojson) || category === "boundary" || AREA_ADDRESS_TYPES.has(addressType);
+
+  return { latitude: lat, longitude: lng, boundingBox, geojson, isArea, displayName: String(r.display_name ?? q) };
+}
+
 async function nominatimQuery(query: string): Promise<LatLng | null> {
   const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=us&q=${encodeURIComponent(query)}`;
   const res = await fetch(url, { headers: { Accept: "application/json" } });
