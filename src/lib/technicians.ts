@@ -64,7 +64,11 @@ export interface PaginatedTechnicians {
   totalCount: number;
 }
 
-export type TechnicianSortOption = "name_asc" | "name_desc" | "code_asc" | "code_desc" | "code_count";
+export type TechnicianSortOption =
+  | "name_asc" | "name_desc"
+  | "code_asc" | "code_desc" | "code_count"
+  | "service_asc" | "service_desc"
+  | "area_asc" | "area_desc";
 
 /**
  * Database-backed paginated technician fetch with code filtering and sorting support.
@@ -190,6 +194,14 @@ export async function fetchTechniciansPage(params: {
     query = query.order("code", { ascending: true, nullsFirst: false }).order("name", { ascending: true });
   } else if (sortBy === "code_desc") {
     query = query.order("code", { ascending: false, nullsFirst: false }).order("name", { ascending: true });
+  } else if (sortBy === "service_asc") {
+    query = query.order("service", { ascending: true, nullsFirst: false }).order("name", { ascending: true });
+  } else if (sortBy === "service_desc") {
+    query = query.order("service", { ascending: false, nullsFirst: false }).order("name", { ascending: true });
+  } else if (sortBy === "area_asc") {
+    query = query.order("area", { ascending: true, nullsFirst: false }).order("name", { ascending: true });
+  } else if (sortBy === "area_desc") {
+    query = query.order("area", { ascending: false, nullsFirst: false }).order("name", { ascending: true });
   } else {
     // Default: name_asc
     query = query.order("name", { ascending: true }).order("id", { ascending: true });

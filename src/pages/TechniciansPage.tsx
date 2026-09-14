@@ -50,6 +50,8 @@ import {
   Copy,
   X,
   Filter,
+  ArrowUp,
+  ArrowDown,
 } from "lucide-react";
 
 const PAGE_SIZE_OPTIONS = [100, 200, 500, 1000] as const;
@@ -163,25 +165,36 @@ function sortTechnicians(list: TechnicianRecord[]): TechnicianRecord[] {
   });
 }
 
-// Google-Sheets-style column filter that lives on the header cell itself: a
-// funnel button that highlights when active and opens a small text filter.
+// Google-Sheets-style column control that lives on the header cell itself: a
+// funnel button that opens a small popover with sort (A–Z / Z–A) and a text
+// filter for that column. The funnel highlights when either is active.
 function HeaderColumnFilter({
   label,
   value,
   onChange,
+  sortKey,
+  sortBy,
+  onSort,
 }: {
   label: string;
   value: string;
   onChange: (next: string) => void;
+  sortKey: "name" | "code" | "service" | "area";
+  sortBy: TechnicianSortOption;
+  onSort: (next: TechnicianSortOption) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const active = value.trim().length > 0;
+  const filterActive = value.trim().length > 0;
+  const ascOption = `${sortKey}_asc` as TechnicianSortOption;
+  const descOption = `${sortKey}_desc` as TechnicianSortOption;
+  const sortActive = sortBy === ascOption || sortBy === descOption;
+  const active = filterActive || sortActive;
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
           type="button"
-          aria-label={`Filter by ${label}`}
+          aria-label={`Sort or filter by ${label}`}
           className={`ml-1 inline-flex h-5 w-5 items-center justify-center rounded transition-colors ${
             active ? "bg-primary/15 text-primary" : "text-muted-foreground/50 hover:text-foreground hover:bg-muted"
           }`}
@@ -190,6 +203,27 @@ function HeaderColumnFilter({
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-56 p-2" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Sort {label}
+        </div>
+        <div className="mb-2 flex gap-1">
+          <Button
+            variant={sortBy === ascOption ? "default" : "outline"}
+            size="sm"
+            className="h-7 flex-1 px-1 text-[11px]"
+            onClick={() => onSort(ascOption)}
+          >
+            <ArrowUp className="mr-0.5 h-3 w-3" /> A–Z
+          </Button>
+          <Button
+            variant={sortBy === descOption ? "default" : "outline"}
+            size="sm"
+            className="h-7 flex-1 px-1 text-[11px]"
+            onClick={() => onSort(descOption)}
+          >
+            <ArrowDown className="mr-0.5 h-3 w-3" /> Z–A
+          </Button>
+        </div>
         <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
           Filter {label}
         </div>
@@ -208,7 +242,7 @@ function HeaderColumnFilter({
             variant="ghost"
             size="sm"
             className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
-            disabled={!active}
+            disabled={!filterActive}
             onClick={() => onChange("")}
           >
             <X className="mr-1 h-3.5 w-3.5" /> Clear
@@ -730,6 +764,10 @@ export default function TechniciansPage() {
                 <SelectItem value="name_desc">Name (Z → A)</SelectItem>
                 <SelectItem value="code_asc">Code (A → Z)</SelectItem>
                 <SelectItem value="code_desc">Code (Z → A)</SelectItem>
+                <SelectItem value="service_asc">Service (A → Z)</SelectItem>
+                <SelectItem value="service_desc">Service (Z → A)</SelectItem>
+                <SelectItem value="area_asc">Area (A → Z)</SelectItem>
+                <SelectItem value="area_desc">Area (Z → A)</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -820,6 +858,9 @@ export default function TechniciansPage() {
                       label="Name"
                       value={columnFilters.name}
                       onChange={(v) => setColumnFilters((f) => ({ ...f, name: v }))}
+                      sortKey="name"
+                      sortBy={sortBy}
+                      onSort={setSortBy}
                     />
                   </span>
                 </TableHead>
@@ -838,6 +879,9 @@ export default function TechniciansPage() {
                       label="Code"
                       value={columnFilters.code}
                       onChange={(v) => setColumnFilters((f) => ({ ...f, code: v }))}
+                      sortKey="code"
+                      sortBy={sortBy}
+                      onSort={setSortBy}
                     />
                   </span>
                 </TableHead>
@@ -849,6 +893,9 @@ export default function TechniciansPage() {
                       label="Service"
                       value={columnFilters.service}
                       onChange={(v) => setColumnFilters((f) => ({ ...f, service: v }))}
+                      sortKey="service"
+                      sortBy={sortBy}
+                      onSort={setSortBy}
                     />
                   </span>
                 </TableHead>
@@ -859,6 +906,9 @@ export default function TechniciansPage() {
                       label="Area"
                       value={columnFilters.area}
                       onChange={(v) => setColumnFilters((f) => ({ ...f, area: v }))}
+                      sortKey="area"
+                      sortBy={sortBy}
+                      onSort={setSortBy}
                     />
                   </span>
                 </TableHead>
