@@ -132,10 +132,29 @@ export function TechnicianDialog({ open, onOpenChange, technician, onSaved }: Pr
   const handleSubmit = async () => {
     const cleanName = name.trim();
     const cleanArea = area.trim();
+    const cleanService = service.trim();
     const cleanPhone = formatUSPhone(phone);
     const phoneDigits = stripPhone(cleanPhone);
-    if (cleanPhone && phoneDigits.length !== 10) {
+
+    // Required fields: Technician Name, Number, Service, and Area.
+    if (!cleanName) {
+      toast({ title: "Technician Name is required", variant: "destructive" });
+      return;
+    }
+    if (!phoneDigits) {
+      setPhoneError("Phone number is required");
+      return;
+    }
+    if (phoneDigits.length !== 10) {
       setPhoneError("Enter a valid 10-digit U.S. phone number");
+      return;
+    }
+    if (!cleanService) {
+      toast({ title: "Service is required", variant: "destructive" });
+      return;
+    }
+    if (!cleanArea) {
+      toast({ title: "Area is required", variant: "destructive" });
       return;
     }
     setPhoneError(null);
@@ -163,8 +182,8 @@ export function TechnicianDialog({ open, onOpenChange, technician, onSaved }: Pr
       const payload = {
         name: cleanName,
         area: cleanArea,
-        phone_number: cleanPhone || null,
-        service: service.trim() || null,
+        phone_number: cleanPhone,
+        service: cleanService,
         chat_link: chatLink.trim() || null,
         notes: notes.trim() || null,
         code: code.trim() || null,
@@ -227,7 +246,7 @@ export function TechnicianDialog({ open, onOpenChange, technician, onSaved }: Pr
         </DialogHeader>
         <div className="space-y-3 py-2">
           <div className="space-y-1.5">
-            <Label htmlFor="tech-name">Technician Name</Label>
+            <Label htmlFor="tech-name">Technician Name <span className="text-destructive">*</span></Label>
             <Input id="tech-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. John Smith" />
           </div>
 
@@ -295,7 +314,7 @@ export function TechnicianDialog({ open, onOpenChange, technician, onSaved }: Pr
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="tech-phone">Phone Number</Label>
+            <Label htmlFor="tech-phone">Phone Number <span className="text-destructive">*</span></Label>
             <Input
               id="tech-phone"
               type="tel"
@@ -309,12 +328,12 @@ export function TechnicianDialog({ open, onOpenChange, technician, onSaved }: Pr
             {phoneError && <p className="text-[11px] text-destructive">{phoneError}</p>}
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="tech-area">Area</Label>
+            <Label htmlFor="tech-area">Area <span className="text-destructive">*</span></Label>
             <Input id="tech-area" value={area} onChange={(e) => setArea(e.target.value)} placeholder="e.g. Miami, FL or 33101" />
             <p className="text-[11px] text-muted-foreground">City & state, ZIP code, or full address. Used to place the marker.</p>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="tech-service">Service</Label>
+            <Label htmlFor="tech-service">Service <span className="text-destructive">*</span></Label>
             <Input id="tech-service" value={service} onChange={(e) => setService(e.target.value)} placeholder="e.g. Plumbing" />
           </div>
           <div className="space-y-1.5">
