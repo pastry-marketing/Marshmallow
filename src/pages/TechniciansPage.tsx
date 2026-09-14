@@ -175,9 +175,6 @@ export default function TechniciansPage() {
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [codeFilter, setCodeFilter] = useState<string>("all");
-  // Per-column header filters (Name / Code / Service / Area).
-  const [columnFilters, setColumnFilters] = useState({ name: "", code: "", service: "", area: "" });
-  const [debouncedColumnFilters, setDebouncedColumnFilters] = useState(columnFilters);
   const [sortBy, setSortBy] = useState<TechnicianSortOption>("name_asc");
   const [pageSize, setPageSize] = useState<PageSizeOption>(() => loadInitialPageSize());
   const [currentPage, setCurrentPage] = useState(1);
@@ -191,19 +188,10 @@ export default function TechniciansPage() {
     return () => window.clearTimeout(t);
   }, [search]);
 
-  // Debounce the per-column filters together
-  useEffect(() => {
-    const t = window.setTimeout(() => setDebouncedColumnFilters(columnFilters), 300);
-    return () => window.clearTimeout(t);
-  }, [columnFilters]);
-
-  const columnFiltersKey = `${debouncedColumnFilters.name}|${debouncedColumnFilters.code}|${debouncedColumnFilters.service}|${debouncedColumnFilters.area}`;
-  const hasColumnFilters = Boolean(columnFiltersKey.replace(/\|/g, ""));
-
-  // Reset to page 1 whenever search, page size, code filter, sort, or a column filter changes
+  // Reset to page 1 whenever search, page size, code filter, or sort changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [debouncedSearch, pageSize, codeFilter, sortBy, columnFiltersKey]);
+  }, [debouncedSearch, pageSize, codeFilter, sortBy]);
 
   // Persist page size
   useEffect(() => {
@@ -271,7 +259,7 @@ export default function TechniciansPage() {
     queryKey: [
       ...TECHNICIANS_ROOT_KEY,
       "paginated",
-      { page: currentPage, pageSize, search: debouncedSearch, codeFilter, sortBy, columnFilters: columnFiltersKey },
+      { page: currentPage, pageSize, search: debouncedSearch, codeFilter, sortBy },
     ] as const,
     queryFn: () =>
       fetchTechniciansPage({
@@ -280,7 +268,6 @@ export default function TechniciansPage() {
         search: debouncedSearch,
         codeFilter,
         sortBy,
-        columnFilters: debouncedColumnFilters,
       }),
     placeholderData: keepPreviousData,
     staleTime: 30_000,
@@ -774,60 +761,6 @@ export default function TechniciansPage() {
                 <TableHead>Notes</TableHead>
                 <TableHead className="w-[130px] text-right">Actions</TableHead>
               </TableRow>
-              <TableRow className="hover:bg-transparent border-b">
-                <TableHead className="h-auto p-1.5" />
-                <TableHead className="h-auto p-1.5">
-                  <Input
-                    value={columnFilters.name}
-                    onChange={(e) => setColumnFilters((f) => ({ ...f, name: e.target.value }))}
-                    placeholder="Filter name"
-                    className="h-7 text-xs"
-                    aria-label="Filter by name"
-                  />
-                </TableHead>
-                <TableHead className="h-auto p-1.5">
-                  <Input
-                    value={columnFilters.code}
-                    onChange={(e) => setColumnFilters((f) => ({ ...f, code: e.target.value }))}
-                    placeholder="Filter code"
-                    className="h-7 text-xs"
-                    aria-label="Filter by code"
-                  />
-                </TableHead>
-                <TableHead className="h-auto p-1.5" />
-                <TableHead className="h-auto p-1.5">
-                  <Input
-                    value={columnFilters.service}
-                    onChange={(e) => setColumnFilters((f) => ({ ...f, service: e.target.value }))}
-                    placeholder="Filter service"
-                    className="h-7 text-xs"
-                    aria-label="Filter by service"
-                  />
-                </TableHead>
-                <TableHead className="h-auto p-1.5">
-                  <Input
-                    value={columnFilters.area}
-                    onChange={(e) => setColumnFilters((f) => ({ ...f, area: e.target.value }))}
-                    placeholder="Filter area"
-                    className="h-7 text-xs"
-                    aria-label="Filter by area"
-                  />
-                </TableHead>
-                <TableHead className="h-auto p-1.5" />
-                <TableHead className="h-auto p-1.5" />
-                <TableHead className="h-auto p-1.5 text-right">
-                  {(columnFilters.name || columnFilters.code || columnFilters.service || columnFilters.area) ? (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
-                      onClick={() => setColumnFilters({ name: "", code: "", service: "", area: "" })}
-                    >
-                      <X className="h-3.5 w-3.5 mr-1" /> Clear
-                    </Button>
-                  ) : null}
-                </TableHead>
-              </TableRow>
             </TableHeader>
             <TableBody>
               {paginatedQuery.isPending && rows.length === 0 && (
@@ -854,7 +787,7 @@ export default function TechniciansPage() {
               {!paginatedQuery.isPending && !paginatedQuery.isError && rows.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={9} className="text-center text-sm text-muted-foreground py-10">
-                    {isSearching || codeFilter !== "all" || hasColumnFilters
+                    {isSearching || codeFilter !== "all"
                       ? "No technicians match your filters."
                       : "No technicians yet. Add one manually or import from CSV/XLSX."}
                   </TableCell>
