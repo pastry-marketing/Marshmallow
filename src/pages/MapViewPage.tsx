@@ -18,7 +18,7 @@ import { TechnicianRecord } from "@/components/technicians/TechnicianDialog";
 import { TechnicianDetailsContent } from "@/components/map/TechnicianDetailsContent";
 import { fetchAllTechnicians, TECHNICIANS_QUERY_KEY } from "@/lib/technicians";
 import { haversineMiles, isValidLatLng, LatLng, geocodeArea } from "@/lib/geo";
-import { resolveZip, lookupZipCentroidSync, preloadZipDataset, ZipCentroid } from "@/lib/zipCentroids";
+import { resolveZip, lookupZipCentroidSync, lookupAreaCentroidSync, preloadZipDataset, ZipCentroid } from "@/lib/zipCentroids";
 import { STATUS_LABELS } from "@/lib/constants";
 import { useIsMobile } from "@/hooks/use-mobile";
 import type { LeadStatus } from "@/types";
@@ -755,8 +755,9 @@ export default function MapViewPage() {
           locationUnavailable: false,
         };
       }
-      const zip = resolveZip({ address: t.area });
-      const centroid = lookupZipCentroidSync(zip);
+      // Techs store "area" as free text (often "City, ST" with no ZIP), so fall
+      // back from ZIP lookup to a city/state centroid to place the rest.
+      const centroid = lookupAreaCentroidSync(t.area);
       if (centroid) {
         return {
           ...t,
