@@ -82,6 +82,49 @@ interface CanvasHitTarget extends CanvasPin {
   maxY: number;
 }
 
+// Tech pins whose projected positions land within this many screen pixels of
+// each other collapse into one cluster point. Techs in a city share one ZIP
+// centroid, so without this they stack and hide each other.
+const CLUSTER_RADIUS_PX = 26;
+
+interface ProjectedCluster {
+  x: number;
+  y: number;
+  members: CanvasPin[];
+}
+
+interface ClusterHitTarget {
+  x: number;
+  y: number;
+  r: number;
+  members: CanvasPin[];
+}
+
+// Pixel offsets (from the cluster centre) for the fanned-out members. Small
+// clusters sit on one ring; larger ones spill onto additional concentric rings
+// so nothing overlaps, which keeps even ~40 techs in a city readable.
+function spiderOffsets(count: number): Array<{ dx: number; dy: number }> {
+  const offsets: Array<{ dx: number; dy: number }> = [];
+  const baseRadius = 46;
+  const ringGap = 34;
+  const minSpacing = 34;
+  let placed = 0;
+  let ring = 0;
+  while (placed < count) {
+    const radius = baseRadius + ring * ringGap;
+    const capacity = Math.max(1, Math.floor((2 * Math.PI * radius) / minSpacing));
+    const inRing = Math.min(capacity, count - placed);
+    const angleStart = -Math.PI / 2 + (ring % 2 === 1 ? Math.PI / inRing : 0);
+    for (let i = 0; i < inRing; i += 1) {
+      const a = angleStart + (2 * Math.PI * i) / inRing;
+      offsets.push({ dx: Math.cos(a) * radius, dy: Math.sin(a) * radius });
+    }
+    placed += inRing;
+    ring += 1;
+  }
+  return offsets;
+}
+
 class MapPinCanvasLayer extends L.Layer {
   private canvas: HTMLCanvasElement | null = null;
   private map: L.Map | null = null;
@@ -89,6 +132,10 @@ class MapPinCanvasLayer extends L.Layer {
   private pins: CanvasPin[] = [];
   private leadHitTargets: CanvasHitTarget[] = [];
   private techHitTargets: CanvasHitTarget[] = [];
+  private clusterHitTargets: ClusterHitTarget[] = [];
+  // When a cluster is expanded ("spiderfied"), its member ids live here and the
+  // members are fanned out around the cluster point instead of drawn as a badge.
+  private spiderIds: Set<string> | null = null;
   private resetFrame: number | null = null;
   private redrawFrame: number | null = null;
   private hoverFrame: number | null = null;
@@ -120,6 +167,7 @@ class MapPinCanvasLayer extends L.Layer {
     map.on("movestart zoomstart", this.handleMoveStart, this);
     map.on("moveend zoomend", this.handleMoveEnd, this);
     map.on("resize viewreset", this.scheduleReset, this);
+    map.on("zoomstart", this.handleZoomStart, this);
     this.reset();
     return this;
   }
@@ -127,6 +175,7 @@ class MapPinCanvasLayer extends L.Layer {
   onRemove(map: L.Map): this {
     map.off("movestart zoomstart", this.handleMoveStart, this);
     map.off("moveend zoomend", this.handleMoveEnd, this);
+    map.off("zoomstart", this.handleZoomStart, this);
     map.off("resize viewreset", this.scheduleReset, this);
     this.cancelFrames();
     if (this.canvas) {
@@ -139,6 +188,8 @@ class MapPinCanvasLayer extends L.Layer {
     this.map = null;
     this.leadHitTargets = [];
     this.techHitTargets = [];
+    this.clusterHitTargets = [];
+    this.spiderIds = null;
     this.lastMouseMoveEvent = null;
     return this;
   }
@@ -147,6 +198,12 @@ class MapPinCanvasLayer extends L.Layer {
     this.pins = pins;
     this.scheduleRedraw();
   }
+
+  // Collapse any open spider when the zoom changes: the grouping can change, so
+  // the fanned-out positions would no longer line up with a real cluster.
+  private handleZoomStart = () => {
+    if (this.spiderIds) this.spiderIds = null;
+  };
 
   private cancelFrames() {
     if (this.resetFrame !== null) window.cancelAnimationFrame(this.resetFrame);
@@ -223,32 +280,101 @@ class MapPinCanvasLayer extends L.Layer {
     ctx.clearRect(0, 0, size.x, size.y);
     this.leadHitTargets = [];
     this.techHitTargets = [];
+    this.clusterHitTargets = [];
 
+    // Leads keep their existing per-pin rendering (they already carry jitter).
     for (const pin of this.pins) {
       if (pin.kind === "lead") this.drawPin(ctx, pin, "#ef4444", 30);
     }
-    for (const pin of this.pins) {
-      if (pin.kind === "tech") this.drawPin(ctx, pin, pin.selected ? "#2563eb" : "#3b82f6", pin.selected ? 34 : 30);
+
+    // Techs cluster: a stack of techs on one point becomes a single cluster
+    // point that fans its members out in a ring when clicked (spiderfied).
+    const techClusters = this.clusterPins(this.pins.filter((p) => p.kind === "tech"));
+    for (const cluster of techClusters) {
+      const isSpiderfied = this.spiderIds !== null
+        && cluster.members.length === this.spiderIds.size
+        && cluster.members.every((m) => this.spiderIds!.has(m.id));
+
+      if (isSpiderfied) {
+        this.drawSpider(ctx, cluster);
+      } else if (cluster.members.length === 1) {
+        const pin = cluster.members[0];
+        this.drawPin(ctx, pin, pin.selected ? "#2563eb" : "#3b82f6", pin.selected ? 34 : 30);
+      } else {
+        this.drawClusterBadge(ctx, cluster);
+      }
     }
+  }
+
+  // Greedy pixel-space clustering with a small spatial grid so it stays near
+  // O(n): each pin joins the first nearby cluster, otherwise starts a new one.
+  private clusterPins(pins: CanvasPin[]): ProjectedCluster[] {
+    if (!this.map) return [];
+    const acc: Array<{ sumX: number; sumY: number; members: CanvasPin[] }> = [];
+    const grid = new Map<string, typeof acc>();
+    const cell = CLUSTER_RADIUS_PX;
+    const r2 = CLUSTER_RADIUS_PX * CLUSTER_RADIUS_PX;
+
+    for (const pin of pins) {
+      const p = this.map.latLngToLayerPoint([pin.lat, pin.lng]).subtract(this.topLeft);
+      const gx = Math.floor(p.x / cell);
+      const gy = Math.floor(p.y / cell);
+      let placed: { sumX: number; sumY: number; members: CanvasPin[] } | null = null;
+
+      for (let dx = -1; dx <= 1 && !placed; dx += 1) {
+        for (let dy = -1; dy <= 1 && !placed; dy += 1) {
+          const bucket = grid.get(`${gx + dx},${gy + dy}`);
+          if (!bucket) continue;
+          for (const c of bucket) {
+            const cx = c.sumX / c.members.length;
+            const cy = c.sumY / c.members.length;
+            const ddx = cx - p.x;
+            const ddy = cy - p.y;
+            if (ddx * ddx + ddy * ddy <= r2) { placed = c; break; }
+          }
+        }
+      }
+
+      if (placed) {
+        placed.members.push(pin);
+        placed.sumX += p.x;
+        placed.sumY += p.y;
+      } else {
+        const created = { sumX: p.x, sumY: p.y, members: [pin] };
+        acc.push(created);
+        const key = `${gx},${gy}`;
+        const bucket = grid.get(key);
+        if (bucket) bucket.push(created);
+        else grid.set(key, [created]);
+      }
+    }
+
+    return acc.map((c) => ({ x: c.sumX / c.members.length, y: c.sumY / c.members.length, members: c.members }));
   }
 
   private drawPin(ctx: CanvasRenderingContext2D, pin: CanvasPin, fill: string, size: number) {
     if (!this.map) return;
     const point = this.map.latLngToLayerPoint([pin.lat, pin.lng]).subtract(this.topLeft);
+    this.drawPinAt(ctx, point.x, point.y, pin, fill, size);
+  }
+
+  // Draws the teardrop pin at an explicit pixel position and registers its hit
+  // target there, so spider legs can place a pin away from its own lat/lng.
+  private drawPinAt(ctx: CanvasRenderingContext2D, x: number, y: number, pin: CanvasPin, fill: string, size: number) {
     const halfWidth = size * 0.42;
     const target: CanvasHitTarget = {
       ...pin,
-      minX: point.x - halfWidth,
-      maxX: point.x + halfWidth,
-      minY: point.y - size,
-      maxY: point.y + 3,
+      minX: x - halfWidth,
+      maxX: x + halfWidth,
+      minY: y - size,
+      maxY: y + 3,
     };
     if (pin.kind === "tech") this.techHitTargets.push(target);
     else this.leadHitTargets.push(target);
 
     const scale = size / 32;
     ctx.save();
-    ctx.translate(point.x - 12 * scale, point.y - 31.25 * scale);
+    ctx.translate(x - 12 * scale, y - 31.25 * scale);
     ctx.scale(scale, scale);
     ctx.beginPath();
     ctx.moveTo(12, 0.75);
@@ -268,6 +394,67 @@ class MapPinCanvasLayer extends L.Layer {
     ctx.fillStyle = "#ffffff";
     ctx.fill();
     ctx.restore();
+  }
+
+  // Collapsed cluster: a filled point carrying the member count. Clicking it
+  // spiderfies (or zooms in when the members sit at different coordinates).
+  private drawClusterBadge(ctx: CanvasRenderingContext2D, cluster: ProjectedCluster) {
+    const count = cluster.members.length;
+    const r = count < 10 ? 15 : count < 100 ? 18 : 21;
+    const selected = cluster.members.some((m) => m.selected);
+
+    this.clusterHitTargets.push({ x: cluster.x, y: cluster.y, r: r + 4, members: cluster.members });
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cluster.x, cluster.y, r + 4, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(37,99,235,0.25)";
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(cluster.x, cluster.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = selected ? "#1d4ed8" : "#2563eb";
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "#ffffff";
+    ctx.stroke();
+    ctx.fillStyle = "#ffffff";
+    ctx.font = `600 ${count < 100 ? 13 : 11}px system-ui, -apple-system, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(count > 999 ? "999+" : String(count), cluster.x, cluster.y);
+    ctx.restore();
+  }
+
+  // Expanded cluster: fan the members out around the cluster point in one or
+  // more rings, each connected back to a central hub by a leg.
+  private drawSpider(ctx: CanvasRenderingContext2D, cluster: ProjectedCluster) {
+    const offsets = spiderOffsets(cluster.members.length);
+
+    ctx.save();
+    ctx.strokeStyle = "rgba(37,99,235,0.55)";
+    ctx.lineWidth = 1.5;
+    for (const off of offsets) {
+      ctx.beginPath();
+      ctx.moveTo(cluster.x, cluster.y);
+      ctx.lineTo(cluster.x + off.dx, cluster.y + off.dy);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cluster.x, cluster.y, 5, 0, Math.PI * 2);
+    ctx.fillStyle = "#1d4ed8";
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "#ffffff";
+    ctx.stroke();
+    ctx.restore();
+
+    cluster.members.forEach((pin, i) => {
+      const off = offsets[i];
+      this.drawPinAt(ctx, cluster.x + off.dx, cluster.y + off.dy, pin, pin.selected ? "#2563eb" : "#3b82f6", pin.selected ? 34 : 30);
+    });
   }
 
   private findHit(event: MouseEvent) {
@@ -291,14 +478,59 @@ class MapPinCanvasLayer extends L.Layer {
       && point.y <= pin.maxY;
   }
 
+  private findClusterHit(event: MouseEvent): ClusterHitTarget | null {
+    if (!this.map) return null;
+    const point = this.map.mouseEventToLayerPoint(event).subtract(this.topLeft);
+    for (let i = this.clusterHitTargets.length - 1; i >= 0; i -= 1) {
+      const c = this.clusterHitTargets[i];
+      const dx = c.x - point.x;
+      const dy = c.y - point.y;
+      if (dx * dx + dy * dy <= c.r * c.r) return c;
+    }
+    return null;
+  }
+
+  private activateCluster(cluster: ClusterHitTarget) {
+    if (!this.map) return;
+    // When the members sit at genuinely different coordinates, zooming in
+    // separates them (nicer than a fan). A city sharing one ZIP centroid can
+    // never separate, so it always fans out instead.
+    const distinct = new Set(cluster.members.map((m) => `${m.lat.toFixed(3)},${m.lng.toFixed(3)}`));
+    if (distinct.size > 1 && (this.map.getZoom() ?? 0) < 15) {
+      const bounds = L.latLngBounds(cluster.members.map((m) => [m.lat, m.lng] as L.LatLngTuple));
+      this.map.flyToBounds(bounds.pad(0.3), { maxZoom: 15, duration: 0.4 });
+      return;
+    }
+    this.spiderIds = new Set(cluster.members.map((m) => m.id));
+    this.scheduleRedraw();
+  }
+
   private handleClick = (event: MouseEvent) => {
     if (!this.map) return;
+
+    // Individual pins (including fanned-out spider pins) take priority.
     const hit = this.findHit(event);
-    if (!hit) return;
-    L.DomEvent.stop(event);
-    const latlng = L.latLng(hit.lat, hit.lng);
-    if (hit.kind === "tech") this.onTechClick(hit.id, latlng);
-    else this.onLeadClick(hit.id, latlng);
+    if (hit) {
+      L.DomEvent.stop(event);
+      const latlng = L.latLng(hit.lat, hit.lng);
+      if (hit.kind === "tech") this.onTechClick(hit.id, latlng);
+      else this.onLeadClick(hit.id, latlng);
+      return;
+    }
+
+    // A collapsed cluster badge → expand it (or zoom to separate).
+    const cluster = this.findClusterHit(event);
+    if (cluster) {
+      L.DomEvent.stop(event);
+      this.activateCluster(cluster);
+      return;
+    }
+
+    // Empty click collapses any open fan.
+    if (this.spiderIds) {
+      this.spiderIds = null;
+      this.scheduleRedraw();
+    }
   };
 
   private handleMouseMove = (event: MouseEvent) => {
@@ -309,8 +541,14 @@ class MapPinCanvasLayer extends L.Layer {
       this.hoverFrame = null;
       if (!this.canvas || this.isMoving || !this.lastMouseMoveEvent) return;
       const hit = this.findHit(this.lastMouseMoveEvent);
-      this.canvas.style.cursor = hit ? "pointer" : "";
-      this.canvas.title = hit?.kind === "tech" ? this.getTechTooltip(hit.id) : "";
+      if (hit) {
+        this.canvas.style.cursor = "pointer";
+        this.canvas.title = hit.kind === "tech" ? this.getTechTooltip(hit.id) : "";
+        return;
+      }
+      const cluster = this.findClusterHit(this.lastMouseMoveEvent);
+      this.canvas.style.cursor = cluster ? "pointer" : "";
+      this.canvas.title = cluster ? `${cluster.members.length} technicians — click to expand` : "";
     });
   };
 
