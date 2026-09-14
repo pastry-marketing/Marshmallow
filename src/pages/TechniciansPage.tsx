@@ -21,6 +21,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { TechnicianDialog, TechnicianRecord } from "@/components/technicians/TechnicianDialog";
 import { ImportTechniciansDialog } from "@/components/technicians/ImportTechniciansDialog";
@@ -48,6 +49,7 @@ import {
   Loader2,
   Copy,
   X,
+  Filter,
 } from "lucide-react";
 
 const PAGE_SIZE_OPTIONS = [100, 200, 500, 1000] as const;
@@ -161,6 +163,62 @@ function sortTechnicians(list: TechnicianRecord[]): TechnicianRecord[] {
   });
 }
 
+// Google-Sheets-style column filter that lives on the header cell itself: a
+// funnel button that highlights when active and opens a small text filter.
+function HeaderColumnFilter({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const active = value.trim().length > 0;
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Filter by ${label}`}
+          className={`ml-1 inline-flex h-5 w-5 items-center justify-center rounded transition-colors ${
+            active ? "bg-primary/15 text-primary" : "text-muted-foreground/50 hover:text-foreground hover:bg-muted"
+          }`}
+        >
+          <Filter className={`h-3 w-3 ${active ? "fill-current" : ""}`} />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-56 p-2" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Filter {label}
+        </div>
+        <Input
+          autoFocus
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={`Contains…`}
+          className="h-8 text-xs"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") setOpen(false);
+          }}
+        />
+        <div className="mt-1.5 flex justify-end">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
+            disabled={!active}
+            onClick={() => onChange("")}
+          >
+            <X className="mr-1 h-3.5 w-3.5" /> Clear
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 export default function TechniciansPage() {
   const qc = useQueryClient();
   const { role } = useAuth();
@@ -175,6 +233,9 @@ export default function TechniciansPage() {
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [codeFilter, setCodeFilter] = useState<string>("all");
+  // Per-column header filters (Name / Code / Service / Area).
+  const [columnFilters, setColumnFilters] = useState({ name: "", code: "", service: "", area: "" });
+  const [debouncedColumnFilters, setDebouncedColumnFilters] = useState(columnFilters);
   const [sortBy, setSortBy] = useState<TechnicianSortOption>("name_asc");
   const [pageSize, setPageSize] = useState<PageSizeOption>(() => loadInitialPageSize());
   const [currentPage, setCurrentPage] = useState(1);
@@ -188,10 +249,19 @@ export default function TechniciansPage() {
     return () => window.clearTimeout(t);
   }, [search]);
 
-  // Reset to page 1 whenever search, page size, code filter, or sort changes
+  // Debounce the per-column filters together
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedColumnFilters(columnFilters), 300);
+    return () => window.clearTimeout(t);
+  }, [columnFilters]);
+
+  const columnFiltersKey = `${debouncedColumnFilters.name}|${debouncedColumnFilters.code}|${debouncedColumnFilters.service}|${debouncedColumnFilters.area}`;
+  const hasColumnFilters = Boolean(columnFiltersKey.replace(/\|/g, ""));
+
+  // Reset to page 1 whenever search, page size, code filter, sort, or a column filter changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [debouncedSearch, pageSize, codeFilter, sortBy]);
+  }, [debouncedSearch, pageSize, codeFilter, sortBy, columnFiltersKey]);
 
   // Persist page size
   useEffect(() => {
@@ -259,7 +329,7 @@ export default function TechniciansPage() {
     queryKey: [
       ...TECHNICIANS_ROOT_KEY,
       "paginated",
-      { page: currentPage, pageSize, search: debouncedSearch, codeFilter, sortBy },
+      { page: currentPage, pageSize, search: debouncedSearch, codeFilter, sortBy, columnFilters: columnFiltersKey },
     ] as const,
     queryFn: () =>
       fetchTechniciansPage({
@@ -268,6 +338,7 @@ export default function TechniciansPage() {
         search: debouncedSearch,
         codeFilter,
         sortBy,
+        columnFilters: debouncedColumnFilters,
       }),
     placeholderData: keepPreviousData,
     staleTime: 30_000,
@@ -742,21 +813,55 @@ export default function TechniciansPage() {
                     aria-label="Select all technicians on this page"
                   />
                 </TableHead>
-                <TableHead>Name</TableHead>
+                <TableHead>
+                  <span className="inline-flex items-center">
+                    Name
+                    <HeaderColumnFilter
+                      label="Name"
+                      value={columnFilters.name}
+                      onChange={(v) => setColumnFilters((f) => ({ ...f, name: v }))}
+                    />
+                  </span>
+                </TableHead>
                 <TableHead className="w-[125px]">
-                  <button
-                    type="button"
-                    onClick={() => setSortBy(sortBy === "code_asc" ? "code_desc" : "code_asc")}
-                    className="inline-flex items-center gap-1 hover:text-foreground transition-colors font-medium text-xs text-muted-foreground"
-                    title="Click to sort by Code"
-                  >
-                    Code
-                    {sortBy === "code_asc" ? " ↑" : sortBy === "code_desc" ? " ↓" : ""}
-                  </button>
+                  <span className="inline-flex items-center">
+                    <button
+                      type="button"
+                      onClick={() => setSortBy(sortBy === "code_asc" ? "code_desc" : "code_asc")}
+                      className="inline-flex items-center gap-1 hover:text-foreground transition-colors font-medium text-xs text-muted-foreground"
+                      title="Click to sort by Code"
+                    >
+                      Code
+                      {sortBy === "code_asc" ? " ↑" : sortBy === "code_desc" ? " ↓" : ""}
+                    </button>
+                    <HeaderColumnFilter
+                      label="Code"
+                      value={columnFilters.code}
+                      onChange={(v) => setColumnFilters((f) => ({ ...f, code: v }))}
+                    />
+                  </span>
                 </TableHead>
                 <TableHead>Phone Number</TableHead>
-                <TableHead>Service</TableHead>
-                <TableHead>Area</TableHead>
+                <TableHead>
+                  <span className="inline-flex items-center">
+                    Service
+                    <HeaderColumnFilter
+                      label="Service"
+                      value={columnFilters.service}
+                      onChange={(v) => setColumnFilters((f) => ({ ...f, service: v }))}
+                    />
+                  </span>
+                </TableHead>
+                <TableHead>
+                  <span className="inline-flex items-center">
+                    Area
+                    <HeaderColumnFilter
+                      label="Area"
+                      value={columnFilters.area}
+                      onChange={(v) => setColumnFilters((f) => ({ ...f, area: v }))}
+                    />
+                  </span>
+                </TableHead>
                 <TableHead>Chat Link</TableHead>
                 <TableHead>Notes</TableHead>
                 <TableHead className="w-[130px] text-right">Actions</TableHead>
@@ -787,7 +892,7 @@ export default function TechniciansPage() {
               {!paginatedQuery.isPending && !paginatedQuery.isError && rows.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={9} className="text-center text-sm text-muted-foreground py-10">
-                    {isSearching || codeFilter !== "all"
+                    {isSearching || codeFilter !== "all" || hasColumnFilters
                       ? "No technicians match your filters."
                       : "No technicians yet. Add one manually or import from CSV/XLSX."}
                   </TableCell>

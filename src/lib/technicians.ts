@@ -69,12 +69,26 @@ export type TechnicianSortOption = "name_asc" | "name_desc" | "code_asc" | "code
 /**
  * Database-backed paginated technician fetch with code filtering and sorting support.
  */
+export interface TechnicianColumnFilters {
+  name?: string;
+  code?: string;
+  service?: string;
+  area?: string;
+}
+
+// PostgREST `.or()` treats commas and parentheses as syntax, so strip anything
+// that would break the filter expression out of a user-typed search term.
+function sanitizeIlikeTerm(value: string): string {
+  return value.replace(/[(),%]/g, " ").trim();
+}
+
 export async function fetchTechniciansPage(params: {
   page: number;
   pageSize: number;
   search: string;
   codeFilter?: string;
   sortBy?: TechnicianSortOption;
+  columnFilters?: TechnicianColumnFilters;
 }): Promise<PaginatedTechnicians> {
   const page = Math.max(1, params.page | 0);
   const pageSize = Math.max(1, params.pageSize | 0);
@@ -84,7 +98,16 @@ export async function fetchTechniciansPage(params: {
   const codeFilter = (params.codeFilter ?? "all").trim();
   const sortBy = params.sortBy ?? "name_asc";
 
-  if (search) {
+  const columnFilters = params.columnFilters ?? {};
+  const nameFilter = (columnFilters.name ?? "").trim();
+  const codeColFilter = (columnFilters.code ?? "").trim();
+  const serviceFilter = (columnFilters.service ?? "").trim();
+  const areaFilter = (columnFilters.area ?? "").trim();
+  const hasColumnFilters = Boolean(nameFilter || codeColFilter || serviceFilter || areaFilter);
+
+  // The RPC search path can't express per-column filters, so once any of them is
+  // active we fall through to the query builder and apply the search as an OR ilike.
+  if (search && !hasColumnFilters) {
     const { data, error } = await supabase.rpc("search_technicians", {
       _q: search,
       _limit: pageSize,
@@ -144,6 +167,23 @@ export async function fetchTechniciansPage(params: {
     query = query.eq("code", codeFilter);
   }
 
+  // Per-column header filters (each an independent contains-match).
+  if (nameFilter) query = query.ilike("name", `%${nameFilter}%`);
+  if (codeColFilter) query = query.ilike("code", `%${codeColFilter}%`);
+  if (serviceFilter) query = query.ilike("service", `%${serviceFilter}%`);
+  if (areaFilter) query = query.ilike("area", `%${areaFilter}%`);
+
+  // Global search runs here only when combined with column filters (otherwise the
+  // RPC path above handles it); match it across the visible text columns.
+  if (search) {
+    const term = sanitizeIlikeTerm(search);
+    if (term) {
+      query = query.or(
+        `name.ilike.%${term}%,code.ilike.%${term}%,service.ilike.%${term}%,area.ilike.%${term}%,phone_number.ilike.%${term}%`,
+      );
+    }
+  }
+
   if (sortBy === "name_desc") {
     query = query.order("name", { ascending: false }).order("id", { ascending: true });
   } else if (sortBy === "code_asc") {
@@ -160,13 +200,24 @@ export async function fetchTechniciansPage(params: {
   let { data, error, count } = await query;
 
   if (error && (error.message?.includes("code") || (error as any).code === "42703")) {
-    // Fallback if column not yet added
+    // Fallback if column not yet added (the code column filter is dropped here).
     let fbQuery = supabase
       .from("technicians")
       .select(TECHNICIAN_FALLBACK_SELECT, { count: "exact" })
       .order("name", { ascending: sortBy !== "name_desc" })
       .order("id", { ascending: true })
       .range(from, to);
+    if (nameFilter) fbQuery = fbQuery.ilike("name", `%${nameFilter}%`);
+    if (serviceFilter) fbQuery = fbQuery.ilike("service", `%${serviceFilter}%`);
+    if (areaFilter) fbQuery = fbQuery.ilike("area", `%${areaFilter}%`);
+    if (search) {
+      const term = sanitizeIlikeTerm(search);
+      if (term) {
+        fbQuery = fbQuery.or(
+          `name.ilike.%${term}%,service.ilike.%${term}%,area.ilike.%${term}%,phone_number.ilike.%${term}%`,
+        );
+      }
+    }
     const fbRes = await fbQuery;
     if (fbRes.error) throw fbRes.error;
     data = fbRes.data as any;
