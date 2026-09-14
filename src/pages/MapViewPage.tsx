@@ -82,33 +82,11 @@ interface CanvasHitTarget extends CanvasPin {
   maxY: number;
 }
 
-// Pins whose projected positions fall within this many screen pixels of each
-// other are drawn as a single cluster badge. Because techs in the same city
-// share one ZIP centroid, they otherwise stack into one pin and hide the rest.
-const CLUSTER_RADIUS_PX = 26;
-
-interface ClusterHitTarget {
-  x: number;
-  y: number;
-  r: number;
-  kind: CanvasPinKind;
-  members: CanvasPin[];
-  centerLat: number;
-  centerLng: number;
-}
-
-interface ProjectedCluster {
-  sumX: number;
-  sumY: number;
-  members: CanvasPin[];
-}
-
 class MapPinCanvasLayer extends L.Layer {
   private canvas: HTMLCanvasElement | null = null;
   private map: L.Map | null = null;
   private topLeft = L.point(0, 0);
   private pins: CanvasPin[] = [];
-  private clusterHitTargets: ClusterHitTarget[] = [];
   private leadHitTargets: CanvasHitTarget[] = [];
   private techHitTargets: CanvasHitTarget[] = [];
   private resetFrame: number | null = null;
@@ -124,7 +102,6 @@ class MapPinCanvasLayer extends L.Layer {
     private readonly onTechClick: (id: string, latlng: L.LatLng) => void,
     private readonly onLeadClick: (id: string, latlng: L.LatLng) => void,
     private readonly getTechTooltip: (id: string) => string,
-    private readonly onClusterClick: (members: CanvasPin[], latlng: L.LatLng) => void,
   ) {
     super();
   }
@@ -162,7 +139,6 @@ class MapPinCanvasLayer extends L.Layer {
     this.map = null;
     this.leadHitTargets = [];
     this.techHitTargets = [];
-    this.clusterHitTargets = [];
     this.lastMouseMoveEvent = null;
     return this;
   }
@@ -247,121 +223,13 @@ class MapPinCanvasLayer extends L.Layer {
     ctx.clearRect(0, 0, size.x, size.y);
     this.leadHitTargets = [];
     this.techHitTargets = [];
-    this.clusterHitTargets = [];
 
-    // Leads render underneath techs. Each kind clusters on its own so a lead and
-    // a tech that happen to overlap never merge into one badge.
-    const leadClusters = this.clusterPins(this.pins.filter((p) => p.kind === "lead"));
-    for (const cluster of leadClusters) {
-      if (cluster.members.length === 1) this.drawPin(ctx, cluster.members[0], "#ef4444", 30);
-      else this.drawClusterBadge(ctx, cluster, "lead");
+    for (const pin of this.pins) {
+      if (pin.kind === "lead") this.drawPin(ctx, pin, "#ef4444", 30);
     }
-
-    const techClusters = this.clusterPins(this.pins.filter((p) => p.kind === "tech"));
-    for (const cluster of techClusters) {
-      if (cluster.members.length === 1) {
-        const pin = cluster.members[0];
-        this.drawPin(ctx, pin, pin.selected ? "#2563eb" : "#3b82f6", pin.selected ? 34 : 30);
-      } else {
-        this.drawClusterBadge(ctx, cluster, "tech");
-      }
+    for (const pin of this.pins) {
+      if (pin.kind === "tech") this.drawPin(ctx, pin, pin.selected ? "#2563eb" : "#3b82f6", pin.selected ? 34 : 30);
     }
-  }
-
-  // Greedy pixel-space clustering with a small spatial grid so it stays near
-  // O(n): each pin joins the first nearby cluster, otherwise starts a new one.
-  private clusterPins(pins: CanvasPin[]): ProjectedCluster[] {
-    if (!this.map) return [];
-    const clusters: ProjectedCluster[] = [];
-    const grid = new Map<string, ProjectedCluster[]>();
-    const cell = CLUSTER_RADIUS_PX;
-    const r2 = CLUSTER_RADIUS_PX * CLUSTER_RADIUS_PX;
-
-    for (const pin of pins) {
-      const p = this.map.latLngToLayerPoint([pin.lat, pin.lng]).subtract(this.topLeft);
-      const gx = Math.floor(p.x / cell);
-      const gy = Math.floor(p.y / cell);
-      let placed: ProjectedCluster | null = null;
-
-      for (let dx = -1; dx <= 1 && !placed; dx += 1) {
-        for (let dy = -1; dy <= 1 && !placed; dy += 1) {
-          const bucket = grid.get(`${gx + dx},${gy + dy}`);
-          if (!bucket) continue;
-          for (const c of bucket) {
-            const cx = c.sumX / c.members.length;
-            const cy = c.sumY / c.members.length;
-            const ddx = cx - p.x;
-            const ddy = cy - p.y;
-            if (ddx * ddx + ddy * ddy <= r2) {
-              placed = c;
-              break;
-            }
-          }
-        }
-      }
-
-      if (placed) {
-        placed.members.push(pin);
-        placed.sumX += p.x;
-        placed.sumY += p.y;
-      } else {
-        const created: ProjectedCluster = { sumX: p.x, sumY: p.y, members: [pin] };
-        clusters.push(created);
-        const key = `${gx},${gy}`;
-        const bucket = grid.get(key);
-        if (bucket) bucket.push(created);
-        else grid.set(key, [created]);
-      }
-    }
-    return clusters;
-  }
-
-  private drawClusterBadge(ctx: CanvasRenderingContext2D, cluster: ProjectedCluster, kind: CanvasPinKind) {
-    const count = cluster.members.length;
-    const x = cluster.sumX / count;
-    const y = cluster.sumY / count;
-    const r = count < 10 ? 15 : count < 100 ? 18 : 21;
-
-    let latSum = 0;
-    let lngSum = 0;
-    for (const m of cluster.members) {
-      latSum += m.lat;
-      lngSum += m.lng;
-    }
-    const hasSelected = kind === "tech" && cluster.members.some((m) => m.selected);
-    const core = kind === "tech" ? (hasSelected ? "#1d4ed8" : "#2563eb") : "#dc2626";
-    const halo = kind === "tech" ? "rgba(37,99,235,0.25)" : "rgba(220,38,38,0.25)";
-
-    this.clusterHitTargets.push({
-      x,
-      y,
-      r: r + 4,
-      kind,
-      members: cluster.members,
-      centerLat: latSum / count,
-      centerLng: lngSum / count,
-    });
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(x, y, r + 4, 0, Math.PI * 2);
-    ctx.fillStyle = halo;
-    ctx.fill();
-
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fillStyle = core;
-    ctx.fill();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = "#ffffff";
-    ctx.stroke();
-
-    ctx.fillStyle = "#ffffff";
-    ctx.font = `600 ${count < 100 ? 13 : 11}px system-ui, -apple-system, sans-serif`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(count > 999 ? "999+" : String(count), x, y);
-    ctx.restore();
   }
 
   private drawPin(ctx: CanvasRenderingContext2D, pin: CanvasPin, fill: string, size: number) {
@@ -423,35 +291,8 @@ class MapPinCanvasLayer extends L.Layer {
       && point.y <= pin.maxY;
   }
 
-  private findClusterHit(event: MouseEvent): ClusterHitTarget | null {
-    if (!this.map) return null;
-    const point = this.map.mouseEventToLayerPoint(event).subtract(this.topLeft);
-    // Techs sit above leads, so match tech clusters first.
-    for (let i = this.clusterHitTargets.length - 1; i >= 0; i -= 1) {
-      const c = this.clusterHitTargets[i];
-      if (c.kind !== "tech") continue;
-      const dx = c.x - point.x;
-      const dy = c.y - point.y;
-      if (dx * dx + dy * dy <= c.r * c.r) return c;
-    }
-    for (let i = this.clusterHitTargets.length - 1; i >= 0; i -= 1) {
-      const c = this.clusterHitTargets[i];
-      if (c.kind !== "lead") continue;
-      const dx = c.x - point.x;
-      const dy = c.y - point.y;
-      if (dx * dx + dy * dy <= c.r * c.r) return c;
-    }
-    return null;
-  }
-
   private handleClick = (event: MouseEvent) => {
     if (!this.map) return;
-    const cluster = this.findClusterHit(event);
-    if (cluster) {
-      L.DomEvent.stop(event);
-      this.onClusterClick(cluster.members, L.latLng(cluster.centerLat, cluster.centerLng));
-      return;
-    }
     const hit = this.findHit(event);
     if (!hit) return;
     L.DomEvent.stop(event);
@@ -467,13 +308,6 @@ class MapPinCanvasLayer extends L.Layer {
     this.hoverFrame = window.requestAnimationFrame(() => {
       this.hoverFrame = null;
       if (!this.canvas || this.isMoving || !this.lastMouseMoveEvent) return;
-      const cluster = this.findClusterHit(this.lastMouseMoveEvent);
-      if (cluster) {
-        this.canvas.style.cursor = "pointer";
-        const label = cluster.kind === "tech" ? "technicians" : "customers";
-        this.canvas.title = `${cluster.members.length} ${label} here — click to view`;
-        return;
-      }
       const hit = this.findHit(this.lastMouseMoveEvent);
       this.canvas.style.cursor = hit ? "pointer" : "";
       this.canvas.title = hit?.kind === "tech" ? this.getTechTooltip(hit.id) : "";
@@ -999,65 +833,6 @@ export default function MapViewPage() {
     setSelectedTechId(null);
   }, [applyTechMarkerSelection, cancelLeadVisibilityWork]);
 
-  const handleClusterClick = useCallback((members: CanvasPin[], latlng: L.LatLng) => {
-    const map = mapRef.current;
-    if (!map) return;
-
-    // Pins at genuinely different spots separate when you zoom in — nicer than a
-    // list. A same-spot cluster (a whole city sharing one ZIP centroid) can never
-    // separate, so we list its technicians instead.
-    const distinct = new Set(members.map((m) => `${m.lat.toFixed(3)},${m.lng.toFixed(3)}`));
-    if (distinct.size > 1 && (map.getZoom() ?? 4) < 15) {
-      const bounds = L.latLngBounds(members.map((m) => [m.lat, m.lng] as L.LatLngTuple));
-      map.flyToBounds(bounds.pad(0.25), { maxZoom: 15, duration: 0.5 });
-      return;
-    }
-
-    const techMembers = members.filter((m) => m.kind === "tech");
-    if (techMembers.length === 0) {
-      map.flyTo(latlng, Math.min((map.getZoom() ?? 4) + 2, 15), { duration: 0.5 });
-      return;
-    }
-
-    const techs = techMembers
-      .map((m) => techDataRefs.current.get(m.id))
-      .filter((t): t is SearchableTech => Boolean(t));
-    if (techs.length === 0) return;
-    techs.sort((a, b) => (a.name ?? "").localeCompare(b.name ?? "", undefined, { sensitivity: "base" }));
-
-    const root = document.createElement("div");
-    root.style.minWidth = "260px";
-    root.style.maxWidth = "340px";
-    root.style.maxHeight = "360px";
-    root.style.overflowY = "auto";
-    root.style.fontFamily = "inherit";
-    root.addEventListener("click", (event) => event.stopPropagation());
-
-    const areaLabel = techs.find((t) => t.area)?.area ?? "";
-    const header = `<div style="font-weight:700;font-size:13px">${techs.length} technicians here</div>`
-      + (areaLabel
-        ? `<div style="font-size:11px;color:#6b7280;margin-bottom:6px">${escapeHtml(areaLabel)}</div>`
-        : `<div style="margin-bottom:6px"></div>`);
-    const rows = techs.map((t) => {
-      const meta = [t.code, t.service].filter(Boolean).join(" · ");
-      return `<button type="button" class="ml-cluster-tech" data-id="${escapeHtml(t.id)}" style="display:flex;flex-direction:column;align-items:flex-start;gap:1px;width:100%;text-align:left;padding:7px 9px;margin-bottom:4px;background:#f9fafb;border:1px solid #eef0f3;border-radius:8px;cursor:pointer">`
-        + `<span style="font-weight:600;font-size:12.5px;color:#111827">${escapeHtml(t.name)}</span>`
-        + (meta ? `<span style="font-size:11px;color:#6b7280">${escapeHtml(meta)}</span>` : "")
-        + `</button>`;
-    }).join("");
-    root.innerHTML = header + rows;
-    root.querySelectorAll<HTMLButtonElement>(".ml-cluster-tech").forEach((btn) => {
-      btn.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const id = btn.getAttribute("data-id");
-        if (id) handleTechMarkerClick(id, latlng);
-      });
-    });
-
-    openSharedPopup(latlng, root);
-  }, [handleTechMarkerClick, openSharedPopup]);
-
   useEffect(() => {
     if (!mapVisible) return;
     if (mapRef.current || !mapEl.current) return;
@@ -1072,7 +847,6 @@ export default function MapViewPage() {
       handleTechMarkerClick,
       (leadId, latlng) => openLeadPopup(leadId, latlng),
       (techId) => techDataRefs.current.get(techId)?.phone_number?.trim() ?? "",
-      handleClusterClick,
     ).addTo(map);
     pinLayerRef.current = pinLayer;
     mapRef.current = map;
@@ -1107,7 +881,7 @@ export default function MapViewPage() {
       pinLayerRef.current = null;
       radiusLayer.current = null;
     };
-  }, [cancelLeadVisibilityWork, handleClusterClick, handleTechMarkerClick, mapVisible, openLeadPopup]);
+  }, [cancelLeadVisibilityWork, handleTechMarkerClick, mapVisible, openLeadPopup]);
 
   // Canvas marker data
   useEffect(() => {
