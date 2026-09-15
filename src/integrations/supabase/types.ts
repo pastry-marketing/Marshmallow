@@ -1028,27 +1028,33 @@ export type Database = {
       profiles: {
         Row: {
           can_manage_users: boolean | null
+          can_view_tech_report: boolean
           created_at: string | null
           email: string
           full_name: string
           id: string
           is_quotation_master: boolean | null
+          opr_code: string | null
         }
         Insert: {
           can_manage_users?: boolean | null
+          can_view_tech_report?: boolean
           created_at?: string | null
           email: string
           full_name: string
           id: string
           is_quotation_master?: boolean | null
+          opr_code?: string | null
         }
         Update: {
           can_manage_users?: boolean | null
+          can_view_tech_report?: boolean
           created_at?: string | null
           email?: string
           full_name?: string
           id?: string
           is_quotation_master?: boolean | null
+          opr_code?: string | null
         }
         Relationships: []
       }
@@ -1764,6 +1770,7 @@ export type Database = {
       }
     }
     Functions: {
+      assign_next_opr_code: { Args: { _user_id: string }; Returns: string }
       can_access_quo_ai: { Args: never; Returns: boolean }
       can_use_quick_chat: { Args: { _user_id: string }; Returns: boolean }
       cron_quo_reconcile_sync: { Args: never; Returns: undefined }
@@ -1815,6 +1822,13 @@ export type Database = {
           }
       healthcheck: { Args: never; Returns: Json }
       is_admin_user: { Args: { check_user_id: string }; Returns: boolean }
+      list_opr_codes: {
+        Args: never
+        Returns: {
+          full_name: string
+          opr_code: string
+        }[]
+      }
       quo_conversation_counts_by_number: {
         Args: never
         Returns: {
@@ -1852,7 +1866,13 @@ export type Database = {
       }
     }
     Enums: {
-      app_role: "admin" | "processor" | "customer_service" | "opr" | "cs_admin" | "opr_admin"
+      app_role:
+        | "admin"
+        | "processor"
+        | "customer_service"
+        | "opr"
+        | "cs_admin"
+        | "opr_admin"
       app_role_old:
         | "admin"
         | "processor"
@@ -1986,7 +2006,14 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
-      app_role: ["admin", "processor", "customer_service", "opr", "cs_admin", "opr_admin"],
+      app_role: [
+        "admin",
+        "processor",
+        "customer_service",
+        "opr",
+        "cs_admin",
+        "opr_admin",
+      ],
       app_role_old: [
         "admin",
         "processor",

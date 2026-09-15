@@ -278,12 +278,12 @@ Deno.serve(async (req) => {
         return jsonResponse({ error: "You can only create customer_service users" }, 403);
       }
 
-      const VALID_ROLES = ["admin", "processor", "customer_service", "opr", "cs_admin"] as const;
+      const VALID_ROLES = ["admin", "processor", "customer_service", "opr", "cs_admin", "opr_admin"] as const;
       if (!role || !VALID_ROLES.includes(role)) {
         return jsonResponse(
           {
             error:
-              "A valid role is required. Choose Admin, Processor, Customer Service, CS Admin, or OPR.",
+              "A valid role is required. Choose Admin, Processor, Customer Service, CS Admin, OPR, or OPR Admin.",
           },
           400,
         );
