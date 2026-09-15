@@ -27,9 +27,9 @@ export function canExportData(role: AppRole | null | undefined): boolean {
   return role === "admin";
 }
 
-/** opr_admin must pick an OPR code; a regular opr is locked to their own. */
+/** Roles that manage technicians across OPRs must choose an OPR code. */
 export function mustChooseOprCode(role: AppRole | null | undefined): boolean {
-  return role === "admin" || role === "opr_admin";
+  return role === "admin" || role === "processor" || role === "opr_admin";
 }
 
 /**

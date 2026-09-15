@@ -31,8 +31,23 @@ interface Row {
 interface FailedRow {
   rowNumber: number;
   name: string;
+  oprCode: string;
+  phoneNumber: string;
+  service: string;
   area: string;
   reason: string;
+}
+
+function failedRow(row: Row, reason: string): FailedRow {
+  return {
+    rowNumber: row.rowNumber,
+    name: row.name,
+    oprCode: row.opr_code ?? "",
+    phoneNumber: row.phone_number,
+    service: row.service,
+    area: row.area,
+    reason,
+  };
 }
 
 // Normalize header for tolerant matching: lowercase, strip harmless punctuation,
@@ -224,13 +239,19 @@ export function ImportTechniciansDialog({ open, onOpenChange, onImported }: Prop
     setFailed([]);
     setInsertedCount(null);
     try {
-      const { data: existing } = await supabase.from("technicians").select("name, area, phone_number");
+      const [{ data: existing }, oprResult] = await Promise.all([
+        supabase.from("technicians").select("name, area, phone_number"),
+        supabase.rpc("list_opr_codes" as never),
+      ]);
       // Duplicate detection is based on the phone number ONLY.
       const seenPhones = new Set(
         (existing ?? [])
-          .map((t) => String(t.phone_number ?? "").replace(/\D/g, ""))
+          .map((t) => String(t.phone_number ?? "").replace(/\D/g, "").replace(/^1(?=\d{10}$)/, ""))
           .filter((d) => d.length >= 7),
       );
+      const validOprCodes = oprResult.error
+        ? null
+        : new Set(((oprResult.data ?? []) as Array<{ opr_code: string }>).map((row) => row.opr_code.trim().toUpperCase()));
 
       const failures: FailedRow[] = [];
       const { data: { user } } = await supabase.auth.getUser();
@@ -255,27 +276,46 @@ export function ImportTechniciansDialog({ open, onOpenChange, onImported }: Prop
 
       for (const r of rows) {
         if (!r.name && !r.area && !r.service && !r.chat_link && !r.notes && !r.phone_number && !r.code && !r.opr_code) {
-          failures.push({ rowNumber: r.rowNumber, name: r.name, area: r.area, reason: "Row is empty" });
+          failures.push(failedRow(r, "Row is empty"));
           continue;
         }
-        // Import the technician; drop invalid phone but keep the record.
-        const validPhone = r.phone_number && !r.phoneInvalid ? r.phone_number : null;
-        if (r.phoneInvalid) {
-          failures.push({ rowNumber: r.rowNumber, name: r.name, area: r.area, reason: `Invalid phone "${r.phone_number}" — imported without phone` });
-        } else if (validPhone) {
-          const digits = validPhone.replace(/\D/g, "");
-          if (digits.length >= 7 && seenPhones.has(digits)) {
-            failures.push({ rowNumber: r.rowNumber, name: r.name, area: r.area, reason: `Duplicate phone ${validPhone} — already belongs to a technician` });
-            continue;
-          }
-          if (digits.length >= 7) seenPhones.add(digits);
+
+        const missing = [
+          !r.name && "Name",
+          !r.opr_code && "OPR Code",
+          !r.phone_number && "Phone Number",
+          !r.service && "Service",
+          !r.area && "Area",
+        ].filter(Boolean) as string[];
+        if (missing.length > 0) {
+          failures.push(failedRow(r, `Missing required field${missing.length > 1 ? "s" : ""}: ${missing.join(", ")}`));
+          continue;
         }
+
+        if (r.phoneInvalid || r.phone_number.replace(/\D/g, "").replace(/^1(?=\d{10}$)/, "").length !== 10) {
+          failures.push(failedRow(r, `Invalid phone number: ${r.phone_number}`));
+          continue;
+        }
+
+        const cleanOprCode = r.opr_code!.trim().toUpperCase();
+        if (validOprCodes && !validOprCodes.has(cleanOprCode)) {
+          failures.push(failedRow(r, `Unknown OPR Code: ${r.opr_code}`));
+          continue;
+        }
+
+        const validPhone = r.phone_number;
+        const digits = validPhone.replace(/\D/g, "").replace(/^1(?=\d{10}$)/, "");
+        if (seenPhones.has(digits)) {
+          failures.push(failedRow(r, `Duplicate technician: phone ${validPhone} is already present`));
+          continue;
+        }
+        seenPhones.add(digits);
         toInsert.push({
           row: r,
           payload: {
             name: r.name,
             code: r.code ? r.code.trim() : null,
-            opr_code: r.opr_code ? r.opr_code.trim() : null,
+            opr_code: cleanOprCode,
             area: r.area,
             phone_number: validPhone,
             service: r.service || null,
@@ -321,12 +361,12 @@ export function ImportTechniciansDialog({ open, onOpenChange, onImported }: Prop
             .select("id, area")
             .single();
           if (singleErr || !single) {
-            failures.push({
-              rowNumber: c.row.rowNumber,
-              name: c.row.name,
-              area: c.row.area,
-              reason: singleErr?.message ?? "Insert failed",
-            });
+            const duplicate = (singleErr as { code?: string } | null)?.code === "23505"
+              || singleErr?.message?.toLowerCase().includes("duplicate technician phone");
+            failures.push(failedRow(
+              c.row,
+              duplicate ? `Duplicate technician: phone ${c.row.phone_number} is already present` : singleErr?.message ?? "Insert failed",
+            ));
           } else {
             inserted++;
             insertedIds.push({ id: single.id as string, area: (single.area as string) ?? "" });
@@ -398,11 +438,11 @@ export function ImportTechniciansDialog({ open, onOpenChange, onImported }: Prop
 
   const downloadFailedCsv = () => {
     if (!failed.length) return;
-    const headers = ["Row", "Name", "Area", "Reason"];
+    const headers = ["Row", "Name", "OPR Code", "Phone Number", "Service", "Area", "Reason"];
     const esc = (s: string) => `"${String(s).replace(/"/g, '""')}"`;
     const csv = [
       headers.join(","),
-      ...failed.map((f) => [f.rowNumber, f.name, f.area, f.reason].map((x) => esc(String(x ?? ""))).join(",")),
+      ...failed.map((f) => [f.rowNumber, f.name, f.oprCode, f.phoneNumber, f.service, f.area, f.reason].map((x) => esc(String(x ?? ""))).join(",")),
     ].join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -448,7 +488,7 @@ export function ImportTechniciansDialog({ open, onOpenChange, onImported }: Prop
         <DialogHeader>
           <DialogTitle>Import Technicians</DialogTitle>
           <DialogDescription>
-            Upload a .csv or .xlsx. Recognized columns: Name, OPR Code, Phone Number, Service, Area, Quo Chat Link, Notes.
+            Upload a .csv or .xlsx. Name, OPR Code, Phone Number, Service, and Area are required for every row.
           </DialogDescription>
         </DialogHeader>
 
@@ -494,6 +534,7 @@ export function ImportTechniciansDialog({ open, onOpenChange, onImported }: Prop
                   <thead className="bg-muted/40 text-left">
                     <tr>
                       <th className="px-3 py-1.5">Name</th>
+                      <th className="px-3 py-1.5">OPR Code</th>
                       <th className="px-3 py-1.5">Phone</th>
                       <th className="px-3 py-1.5">Service</th>
                       <th className="px-3 py-1.5">Area</th>
@@ -505,9 +546,10 @@ export function ImportTechniciansDialog({ open, onOpenChange, onImported }: Prop
                     {rows.slice(0, 100).map((r, i) => (
                       <tr key={i} className="border-t">
                         <td className="px-3 py-1.5">{r.name || <span className="text-muted-foreground">—</span>}</td>
+                        <td className="px-3 py-1.5">{r.opr_code || <span className="text-muted-foreground">—</span>}</td>
                         <td className="px-3 py-1.5">
                           {r.phone_number ? (
-                            <span className={r.phoneInvalid ? "text-amber-600 dark:text-amber-400" : ""} title={r.phoneInvalid ? "Invalid — will import without phone" : undefined}>
+                            <span className={r.phoneInvalid ? "text-destructive" : ""} title={r.phoneInvalid ? "Invalid — row will not be imported" : undefined}>
                               {r.phone_number}
                             </span>
                           ) : (
@@ -544,6 +586,9 @@ export function ImportTechniciansDialog({ open, onOpenChange, onImported }: Prop
                         <tr>
                           <th className="px-3 py-1.5 w-14">Row</th>
                           <th className="px-3 py-1.5">Name</th>
+                          <th className="px-3 py-1.5">OPR Code</th>
+                          <th className="px-3 py-1.5">Phone</th>
+                          <th className="px-3 py-1.5">Service</th>
                           <th className="px-3 py-1.5">Area</th>
                           <th className="px-3 py-1.5">Reason</th>
                         </tr>
@@ -553,6 +598,9 @@ export function ImportTechniciansDialog({ open, onOpenChange, onImported }: Prop
                           <tr key={i} className="border-t">
                             <td className="px-3 py-1.5">{f.rowNumber}</td>
                             <td className="px-3 py-1.5">{f.name || <span className="text-muted-foreground">—</span>}</td>
+                            <td className="px-3 py-1.5">{f.oprCode || <span className="text-muted-foreground">—</span>}</td>
+                            <td className="px-3 py-1.5">{f.phoneNumber || <span className="text-muted-foreground">—</span>}</td>
+                            <td className="px-3 py-1.5">{f.service || <span className="text-muted-foreground">—</span>}</td>
                             <td className="px-3 py-1.5">{f.area || <span className="text-muted-foreground">—</span>}</td>
                             <td className="px-3 py-1.5 text-amber-600 dark:text-amber-400">{f.reason}</td>
                           </tr>

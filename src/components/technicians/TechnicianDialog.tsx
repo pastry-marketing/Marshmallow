@@ -90,7 +90,7 @@ export function TechnicianDialog({ open, onOpenChange, technician, onSaved }: Pr
     const cleanPhone = formatUSPhone(phone);
     const phoneDigits = stripPhone(cleanPhone);
 
-    // Required fields: Technician Name, Number, Service, and Area.
+    // Required fields: Technician Name, OPR Code, Number, Service, and Area.
     if (!cleanName) {
       toast({ title: "Technician Name is required", variant: "destructive" });
       return;
@@ -112,14 +112,14 @@ export function TechnicianDialog({ open, onOpenChange, technician, onSaved }: Pr
       return;
     }
 
-    // OPR code: a regular opr is locked to their own; opr_admin must choose one.
+    // OPR code: a regular OPR is locked to their own; managing roles choose one.
     const cleanOprCode = (canChooseOprCode ? oprCode : myOprCode).trim();
-    if (role === "opr" && !cleanOprCode) {
-      toast({ title: "No OPR code is assigned to your account", description: "Ask an admin to assign one.", variant: "destructive" });
-      return;
-    }
-    if (role === "opr_admin" && !cleanOprCode) {
-      toast({ title: "OPR Code is required", description: "Choose which OPR this technician belongs to.", variant: "destructive" });
+    if (!cleanOprCode) {
+      toast({
+        title: "OPR Code is required",
+        description: role === "opr" ? "Ask an admin to assign an OPR code to your account." : "Choose which OPR this technician belongs to.",
+        variant: "destructive",
+      });
       return;
     }
 
@@ -159,7 +159,7 @@ export function TechnicianDialog({ open, onOpenChange, technician, onSaved }: Pr
 
       const SELECT = "id, name, area, service, notes, chat_link, phone_number, latitude, longitude, opr_code, created_at";
       let saved: TechnicianRecord | null = null;
-      let error: { message: string } | null = null;
+      let error: { message: string; code?: string } | null = null;
       if (technician) {
         const res = await supabase.from("technicians").update(payload as never).eq("id", technician.id).select(SELECT).single();
         error = res.error;
@@ -172,7 +172,13 @@ export function TechnicianDialog({ open, onOpenChange, technician, onSaved }: Pr
       }
 
       if (error || !saved?.id) {
-        toast({ title: "Save failed", description: error?.message ?? "Could not verify the saved technician.", variant: "destructive" });
+        const duplicate = error?.code === "23505" || error?.message?.toLowerCase().includes("duplicate technician phone");
+        if (duplicate) setPhoneError("A technician with this phone number already exists");
+        toast({
+          title: duplicate ? "Duplicate technician" : "Save failed",
+          description: duplicate ? "This phone number is already assigned to another technician." : error?.message ?? "Could not verify the saved technician.",
+          variant: "destructive",
+        });
       } else {
         const geoWarn = !!cleanArea && (latitude == null || longitude == null);
         queryClient.setQueryData<TechnicianRecord[]>(TECHNICIANS_QUERY_KEY, (current) =>
@@ -210,7 +216,7 @@ export function TechnicianDialog({ open, onOpenChange, technician, onSaved }: Pr
           {/* OPR Code: locked to the opr's own code; admins / opr_admins choose. */}
           <div className="space-y-1.5">
             <Label htmlFor="tech-opr-code">
-              OPR Code{role === "opr_admin" && <span className="text-destructive"> *</span>}
+              OPR Code <span className="text-destructive">*</span>
             </Label>
             {canChooseOprCode ? (
               <Select value={oprCode || "__none__"} onValueChange={(val) => setOprCode(val === "__none__" ? "" : val)}>
@@ -218,7 +224,6 @@ export function TechnicianDialog({ open, onOpenChange, technician, onSaved }: Pr
                   <SelectValue placeholder="Choose an OPR..." />
                 </SelectTrigger>
                 <SelectContent className="max-h-56">
-                  {role !== "opr_admin" && <SelectItem value="__none__">None (unassigned)</SelectItem>}
                   {oprCodeOptions.map((item) => (
                     <SelectItem key={item.opr_code} value={item.opr_code}>
                       {item.opr_code}{item.full_name ? ` — ${item.full_name}` : ""}
