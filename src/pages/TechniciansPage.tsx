@@ -34,7 +34,7 @@ import {
   TechnicianSortOption,
   type TechnicianVisibility,
 } from "@/lib/technicians";
-import { canAddTechnicians, canImportTechnicians, technicianVisibility } from "@/lib/access";
+import { canAddTechnicians, canDeleteTechnicians, canImportTechnicians, technicianVisibility } from "@/lib/access";
 import { toTelHref } from "@/lib/phone";
 import {
   Contact,
@@ -269,6 +269,7 @@ export default function TechniciansPage() {
   const qc = useQueryClient();
   const { role, profile } = useAuth();
   const isAdmin = role === "admin";
+  const canDelete = canDeleteTechnicians(role);
   const canReport = isAdmin || profile?.can_view_tech_report === true;
   const [activeView, setActiveView] = useState<"directory" | "report">("directory");
 
@@ -448,7 +449,7 @@ export default function TechniciansPage() {
   }, [rows]);
 
   const handleConfirmDelete = async () => {
-    if (!deleteTech) return;
+    if (!deleteTech || !canDelete) return;
     const { error } = await supabase.from("technicians").delete().eq("id", deleteTech.id);
     if (error) {
       toast({ title: "Delete failed", description: error.message, variant: "destructive" });
@@ -597,7 +598,7 @@ export default function TechniciansPage() {
   };
 
   const handleBulkDelete = async () => {
-    if (bulkDeleting) return;
+    if (!canDelete || bulkDeleting) return;
     const ids = Array.from(selected.keys());
     if (ids.length === 0) return;
     setBulkDeleting(true);
@@ -853,16 +854,18 @@ export default function TechniciansPage() {
                     <Copy className="mr-1.5 h-4 w-4" />
                     Copy Selected Techs ({selectedCount.toLocaleString()})
                   </Button>
-                  <Button
-                    size="sm"
-                    variant="destructive"
-                    onClick={() => setBulkDeleteOpen(true)}
-                    aria-label="Delete selected technicians"
-                    title="Delete selected technicians"
-                  >
-                    <Trash2 className="mr-1.5 h-4 w-4" />
-                    Delete Selected ({selectedCount.toLocaleString()})
-                  </Button>
+                  {canDelete && (
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={() => setBulkDeleteOpen(true)}
+                      aria-label="Delete selected technicians"
+                      title="Delete selected technicians"
+                    >
+                      <Trash2 className="mr-1.5 h-4 w-4" />
+                      Delete Selected ({selectedCount.toLocaleString()})
+                    </Button>
+                  )}
                   <Button
                     size="sm"
                     variant="ghost"
@@ -1063,9 +1066,11 @@ export default function TechniciansPage() {
                         <Button size="icon" variant="ghost" onClick={() => setEditTech(t)} title="Edit" aria-label={`Edit ${t.name}`}>
                           <Pencil className="h-4 w-4" />
                         </Button>
-                        <Button size="icon" variant="ghost" onClick={() => setDeleteTech(t)} title="Delete" aria-label={`Delete ${t.name}`}>
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
+                        {canDelete && (
+                          <Button size="icon" variant="ghost" onClick={() => setDeleteTech(t)} title="Delete" aria-label={`Delete ${t.name}`}>
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
+                        )}
                       </div>
                     </TableCell>
                   </TableRow>

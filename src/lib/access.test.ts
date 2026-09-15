@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canAccessNavItem, canSeeTechDetails, getDefaultNavAccess } from "@/lib/access";
+import { canAccessNavItem, canDeleteTechnicians, canSeeTechDetails, getDefaultNavAccess } from "@/lib/access";
 import type { NavigationPermission } from "@/types";
 
 describe("cancellation request navigation access", () => {
@@ -62,5 +62,10 @@ describe("technician details", () => {
 describe("OPR Admin inheritance", () => {
   it("has the same default navigation as OPR", () => {
     expect([...getDefaultNavAccess("opr_admin")]).toEqual([...getDefaultNavAccess("opr")]);
+  });
+
+  it("allows OPR Admin, but not regular OPR, to delete technicians", () => {
+    expect(canDeleteTechnicians("opr_admin")).toBe(true);
+    expect(canDeleteTechnicians("opr")).toBe(false);
   });
 });

@@ -15,6 +15,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { mustChooseOprCode } from "@/lib/access";
+import { AreaCombobox } from "@/components/technicians/AreaCombobox";
 
 export interface TechnicianRecord {
   id: string;
@@ -262,7 +263,7 @@ export function TechnicianDialog({ open, onOpenChange, technician, onSaved }: Pr
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="tech-area">Area <span className="text-destructive">*</span></Label>
-            <Input id="tech-area" value={area} onChange={(e) => setArea(e.target.value)} placeholder="e.g. Miami, FL or 33101" />
+            <AreaCombobox id="tech-area" value={area} onChange={setArea} placeholder="Start typing a city or area..." />
             <p className="text-[11px] text-muted-foreground">City & state, ZIP code, or full address. Used to place the marker.</p>
           </div>
           <div className="space-y-1.5">

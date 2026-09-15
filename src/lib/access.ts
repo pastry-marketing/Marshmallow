@@ -22,6 +22,11 @@ export function canImportTechnicians(role: AppRole | null | undefined): boolean 
   return role === "admin" || role === "processor" || role === "opr_admin";
 }
 
+/** Regular OPR users can maintain their technicians but cannot delete them. */
+export function canDeleteTechnicians(role: AppRole | null | undefined): boolean {
+  return role === "admin" || role === "processor" || role === "opr_admin";
+}
+
 /** Only admins may export data anywhere in the app. */
 export function canExportData(role: AppRole | null | undefined): boolean {
   return role === "admin";
