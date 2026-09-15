@@ -1,53 +1,64 @@
 import { useEffect, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
 import { syncLeadUpsertToGoogleSheets, syncLeadDeleteToGoogleSheets, getGoogleSheetsConfig } from "@/lib/google-sheets";
 import type { Lead } from "@/types";
 
 /**
- * Hook to automatically synchronize lead changes in Supabase with Google Sheets in real-time.
+ * Hook to automatically synchronize lead changes in Supabase with Google Sheets.
+ *
+ * The realtime subscription listens to the WHOLE leads table, so it is only
+ * opened when the sync is actually enabled AND the viewer is an admin. Every
+ * other session skips it entirely, which avoids billing a leads-wide realtime
+ * subscription for every logged-in user.
  */
 export function useGoogleSheetsSync() {
+  const { role } = useAuth();
   const isEnabledRef = useRef(true);
   const pendingSyncsRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
   const leadIdToJobIdMap = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
+    // Only admins run the (client-side) Google Sheets sync.
+    if (role !== "admin") return;
+
     let isMounted = true;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
 
-    // Check if autoSync is enabled
     void getGoogleSheetsConfig().then((config) => {
-      if (isMounted) {
-        isEnabledRef.current = Boolean(config.autoSync && config.webhookUrl);
-      }
-    });
+      if (!isMounted) return;
+      const enabled = Boolean(config.autoSync && config.webhookUrl);
+      // Do not open a leads-wide realtime subscription when sync is turned off.
+      if (!enabled) return;
+      isEnabledRef.current = true;
 
-    // Pre-populate lead ID to job_id mapping for reliable deletion tracking
-    void supabase
-      .from("leads")
-      .select("id, job_id")
-      .then(({ data }) => {
-        if (data && isMounted) {
-          data.forEach((l) => {
-            if (l.id && l.job_id) {
-              leadIdToJobIdMap.current.set(l.id, l.job_id);
-            }
-          });
-        }
-      });
+      // Pre-populate lead ID to job_id mapping for reliable deletion tracking
+      void supabase
+        .from("leads")
+        .select("id, job_id")
+        .then(({ data }) => {
+          if (data && isMounted) {
+            data.forEach((l) => {
+              if (l.id && l.job_id) {
+                leadIdToJobIdMap.current.set(l.id, l.job_id);
+              }
+            });
+          }
+        });
 
-    const channel = supabase
-      .channel("google-sheets-lead-sync")
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "leads",
-        },
-        (payload) => {
-          if (!isEnabledRef.current) return;
+      channel = supabase
+        .channel("google-sheets-lead-sync")
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "leads",
+          },
+          (payload) => {
+            if (!isEnabledRef.current) return;
 
-          const eventType = payload.eventType;
+            const eventType = payload.eventType;
 
           if (eventType === "DELETE") {
             const oldRow = payload.old as Partial<Lead> | undefined;
@@ -108,15 +119,16 @@ export function useGoogleSheetsSync() {
             pendingSyncsRef.current.set(leadId, timer);
           }
         }
-      )
-      .subscribe();
+        )
+        .subscribe();
+    });
 
     return () => {
       isMounted = false;
       // Clear any pending timers
       pendingSyncsRef.current.forEach((timer) => clearTimeout(timer));
       pendingSyncsRef.current.clear();
-      void supabase.removeChannel(channel);
+      if (channel) void supabase.removeChannel(channel);
     };
-  }, []);
+  }, [role]);
 }

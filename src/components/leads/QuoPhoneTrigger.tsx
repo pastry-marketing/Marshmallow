@@ -61,7 +61,11 @@ const quickChatUnreadWatchers = new Map<
   { phone: string; chatType?: "customer" | "tech"; setState: (value: boolean) => void }
 >();
 let quickChatUnreadRefreshTimer: ReturnType<typeof setTimeout> | null = null;
-let quickChatUnreadChannel: ReturnType<typeof supabase.channel> | null = null;
+// Unread status is polled rather than driven by a realtime subscription on the
+// whole quo_conversations table, which used to fan every chat message out to
+// every connected user and dominated realtime message usage.
+const QUICK_CHAT_UNREAD_POLL_MS = 60000;
+let quickChatUnreadPollTimer: ReturnType<typeof setInterval> | null = null;
 let nextQuickChatUnreadWatcherId = 0;
 
 function scheduleQuickChatUnreadRefresh() {
@@ -78,9 +82,9 @@ async function refreshQuickChatUnreadStatuses() {
       clearTimeout(quickChatUnreadRefreshTimer);
       quickChatUnreadRefreshTimer = null;
     }
-    if (quickChatUnreadChannel) {
-      void supabase.removeChannel(quickChatUnreadChannel);
-      quickChatUnreadChannel = null;
+    if (quickChatUnreadPollTimer) {
+      clearInterval(quickChatUnreadPollTimer);
+      quickChatUnreadPollTimer = null;
     }
     return;
   }
@@ -138,20 +142,11 @@ async function refreshQuickChatUnreadStatuses() {
   });
 }
 
-function ensureQuickChatUnreadChannel() {
-  if (quickChatUnreadChannel) return quickChatUnreadChannel;
-
-  quickChatUnreadChannel = supabase
-    .channel("quo-quickchat-unread-sync")
-    .on("postgres_changes", { event: "INSERT", schema: "public", table: "quo_conversations" }, () => {
-      scheduleQuickChatUnreadRefresh();
-    })
-    .on("postgres_changes", { event: "UPDATE", schema: "public", table: "quo_conversations" }, () => {
-      scheduleQuickChatUnreadRefresh();
-    })
-    .subscribe();
-
-  return quickChatUnreadChannel;
+function ensureQuickChatUnreadPolling() {
+  if (quickChatUnreadPollTimer) return;
+  quickChatUnreadPollTimer = setInterval(() => {
+    scheduleQuickChatUnreadRefresh();
+  }, QUICK_CHAT_UNREAD_POLL_MS);
 }
 
 function mergeQuoMessages(messages: QuoChatMessage[]) {
@@ -219,7 +214,7 @@ export default function QuoPhoneTrigger({
       setState: setLastFromCustomer,
     });
 
-    ensureQuickChatUnreadChannel();
+    ensureQuickChatUnreadPolling();
     scheduleQuickChatUnreadRefresh();
 
     return () => {
@@ -229,9 +224,9 @@ export default function QuoPhoneTrigger({
           clearTimeout(quickChatUnreadRefreshTimer);
           quickChatUnreadRefreshTimer = null;
         }
-        if (quickChatUnreadChannel) {
-          void supabase.removeChannel(quickChatUnreadChannel);
-          quickChatUnreadChannel = null;
+        if (quickChatUnreadPollTimer) {
+          clearInterval(quickChatUnreadPollTimer);
+          quickChatUnreadPollTimer = null;
         }
       } else {
         scheduleQuickChatUnreadRefresh();

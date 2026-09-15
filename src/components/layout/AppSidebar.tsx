@@ -190,14 +190,16 @@ export default function AppSidebar() {
 
     const channel = supabase
       .channel("quote-pending-sidebar-realtime")
+      // Server-side filter: only rows entering "pending_to_send" are delivered,
+      // instead of every lead change. Cuts realtime message volume drastically.
       .on(
         "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "leads" },
+        { event: "UPDATE", schema: "public", table: "leads", filter: "status=eq.pending_to_send" },
         (payload) => announceQuotePending(payload.new as { id?: string; status?: string } | undefined),
       )
       .on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: "leads" },
+        { event: "INSERT", schema: "public", table: "leads", filter: "status=eq.pending_to_send" },
         (payload) => announceQuotePending(payload.new as { id?: string; status?: string } | undefined),
       )
       .subscribe();
@@ -213,9 +215,11 @@ export default function AppSidebar() {
 
     const channel = supabase
       .channel("global-leads-notifications")
+      // Only "activate_customer" rows are delivered — the handler ignores every
+      // other status anyway, so this is a pure realtime-cost reduction.
       .on(
         "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "leads" },
+        { event: "UPDATE", schema: "public", table: "leads", filter: "status=eq.activate_customer" },
         (payload) => {
           const newRow = payload.new as any;
           const oldRow = payload.old as any;
