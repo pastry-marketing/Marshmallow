@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import * as XLSX from "xlsx";
 import { supabase } from "@/integrations/supabase/client";
+import { fetchAllRows } from "@/lib/supabase-paginate";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -55,14 +56,20 @@ export function TechnicianReport({ isAdmin }: { isAdmin: boolean }) {
   const reportQuery = useQuery({
     queryKey: ["tech-report", from, to],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("technicians")
-        .select("opr_code, created_at")
-        .gte("created_at", toStartOfDayISO(from))
-        .lte("created_at", toEndOfDayISO(to));
-      if (error) throw error;
+      // Page through so the counts/export cover every technician in the range,
+      // not just the first 1000 (PostgREST's default response cap).
+      const data = await fetchAllRows<{ opr_code: string | null }>((rangeFrom, rangeTo) =>
+        supabase
+          .from("technicians")
+          .select("opr_code, created_at")
+          .gte("created_at", toStartOfDayISO(from))
+          .lte("created_at", toEndOfDayISO(to))
+          .order("created_at", { ascending: false })
+          .order("id", { ascending: false })
+          .range(rangeFrom, rangeTo),
+      );
       const counts = new Map<string, number>();
-      for (const row of (data ?? []) as Array<{ opr_code: string | null }>) {
+      for (const row of data) {
         const code = (row.opr_code || "").trim() || "Unassigned";
         counts.set(code, (counts.get(code) ?? 0) + 1);
       }

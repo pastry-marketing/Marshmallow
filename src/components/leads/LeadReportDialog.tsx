@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { fetchAllRows } from "@/lib/supabase-paginate";
 import {
   Dialog,
   DialogContent,
@@ -117,25 +118,24 @@ export default function LeadReportDialog({ open, onOpenChange }: LeadReportDialo
         start.setHours(0, 0, 0, 0);
       }
 
-      let query = supabase
-        .from("leads")
-        .select("id, created_at, created_by, reference_name, job_id, customer_name, customer_phone, status")
-        .gte("created_at", start.toISOString());
-
-      if (end) {
-        query = query.lte("created_at", end.toISOString());
-      }
-
-      // If user is CS, Supabase RLS will automatically restrict results,
-      // but let's query explicitly just to be clean
-      if (isCS && user) {
-        query = query.eq("created_by", user.id);
-      }
-
-      const { data, error } = await query.order("created_at", { ascending: false });
-
-      if (error) throw error;
-      setRawLeads(data ?? []);
+      // Page through the whole date range so the report/export isn't capped at
+      // PostgREST's 1000-row limit.
+      const data = await fetchAllRows<Record<string, unknown>>((from, to) => {
+        let query = supabase
+          .from("leads")
+          .select("id, created_at, created_by, reference_name, job_id, customer_name, customer_phone, status")
+          .gte("created_at", start.toISOString());
+        if (end) {
+          query = query.lte("created_at", end.toISOString());
+        }
+        // If user is CS, Supabase RLS will automatically restrict results,
+        // but let's query explicitly just to be clean
+        if (isCS && user) {
+          query = query.eq("created_by", user.id);
+        }
+        return query.order("created_at", { ascending: false }).order("id", { ascending: false }).range(from, to);
+      });
+      setRawLeads(data);
     } catch (error: any) {
       toast.error(error.message || "Failed to load report data.");
     } finally {
