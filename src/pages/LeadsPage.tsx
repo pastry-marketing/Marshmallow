@@ -36,6 +36,7 @@ import LeadReportDialog from "@/components/leads/LeadReportDialog";
 import ExportLeadsDialog, { ExportOptions } from "@/components/leads/ExportLeadsDialog";
 import InstallExtensionDialog from "@/components/leads/InstallExtensionDialog";
 import { toast } from "sonner";
+import { isOperatorRole } from "@/lib/access";
 
 
 import { motion } from "framer-motion";
@@ -121,7 +122,7 @@ export default function LeadsPage() {
   const safeStatusFilter =
     rawStatusFilter === "all" ||
     allowedStatuses.has(rawStatusFilter) ||
-    (role === "opr" && leads.some((l) => Boolean(l.cs_tag) && l.status === rawStatusFilter))
+    (isOperatorRole(role) && leads.some((l) => Boolean(l.cs_tag) && l.status === rawStatusFilter))
       ? rawStatusFilter
       : "all";
 
@@ -266,7 +267,7 @@ export default function LeadsPage() {
           if (payload.eventType === "INSERT" && newRow) {
             // Only add if this user should see the lead
             const shouldSee =
-              role === "admin" || role === "processor" || role === "cs_admin" ||
+              role === "admin" || role === "processor" || role === "cs_admin" || isOperatorRole(role) ||
               (role === "customer_service" && newRow.created_by === user.id);
             if (shouldSee) {
               setLeads((prev) => [newRow, ...prev]);
@@ -951,7 +952,7 @@ export default function LeadsPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Statuses</SelectItem>
-                {ALL_LEAD_STATUSES.filter((s) => allowedStatuses.has(s) || (role === "opr" && leads.some((l) => Boolean(l.cs_tag) && l.status === s))).map((s) => (
+                {ALL_LEAD_STATUSES.filter((s) => allowedStatuses.has(s) || (isOperatorRole(role) && leads.some((l) => Boolean(l.cs_tag) && l.status === s))).map((s) => (
                   <SelectItem key={s} value={s}>
                     <span className="flex items-center gap-2">
                       <span className={`h-1.5 w-1.5 rounded-full ${STATUS_DOT_COLORS[s]}`} />
