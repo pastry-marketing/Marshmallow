@@ -161,20 +161,43 @@ export default function LeadsPage() {
 
     if (!isBackground) setLoading(true);
 
-    let query = supabase.from("leads").select("*").order("created_at", { ascending: false });
+    // PostgREST caps a single response at 1000 rows, so page through the whole
+    // table — otherwise the status tabs/counts only reflect the newest 1000
+    // leads and undercount older ones (e.g. older "paid" leads went missing).
+    const PAGE = 1000;
+    const MAX_PAGES = 200; // safety cap: 200k leads
+    const all: Lead[] = [];
+    let error: { message: string } | null = null;
 
-    // CS can see only own created leads
-    if (role === "customer_service") {
-      query = query.eq("created_by", user.id);
+    for (let page = 0; page < MAX_PAGES; page += 1) {
+      const from = page * PAGE;
+      let query = supabase
+        .from("leads")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: false })
+        .range(from, from + PAGE - 1);
+
+      // CS can see only own created leads
+      if (role === "customer_service") {
+        query = query.eq("created_by", user.id);
+      }
+
+      const { data, error: pageError } = await query;
+      if (pageError) {
+        error = pageError;
+        break;
+      }
+      const rows = (data ?? []) as Lead[];
+      all.push(...rows);
+      if (rows.length < PAGE) break;
     }
-
-    const { data, error } = await query;
 
     if (error) {
       toast.error(error.message);
       setLeads([]);
     } else {
-      setLeads((data ?? []) as Lead[]);
+      setLeads(all);
     }
 
     if (!isBackground) setLoading(false);

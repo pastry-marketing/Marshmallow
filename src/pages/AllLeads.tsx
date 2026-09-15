@@ -37,18 +37,32 @@ const AllLeads = () => {
   } = useQuery({
     queryKey: ["leads", role, user?.id],
     queryFn: async () => {
-      let query = supabase.from("leads").select("*");
+      // PostgREST caps a response at 1000 rows, so page through the whole table
+      // — otherwise "All Leads" and its status counts silently drop older leads.
+      const PAGE = 1000;
+      const MAX_PAGES = 200;
+      const all: Lead[] = [];
+      for (let page = 0; page < MAX_PAGES; page += 1) {
+        const from = page * PAGE;
+        let query = supabase
+          .from("leads")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .order("id", { ascending: false })
+          .range(from, from + PAGE - 1);
 
-      // CS can only see only his own created leads
-      if (role === "customer_service") {
-        query = query.eq("created_by", user!.id);
+        // CS can only see their own created leads
+        if (role === "customer_service") {
+          query = query.eq("created_by", user!.id);
+        }
+
+        const { data, error } = await query;
+        if (error) throw error;
+        const rows = (data ?? []) as Lead[];
+        all.push(...rows);
+        if (rows.length < PAGE) break;
       }
-
-      // Processor/Admin can see all leads
-      const { data, error } = await query.order("created_at", { ascending: false });
-
-      if (error) throw error;
-      return (data ?? []) as Lead[];
+      return all;
     },
     enabled: !!user,
     refetchInterval: 15000, // Fallback polling every 15 seconds
