@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { fetchAllRows } from "@/lib/supabase-paginate";
 import { useAuth } from "@/contexts/AuthContext";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
@@ -37,32 +38,21 @@ const AllLeads = () => {
   } = useQuery({
     queryKey: ["leads", role, user?.id],
     queryFn: async () => {
-      // PostgREST caps a response at 1000 rows, so page through the whole table
-      // — otherwise "All Leads" and its status counts silently drop older leads.
-      const PAGE = 1000;
-      const MAX_PAGES = 200;
-      const all: Lead[] = [];
-      for (let page = 0; page < MAX_PAGES; page += 1) {
-        const from = page * PAGE;
+      // Page through the whole table so "All Leads" and its status counts don't
+      // silently drop older leads past PostgREST's 1000-row response cap.
+      return fetchAllRows<Lead>((from, to) => {
         let query = supabase
           .from("leads")
           .select("*")
           .order("created_at", { ascending: false })
           .order("id", { ascending: false })
-          .range(from, from + PAGE - 1);
-
+          .range(from, to);
         // CS can only see their own created leads
         if (role === "customer_service") {
           query = query.eq("created_by", user!.id);
         }
-
-        const { data, error } = await query;
-        if (error) throw error;
-        const rows = (data ?? []) as Lead[];
-        all.push(...rows);
-        if (rows.length < PAGE) break;
-      }
-      return all;
+        return query;
+      });
     },
     enabled: !!user,
     refetchInterval: 15000, // Fallback polling every 15 seconds

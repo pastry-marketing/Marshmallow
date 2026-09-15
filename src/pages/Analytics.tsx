@@ -8,6 +8,7 @@ import {
 import { preloadZipDataset } from "@/lib/zipCentroids";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { fetchAllRows } from "@/lib/supabase-paginate";
 import { Card, CardContent } from "@/components/ui/card";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { format, subDays, eachDayOfInterval, parseISO, startOfDay } from "date-fns";
@@ -44,25 +45,16 @@ const Analytics = () => {
   const { data: allLeads = [] } = useQuery<AnalyticsLeadRow[]>({
     queryKey: ["analytics-total-operational"],
     queryFn: async () => {
-      // PostgREST caps a response at 1000 rows; page through so analytics counts
-      // reflect every lead, not just the newest 1000.
-      const PAGE = 1000;
-      const MAX_PAGES = 200;
-      const all: AnalyticsLeadRow[] = [];
-      for (let page = 0; page < MAX_PAGES; page += 1) {
-        const from = page * PAGE;
-        const { data, error } = await supabase
+      // Page through so analytics counts reflect every lead, not just the
+      // newest 1000 (PostgREST's default single-response cap).
+      return fetchAllRows<AnalyticsLeadRow>((from, to) =>
+        supabase
           .from("leads")
           .select("id, status, created_at, service_type, number_name, assigned_cs, created_by")
           .order("created_at", { ascending: false })
           .order("id", { ascending: false })
-          .range(from, from + PAGE - 1);
-        if (error) throw error;
-        const rows = (data ?? []) as AnalyticsLeadRow[];
-        all.push(...rows);
-        if (rows.length < PAGE) break;
-      }
-      return all;
+          .range(from, to),
+      );
     },
   });
 

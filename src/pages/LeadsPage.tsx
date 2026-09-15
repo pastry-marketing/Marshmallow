@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { fetchAllRows } from "@/lib/supabase-paginate";
 import * as XLSX from "xlsx";
 import { useDeferredValue } from "react";
 import { useCallback } from "react";
@@ -161,43 +162,26 @@ export default function LeadsPage() {
 
     if (!isBackground) setLoading(true);
 
-    // PostgREST caps a single response at 1000 rows, so page through the whole
-    // table — otherwise the status tabs/counts only reflect the newest 1000
-    // leads and undercount older ones (e.g. older "paid" leads went missing).
-    const PAGE = 1000;
-    const MAX_PAGES = 200; // safety cap: 200k leads
-    const all: Lead[] = [];
-    let error: { message: string } | null = null;
-
-    for (let page = 0; page < MAX_PAGES; page += 1) {
-      const from = page * PAGE;
-      let query = supabase
-        .from("leads")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .order("id", { ascending: false })
-        .range(from, from + PAGE - 1);
-
-      // CS can see only own created leads
-      if (role === "customer_service") {
-        query = query.eq("created_by", user.id);
-      }
-
-      const { data, error: pageError } = await query;
-      if (pageError) {
-        error = pageError;
-        break;
-      }
-      const rows = (data ?? []) as Lead[];
-      all.push(...rows);
-      if (rows.length < PAGE) break;
-    }
-
-    if (error) {
-      toast.error(error.message);
-      setLeads([]);
-    } else {
+    try {
+      // Page through the whole table so status tabs/counts reflect every lead,
+      // not just the newest 1000 (PostgREST's default single-response cap).
+      const all = await fetchAllRows<Lead>((from, to) => {
+        let query = supabase
+          .from("leads")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .order("id", { ascending: false })
+          .range(from, to);
+        // CS can see only own created leads
+        if (role === "customer_service") {
+          query = query.eq("created_by", user.id);
+        }
+        return query;
+      });
       setLeads(all);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to load leads");
+      setLeads([]);
     }
 
     if (!isBackground) setLoading(false);
