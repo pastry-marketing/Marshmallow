@@ -66,11 +66,12 @@ const roleColors: Record<AppRole, string> = {
   customer_service: "bg-[hsl(var(--warning)/0.08)] text-[hsl(var(--warning))] border-[hsl(var(--warning)/0.1)]",
   opr: "bg-[hsl(var(--destructive)/0.08)] text-[hsl(var(--destructive))] border-[hsl(var(--destructive)/0.12)]",
   cs_admin: "bg-primary/10 text-primary border-primary/20",
+  opr_admin: "bg-[hsl(var(--destructive)/0.12)] text-[hsl(var(--destructive))] border-[hsl(var(--destructive)/0.2)]",
 };
 
 const DEFAULT_ROLE_COLOR = "bg-muted/70 text-muted-foreground border-border/60";
 
-const VALID_ROLES: AppRole[] = ["admin", "processor", "customer_service", "opr", "cs_admin"];
+const VALID_ROLES: AppRole[] = ["admin", "processor", "customer_service", "opr", "cs_admin", "opr_admin"];
 
 const formatRoleLabel = (role?: string | null) => {
   if (!role) return "";
@@ -84,6 +85,8 @@ interface SettingsUser {
   role: AppRole;
   is_quotation_master: boolean | null;
   can_manage_users: boolean | null;
+  opr_code: string | null;
+  can_view_tech_report: boolean | null;
 }
 
 interface AccessCodeRow {
@@ -155,7 +158,7 @@ function TemplateEditor({
   );
 }
 
-const MANAGED_ROLES: AppRole[] = ["customer_service", "processor", "opr", "cs_admin"];
+const MANAGED_ROLES: AppRole[] = ["customer_service", "processor", "opr", "cs_admin", "opr_admin"];
 
 const Settings = () => {
   const { user, role: currentRole } = useAuth();
@@ -180,7 +183,7 @@ const Settings = () => {
   const { data: users = [] } = useQuery<SettingsUser[]>({
     queryKey: ["settings-users"],
     queryFn: async () => {
-      const { data: profiles } = (await supabase.from("profiles").select("id, email, full_name, is_quotation_master, can_manage_users" as never)) as unknown as {
+      const { data: profiles } = (await supabase.from("profiles").select("id, email, full_name, is_quotation_master, can_manage_users, opr_code, can_view_tech_report" as never)) as unknown as {
         data:
           | {
               id: string;
@@ -188,6 +191,8 @@ const Settings = () => {
               full_name: string | null;
               is_quotation_master: boolean | null;
               can_manage_users: boolean | null;
+              opr_code: string | null;
+              can_view_tech_report: boolean | null;
             }[]
           | null;
       };
@@ -208,6 +213,8 @@ const Settings = () => {
             role: assignedRole,
             is_quotation_master: profile.is_quotation_master,
             can_manage_users: profile.can_manage_users,
+            opr_code: profile.opr_code,
+            can_view_tech_report: profile.can_view_tech_report,
           } as SettingsUser;
         })
         .filter((entry): entry is SettingsUser => entry !== null);
@@ -431,6 +438,12 @@ const Settings = () => {
         await supabase.from("user_roles").insert({ user_id: userId, role });
       }
 
+      // Operators and OPR admins each get a permanent, unique OPR code. The RPC
+      // is a no-op if they already have one.
+      if (role === "opr" || role === "opr_admin") {
+        await supabase.rpc("assign_next_opr_code" as never, { _user_id: userId } as never);
+      }
+
       if (user) {
         await logActivity(user.id, "updated", "user", userId, {
           target_name: existingUser?.full_name || existingUser?.email || userId,
@@ -559,6 +572,16 @@ const Settings = () => {
     try {
       const code = newRole !== "admin" ? generateCode() : undefined;
       const result = await adminApi.createUser(newEmail, newPassword, newName, newRole, code);
+      const createdId = result?.user?.id || result?.id || null;
+
+      // Auto-assign an OPR code to a newly created operator / OPR admin.
+      if (createdId && (newRole === "opr" || newRole === "opr_admin")) {
+        try {
+          await supabase.rpc("assign_next_opr_code" as never, { _user_id: createdId } as never);
+        } catch (err) {
+          console.warn("Failed to assign OPR code to new user", err);
+        }
+      }
 
       if (user) {
         const createdUserId = result?.user?.id || result?.id || newEmail;
@@ -665,6 +688,21 @@ const Settings = () => {
       toast.success(`CS Admin settings access `);
     },
     onError: (error) => toast.error(`Failed to update CS Admin access: ${error.message}`),
+  });
+
+  const toggleCanViewTechReport = useMutation({
+    mutationFn: async ({ userId, canView }: { userId: string; canView: boolean }) => {
+      const { error } = await supabase.from("profiles").update({ can_view_tech_report: canView } as never).eq("id", userId);
+      if (error) throw error;
+      return { userId, canView };
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(["settings-users"], (old: SettingsUser[] | undefined) =>
+        old ? old.map((u) => (u.id === data.userId ? { ...u, can_view_tech_report: data.canView } : u)) : [],
+      );
+      toast.success(`Technician report access ${data.canView ? "granted" : "revoked"}`);
+    },
+    onError: (error) => toast.error(`Failed to update report access: ${error.message}`),
   });
 
   const handleDeleteUser = async (userId: string) => {
@@ -914,8 +952,26 @@ const Settings = () => {
                         <SelectItem value="customer_service">Customer Service</SelectItem>
                         <SelectItem value="cs_admin">CS Admin</SelectItem>
                         <SelectItem value="opr">OPR (Operator)</SelectItem>
+                        <SelectItem value="opr_admin">OPR Admin</SelectItem>
                       </SelectContent>
                     </Select>}
+
+                    {(u.role === "opr" || u.role === "opr_admin") && u.opr_code && (
+                      <span className="inline-flex items-center gap-1 rounded-2xl border border-border/60 bg-background/70 px-3 py-2 text-[12px] font-semibold">
+                        <span className="text-muted-foreground">OPR Code</span>
+                        <code className="rounded-md border border-border/40 bg-muted/60 px-2 py-0.5 font-mono tracking-wider text-foreground">{u.opr_code}</code>
+                      </span>
+                    )}
+
+                    {isAdmin && u.role !== "admin" && (
+                      <div className="flex items-center gap-2 rounded-2xl border border-border/60 bg-background/70 px-3 py-2">
+                        <Switch
+                          checked={u.can_view_tech_report || false}
+                          onCheckedChange={(checked) => toggleCanViewTechReport.mutate({ userId: u.id, canView: checked })}
+                        />
+                        <span className="text-[12px] font-medium leading-none">Tech Report Access</span>
+                      </div>
+                    )}
 
                     {isAdmin && <div className="flex items-center gap-2 rounded-2xl border border-border/60 bg-background/70 px-3 py-2">
                       <Switch 
@@ -1405,6 +1461,7 @@ const Settings = () => {
                   <SelectItem value="customer_service">Customer Service</SelectItem>
                   <SelectItem value="cs_admin">CS Admin</SelectItem>
                   <SelectItem value="opr">OPR (Operator)</SelectItem>
+                  <SelectItem value="opr_admin">OPR Admin</SelectItem>
                 </SelectContent>
               </Select>
             </div>

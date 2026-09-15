@@ -705,7 +705,7 @@ export default function LeadsPage() {
           transition={{ delay: 0.15, duration: 0.35 }}
           className="flex items-center gap-2 flex-wrap"
         >
-          {(isAdmin || role === "cs_admin") && (
+          {isAdmin && (
             <Button
               variant="outline"
               size="sm"

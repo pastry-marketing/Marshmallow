@@ -7,10 +7,53 @@ const DEFAULT_NAV_ACCESS: Record<AppRole, Set<NavItem>> = {
   customer_service: new Set(["leads", "schedule"]),
   opr: new Set(["leads"]),
   cs_admin: new Set(["leads", "schedule"]),
+  // opr_admin mirrors opr's default access; the Technicians tab is granted per
+  // user via navigation permissions, and unlocks add/import for this role.
+  opr_admin: new Set(["leads"]),
 };
+
+/** Roles that may add a technician when they have the Technicians tab. */
+export function canAddTechnicians(role: AppRole | null | undefined): boolean {
+  return role === "admin" || role === "processor" || role === "opr" || role === "opr_admin";
+}
+
+/** Roles that may bulk-import technicians (regular opr cannot). */
+export function canImportTechnicians(role: AppRole | null | undefined): boolean {
+  return role === "admin" || role === "processor" || role === "opr_admin";
+}
+
+/** Only admins may export data anywhere in the app. */
+export function canExportData(role: AppRole | null | undefined): boolean {
+  return role === "admin";
+}
+
+/** opr_admin must pick an OPR code; a regular opr is locked to their own. */
+export function mustChooseOprCode(role: AppRole | null | undefined): boolean {
+  return role === "admin" || role === "opr_admin";
+}
+
+/**
+ * How the Technicians list is scoped for a role:
+ * - "all": admin / processor see every technician
+ * - "coded": opr_admin sees any technician with an OPR code (legacy ones hidden)
+ * - "own": opr sees only technicians with their own OPR code
+ */
+export function technicianVisibility(role: AppRole | null | undefined): "all" | "coded" | "own" {
+  if (role === "opr") return "own";
+  if (role === "opr_admin") return "coded";
+  return "all";
+}
 
 export const canAccessCancellationRequests = (role: AppRole | null | undefined) =>
   role === "admin" || role === "processor";
+
+/**
+ * opr_admin has the same access as a regular opr (read-only leads, urgent-only,
+ * etc.), so lead-side restrictions treat both the same.
+ */
+export function isOperatorRole(role: AppRole | null | undefined): boolean {
+  return role === "opr" || role === "opr_admin";
+}
 
 export function getDefaultNavAccess(role: AppRole): Set<NavItem> {
   return new Set(DEFAULT_NAV_ACCESS[role]);
@@ -69,7 +112,7 @@ export function getDefaultVisibleStatuses(role: AppRole | null | undefined): Set
   
   const baseExclude = ["scammed", "quote_change", ...ADMIN_ONLY_STATUSES];
   
-  if (role === "opr") {
+  if (role === "opr" || role === "opr_admin") {
     return new Set<LeadStatus>(["urgent_job"]);
   }
   if (role === "processor") {

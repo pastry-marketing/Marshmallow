@@ -82,7 +82,7 @@ import { getAssignableLeadTags, isQuotationMaster } from "@/lib/lead-tags";
 import { countTechs, formatTechCount } from "@/lib/lead-techs";
 import { dispatchLeadStatusNotification } from "@/lib/lead-notifications";
 import { saveLeadTag } from "@/lib/lead-tag-actions";
-import { canSeeTechDetails } from "@/lib/access";
+import { canSeeTechDetails, isOperatorRole } from "@/lib/access";
 import BookingDateTimeDialog, { formatBookingCompact, isBookingExpired } from "./BookingDateTimeDialog";
 import AssignLeadToOperatorDialog from "./AssignLeadToOperatorDialog";
 import ActivateCustomerNoteDialog from "./ActivateCustomerNoteDialog";
@@ -867,7 +867,7 @@ function LeadCard({
   const isCS = role === "customer_service";
   const isCsAdmin = role === "cs_admin";
   const isProcessor = role === "processor";
-  const isOpr = role === "opr";
+  const isOpr = isOperatorRole(role);
   const isPaid = lead.status === "paid";
   const isUrgent = lead.status === "urgent_job";
   const canCompleteCopy = isAdmin || isProcessor || isOpr;

@@ -14,6 +14,7 @@ const TAGS_BY_ROLE: Record<AppRole, CsTag[]> = {
   processor: ["ready_to_schedule", "waiting_schedule_confirmation", "incomplete_details"],
   opr: [],
   cs_admin: [...SCHEDULE_TAGS],
+  opr_admin: [],
 };
 
 /**

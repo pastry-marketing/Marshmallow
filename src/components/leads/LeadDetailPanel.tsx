@@ -44,12 +44,13 @@ import NumberNameCombobox from "./NumberNameCombobox";
 import QuoPhoneTrigger from "./QuoPhoneTrigger";
 import MultiDateTimePicker from "./MultiDateTimePicker";
 import AssignLeadToOperatorDialog from "./AssignLeadToOperatorDialog";
-import { LEAD_STATUS_CONFIG, type Lead, type LeadStatus, type LeadCancellationRequest } from "@/types";
+import { LEAD_STATUS_CONFIG, type Lead, type LeadStatus, type LeadCancellationRequest, type AppRole } from "@/types";
 import { toast } from "sonner";
 import { useDuplicatePhoneCheck } from "@/hooks/useDuplicatePhoneCheck";
 import { motion } from "framer-motion";
 import { logActivity } from "@/lib/activity";
 import { getChangeableStatuses, canChangeStatus } from "@/lib/constants";
+import { isOperatorRole } from "@/lib/access";
 import { optimizeImageForUpload } from "@/lib/image-upload";
 import {
   canCreateCancellationRequest,
@@ -127,7 +128,7 @@ const StatusDropdownFiltered = ({
   role?: string | null;
 }) => {
   const changeable = getChangeableStatuses(role);
-  const isOpr = role === "opr";
+  const isOpr = isOperatorRole(role as AppRole | null | undefined);
 
   return (
     <Select value={value} onValueChange={onChange} disabled={isOpr}>
@@ -625,7 +626,7 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
 
   const isCS = role === "customer_service";
   const isProcessor = role === "processor";
-  const isOpr = role === "opr";
+  const isOpr = isOperatorRole(role);
   const isAdmin = role === "admin";
   const isCsAdmin = role === "cs_admin";
   const hasQuickChatAccess = canAccess("quick_chat");

@@ -7,7 +7,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
 import { geocodeAddress, geocodeWithFallback, normalizeAddress } from "@/lib/geo";
 import { isLikelyPhone } from "@/lib/phone";
-import { Loader2, FileSpreadsheet, Download, MapPin } from "lucide-react";
+import { Loader2, FileSpreadsheet, Download, MapPin, Copy } from "lucide-react";
 
 interface Props {
   open: boolean;
@@ -19,6 +19,7 @@ interface Row {
   rowNumber: number;
   name: string;
   code?: string;
+  opr_code?: string;
   phone_number: string;
   phoneInvalid: boolean;
   area: string;
@@ -79,6 +80,10 @@ const SERVICE_ALIASES = new Set(["service", "services", "trade", "specialty"].ma
 const CHAT_ALIASES = new Set(["quo chat link", "chat link", "chat", "link"].map(normalizeHeader));
 const NOTES_ALIASES = new Set(["notes", "note", "comments", "remarks"].map(normalizeHeader));
 const CODE_ALIASES = new Set(["name code", "code", "technician code", "tech code"].map(normalizeHeader));
+const OPR_ALIASES = new Set(["opr code", "opr", "operator code", "operator"].map(normalizeHeader));
+
+// The columns the import understands, shown in the copyable header / template.
+const TEMPLATE_HEADERS = ["Name", "OPR Code", "Phone Number", "Service", "Area", "Quo Chat Link", "Notes"] as const;
 
 function parseCsv(text: string): Record<string, string>[] {
   const rows: string[][] = [];
@@ -201,6 +206,7 @@ export function ImportTechniciansDialog({ open, onOpenChange, onImported }: Prop
         rowNumber: idx + 2,
         name: pickHeaderValue(r, NAME_ALIASES).trim(),
         code: pickHeaderValue(r, CODE_ALIASES).trim() || undefined,
+        opr_code: pickHeaderValue(r, OPR_ALIASES).trim() || undefined,
         phone_number: phone,
         phoneInvalid: phone.length > 0 && !isLikelyPhone(phone),
         service: pickHeaderValue(r, SERVICE_ALIASES).trim(),
@@ -234,6 +240,7 @@ export function ImportTechniciansDialog({ open, onOpenChange, onImported }: Prop
         payload: {
           name: string;
           code: string | null;
+          opr_code: string | null;
           area: string;
           phone_number: string | null;
           service: string | null;
@@ -247,7 +254,7 @@ export function ImportTechniciansDialog({ open, onOpenChange, onImported }: Prop
       const toInsert: InsertPayload[] = [];
 
       for (const r of rows) {
-        if (!r.name && !r.area && !r.service && !r.chat_link && !r.notes && !r.phone_number && !r.code) {
+        if (!r.name && !r.area && !r.service && !r.chat_link && !r.notes && !r.phone_number && !r.code && !r.opr_code) {
           failures.push({ rowNumber: r.rowNumber, name: r.name, area: r.area, reason: "Row is empty" });
           continue;
         }
@@ -268,6 +275,7 @@ export function ImportTechniciansDialog({ open, onOpenChange, onImported }: Prop
           payload: {
             name: r.name,
             code: r.code ? r.code.trim() : null,
+            opr_code: r.opr_code ? r.opr_code.trim() : null,
             area: r.area,
             phone_number: validPhone,
             service: r.service || null,
@@ -405,17 +413,60 @@ export function ImportTechniciansDialog({ open, onOpenChange, onImported }: Prop
     setTimeout(() => URL.revokeObjectURL(url), 500);
   };
 
+  const copyTemplateHeaders = async () => {
+    const header = TEMPLATE_HEADERS.join("\t");
+    try {
+      await navigator.clipboard.writeText(header);
+      toast({ title: "Header row copied", description: "Paste it into row 1 of your sheet." });
+    } catch {
+      toast({ title: "Copy failed", description: header, variant: "destructive" });
+    }
+  };
+
+  const downloadTemplate = () => {
+    const ws = XLSX.utils.aoa_to_sheet([
+      [...TEMPLATE_HEADERS],
+      ["John Smith", "OPR001", "(305) 555-0123", "Plumbing", "Miami, FL", "", ""],
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Technicians");
+    const buf = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+    const blob = new Blob([buf], { type: "application/octet-stream" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "technicians-import-template.xlsx";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <Dialog open={open} onOpenChange={(v) => { onOpenChange(v); if (!v) reset(); }}>
       <DialogContent className="sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>Import Technicians</DialogTitle>
           <DialogDescription>
-            Upload a .csv or .xlsx with any of these columns: Technician Name, Phone Number, Service, Area, Quo Chat Link, Notes. All fields are optional.
+            Upload a .csv or .xlsx. Recognized columns: Name, OPR Code, Phone Number, Service, Area, Quo Chat Link, Notes.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3 py-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-dashed border-border/70 bg-muted/30 px-3 py-2">
+            <div className="min-w-0 text-xs text-muted-foreground">
+              <span className="font-medium text-foreground">Expected headers: </span>
+              <code className="break-words">{TEMPLATE_HEADERS.join(", ")}</code>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={copyTemplateHeaders}>
+                <Copy className="mr-1.5 h-3.5 w-3.5" /> Copy header
+              </Button>
+              <Button type="button" variant="outline" size="sm" onClick={downloadTemplate}>
+                <Download className="mr-1.5 h-3.5 w-3.5" /> Template
+              </Button>
+            </div>
+          </div>
           <div className="flex items-center gap-2">
             <Input
               type="file"

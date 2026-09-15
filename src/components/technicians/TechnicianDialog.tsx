@@ -12,7 +12,9 @@ import { formatUSPhone, stripPhone } from "@/lib/phone";
 import { lookupZipCentroid, resolveZip } from "@/lib/zipCentroids";
 import { TECHNICIANS_QUERY_KEY, upsertTechnicianInList } from "@/lib/technicians";
 import { useQueryClient } from "@tanstack/react-query";
-import { Loader2, Sparkles } from "lucide-react";
+import { Loader2 } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
+import { mustChooseOprCode } from "@/lib/access";
 
 export interface TechnicianRecord {
   id: string;
@@ -25,6 +27,8 @@ export interface TechnicianRecord {
   latitude: number | null;
   longitude: number | null;
   code?: string | null;
+  opr_code?: string | null;
+  created_at?: string | null;
 }
 
 interface Props {
@@ -34,16 +38,17 @@ interface Props {
   onSaved?: (saved: TechnicianRecord) => void;
 }
 
-export function formatTechCode(num: number): string {
-  return `TECH ${String(num).padStart(3, "0")}`;
+interface OprCodeOption {
+  opr_code: string;
+  full_name: string | null;
 }
 
 export function TechnicianDialog({ open, onOpenChange, technician, onSaved }: Props) {
   const queryClient = useQueryClient();
+  const { role, profile } = useAuth();
   const [name, setName] = useState("");
-  const [code, setCode] = useState("");
-  const [existingCodes, setExistingCodes] = useState<Array<{ code: string; count: number }>>([]);
-  const [generatingCode, setGeneratingCode] = useState(false);
+  const [oprCode, setOprCode] = useState("");
+  const [oprCodeOptions, setOprCodeOptions] = useState<OprCodeOption[]>([]);
   const [phone, setPhone] = useState("");
   const [phoneError, setPhoneError] = useState<string | null>(null);
   const [area, setArea] = useState("");
@@ -52,10 +57,15 @@ export function TechnicianDialog({ open, onOpenChange, technician, onSaved }: Pr
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
 
+  // A regular opr is locked to their own code; opr_admin / admin pick one.
+  const myOprCode = profile?.opr_code ?? "";
+  const canChooseOprCode = mustChooseOprCode(role);
+
   useEffect(() => {
     if (open) {
       setName(technician?.name ?? "");
-      setCode(technician?.code ?? "");
+      // Existing tech keeps its code; a new one defaults to the opr's own code.
+      setOprCode(technician?.opr_code ?? (canChooseOprCode ? "" : myOprCode));
       setPhone(formatUSPhone(technician?.phone_number ?? ""));
       setPhoneError(null);
       setArea(technician?.area ?? "");
@@ -63,71 +73,15 @@ export function TechnicianDialog({ open, onOpenChange, technician, onSaved }: Pr
       setChatLink(technician?.chat_link ?? "");
       setNotes(technician?.notes ?? "");
 
-      // Load existing codes with technician counts for the dropdown
-      supabase
-        .from("technicians")
-        .select("code")
-        .not("code", "is", null)
-        .then(({ data, error }) => {
-          if (error || !data) return;
-          const counts: Record<string, number> = {};
-          for (const row of data) {
-            const c = (row.code || "").trim();
-            if (c) counts[c] = (counts[c] || 0) + 1;
-          }
-          const list = Object.entries(counts).map(([codeKey, count]) => ({ code: codeKey, count }));
-          list.sort((a, b) => {
-            const ma = a.code.match(/tech\s*(\d+)/i);
-            const mb = b.code.match(/tech\s*(\d+)/i);
-            if (ma && mb) return parseInt(ma[1], 10) - parseInt(mb[1], 10);
-            return a.code.localeCompare(b.code);
-          });
-          setExistingCodes(list);
+      // Load the list of OPR codes for the picker (admins / opr_admins choose).
+      if (canChooseOprCode) {
+        supabase.rpc("list_opr_codes" as never).then(({ data }) => {
+          const rows = (data ?? []) as OprCodeOption[];
+          setOprCodeOptions(rows);
         });
-    }
-  }, [open, technician]);
-
-  const handleGenerateNextCode = async () => {
-    setGeneratingCode(true);
-    try {
-      let maxNum = 0;
-      const { data } = await supabase.from("technicians").select("code").not("code", "is", null);
-      for (const row of data || []) {
-        const c = (row.code || "").trim();
-        if (c) {
-          const m = c.match(/tech\s*(\d+)/i);
-          if (m) {
-            const val = parseInt(m[1], 10);
-            if (val > maxNum) maxNum = val;
-          }
-        }
       }
-      for (const item of existingCodes) {
-        const m = item.code.match(/tech\s*(\d+)/i);
-        if (m) {
-          const val = parseInt(m[1], 10);
-          if (val > maxNum) maxNum = val;
-        }
-      }
-      const nextNum = maxNum + 1;
-      const nextCode = formatTechCode(nextNum);
-      setCode(nextCode);
-      setExistingCodes((prev) => {
-        if (prev.some((x) => x.code.toLowerCase() === nextCode.toLowerCase())) return prev;
-        return [...prev, { code: nextCode, count: 0 }].sort((a, b) => {
-          const ma = a.code.match(/tech\s*(\d+)/i);
-          const mb = b.code.match(/tech\s*(\d+)/i);
-          if (ma && mb) return parseInt(ma[1], 10) - parseInt(mb[1], 10);
-          return a.code.localeCompare(b.code);
-        });
-      });
-      toast({ title: "Name Code generated", description: `Assigned ${nextCode} to this technician.` });
-    } catch (e) {
-      toast({ title: "Generation failed", description: (e as Error).message, variant: "destructive" });
-    } finally {
-      setGeneratingCode(false);
     }
-  };
+  }, [open, technician, canChooseOprCode, myOprCode]);
 
   const handleSubmit = async () => {
     const cleanName = name.trim();
@@ -157,6 +111,18 @@ export function TechnicianDialog({ open, onOpenChange, technician, onSaved }: Pr
       toast({ title: "Area is required", variant: "destructive" });
       return;
     }
+
+    // OPR code: a regular opr is locked to their own; opr_admin must choose one.
+    const cleanOprCode = (canChooseOprCode ? oprCode : myOprCode).trim();
+    if (role === "opr" && !cleanOprCode) {
+      toast({ title: "No OPR code is assigned to your account", description: "Ask an admin to assign one.", variant: "destructive" });
+      return;
+    }
+    if (role === "opr_admin" && !cleanOprCode) {
+      toast({ title: "OPR Code is required", description: "Choose which OPR this technician belongs to.", variant: "destructive" });
+      return;
+    }
+
     setPhoneError(null);
     setSaving(true);
     try {
@@ -186,30 +152,21 @@ export function TechnicianDialog({ open, onOpenChange, technician, onSaved }: Pr
         service: cleanService,
         chat_link: chatLink.trim() || null,
         notes: notes.trim() || null,
-        code: code.trim() || null,
+        opr_code: cleanOprCode || null,
         latitude,
         longitude,
       };
 
-      const SELECT = "id, name, area, service, notes, chat_link, phone_number, latitude, longitude, code";
-      const SELECT_FALLBACK = "id, name, area, service, notes, chat_link, phone_number, latitude, longitude";
+      const SELECT = "id, name, area, service, notes, chat_link, phone_number, latitude, longitude, opr_code, created_at";
       let saved: TechnicianRecord | null = null;
       let error: { message: string } | null = null;
       if (technician) {
-        let res = await supabase.from("technicians").update(payload).eq("id", technician.id).select(SELECT).single();
-        if (res.error && (res.error.message?.includes("code") || (res.error as any).code === "42703")) {
-          const { code: _, ...withoutCode } = payload;
-          res = await supabase.from("technicians").update(withoutCode).eq("id", technician.id).select(SELECT_FALLBACK).single();
-        }
+        const res = await supabase.from("technicians").update(payload as never).eq("id", technician.id).select(SELECT).single();
         error = res.error;
         saved = (res.data as TechnicianRecord | null) ?? null;
       } else {
         const { data: { user } } = await supabase.auth.getUser();
-        let res = await supabase.from("technicians").insert({ ...payload, created_by: user?.id ?? null }).select(SELECT).single();
-        if (res.error && (res.error.message?.includes("code") || (res.error as any).code === "42703")) {
-          const { code: _, ...withoutCode } = payload;
-          res = await supabase.from("technicians").insert({ ...withoutCode, created_by: user?.id ?? null }).select(SELECT_FALLBACK).single();
-        }
+        const res = await supabase.from("technicians").insert({ ...payload, created_by: user?.id ?? null } as never).select(SELECT).single();
         error = res.error;
         saved = (res.data as TechnicianRecord | null) ?? null;
       }
@@ -227,7 +184,7 @@ export function TechnicianDialog({ open, onOpenChange, technician, onSaved }: Pr
         });
         if (!technician) {
           setPhone("");
-          setCode("");
+          setOprCode(canChooseOprCode ? "" : myOprCode);
         }
         onSaved?.(saved);
         onOpenChange(false);
@@ -250,67 +207,38 @@ export function TechnicianDialog({ open, onOpenChange, technician, onSaved }: Pr
             <Input id="tech-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. John Smith" />
           </div>
 
-          {/* Name Code field: Dropdown selection + Sequential Generator only (No manual typing) */}
+          {/* OPR Code: locked to the opr's own code; admins / opr_admins choose. */}
           <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
-              <Label htmlFor="tech-code">Name Code</Label>
-              <span className="text-[11px] text-muted-foreground">Select existing or generate</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Select
-                value={code || "__none__"}
-                onValueChange={(val) => setCode(val === "__none__" ? "" : val)}
-              >
-                <SelectTrigger id="tech-code" className="flex-1 text-xs">
-                  <SelectValue placeholder="Select existing code..." />
+            <Label htmlFor="tech-opr-code">
+              OPR Code{role === "opr_admin" && <span className="text-destructive"> *</span>}
+            </Label>
+            {canChooseOprCode ? (
+              <Select value={oprCode || "__none__"} onValueChange={(val) => setOprCode(val === "__none__" ? "" : val)}>
+                <SelectTrigger id="tech-opr-code" className="text-xs">
+                  <SelectValue placeholder="Choose an OPR..." />
                 </SelectTrigger>
                 <SelectContent className="max-h-56">
-                  <SelectItem value="__none__">None (No code)</SelectItem>
-                  {existingCodes.map((item) => (
-                    <SelectItem key={item.code} value={item.code}>
-                      {item.code} ({item.count} tech{item.count === 1 ? "" : "s"})
+                  {role !== "opr_admin" && <SelectItem value="__none__">None (unassigned)</SelectItem>}
+                  {oprCodeOptions.map((item) => (
+                    <SelectItem key={item.opr_code} value={item.opr_code}>
+                      {item.opr_code}{item.full_name ? ` — ${item.full_name}` : ""}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={handleGenerateNextCode}
-                disabled={generatingCode || saving}
-                className="h-9 px-3 shrink-0 gap-1.5 text-xs font-medium"
-                title="Generate next sequential TECH code (e.g. TECH 001, TECH 002)"
-              >
-                {generatingCode ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Sparkles className="h-3.5 w-3.5 text-primary" />
-                )}
-                Generate
-              </Button>
-            </div>
-            {code ? (
-              <div className="flex items-center justify-between rounded-md bg-primary/10 border border-primary/20 px-2.5 py-1 text-xs text-primary">
-                <div className="flex items-center gap-1.5 font-medium">
-                  <span>Assigned Code:</span>
-                  <span className="bg-background text-foreground font-semibold px-2 py-0.5 rounded border border-border tracking-wider text-[11px]">
-                    {code}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setCode("")}
-                  className="text-[11px] text-muted-foreground hover:text-destructive underline cursor-pointer"
-                >
-                  Clear Code
-                </button>
-              </div>
             ) : (
-              <p className="text-[11px] text-muted-foreground">
-                Pick a shared code from the dropdown or click Generate for the next sequential TECH code. No manual typing.
-              </p>
+              <Input
+                id="tech-opr-code"
+                value={oprCode || "Not assigned"}
+                readOnly
+                className="font-mono tracking-wider text-foreground/80"
+              />
             )}
+            <p className="text-[11px] text-muted-foreground">
+              {canChooseOprCode
+                ? "The OPR this technician belongs to. It controls who can see this technician."
+                : "This technician is added under your OPR code."}
+            </p>
           </div>
 
           <div className="space-y-1.5">

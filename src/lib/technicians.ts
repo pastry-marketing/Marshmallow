@@ -2,9 +2,15 @@ import { supabase } from "@/integrations/supabase/client";
 import type { TechnicianRecord } from "@/components/technicians/TechnicianDialog";
 
 export const TECHNICIAN_SELECT =
-  "id, name, area, service, notes, chat_link, phone_number, latitude, longitude, code";
+  "id, name, area, service, notes, chat_link, phone_number, latitude, longitude, code, opr_code, created_at";
 export const TECHNICIAN_FALLBACK_SELECT =
   "id, name, area, service, notes, chat_link, phone_number, latitude, longitude";
+
+/** How the technician list is scoped for the requesting user. */
+export interface TechnicianVisibility {
+  mode: "all" | "coded" | "own";
+  oprCode?: string | null;
+}
 
 const PAGE_SIZE = 1000;
 const MAX_PAGES = 50; // hard safety cap = 50,000 rows
@@ -90,9 +96,12 @@ export async function fetchTechniciansPage(params: {
   page: number;
   pageSize: number;
   search: string;
+  /** Filters on opr_code now: "all" | "none" | "has_code" | "<OPR code>". */
   codeFilter?: string;
   sortBy?: TechnicianSortOption;
+  /** columnFilters.code targets the opr_code column. */
   columnFilters?: TechnicianColumnFilters;
+  visibility?: TechnicianVisibility;
 }): Promise<PaginatedTechnicians> {
   const page = Math.max(1, params.page | 0);
   const pageSize = Math.max(1, params.pageSize | 0);
@@ -109,9 +118,16 @@ export async function fetchTechniciansPage(params: {
   const areaFilter = (columnFilters.area ?? "").trim();
   const hasColumnFilters = Boolean(nameFilter || codeColFilter || serviceFilter || areaFilter);
 
-  // The RPC search path can't express per-column filters, so once any of them is
-  // active we fall through to the query builder and apply the search as an OR ilike.
-  if (search && !hasColumnFilters) {
+  const visibility = params.visibility ?? { mode: "all" as const };
+  // "own" scope with no OPR code can never match anything.
+  if (visibility.mode === "own" && !visibility.oprCode) {
+    return { technicians: [], totalCount: 0 };
+  }
+  const restrictByOpr = visibility.mode !== "all";
+
+  // The RPC search path can't express per-column filters or the OPR scope, so
+  // fall through to the query builder whenever either is active.
+  if (search && !hasColumnFilters && !restrictByOpr) {
     const { data, error } = await supabase.rpc("search_technicians", {
       _q: search,
       _limit: pageSize,
@@ -121,17 +137,16 @@ export async function fetchTechniciansPage(params: {
     const rows = (data ?? []) as Array<TechnicianRecord & { total_count: number | string | null }>;
     const totalCount = rows.length > 0 ? Number(rows[0].total_count ?? 0) : 0;
 
-    // Attach codes if available
-    let codeMap = new Map<string, string | null>();
+    // Attach opr_code / created_at (and legacy code) for the returned rows.
+    let extra = new Map<string, { code: string | null; opr_code: string | null; created_at: string | null }>();
     if (rows.length > 0) {
       try {
         const ids = rows.map((r) => r.id);
-        const { data: codeData } = await supabase.from("technicians").select("id, code").in("id", ids);
-        if (codeData) {
-          codeMap = new Map(codeData.map((c) => [c.id, c.code]));
-        }
+        const { data: ex } = await supabase.from("technicians").select("id, code, opr_code, created_at").in("id", ids);
+        const exRows = (ex ?? []) as Array<{ id: string; code: string | null; opr_code: string | null; created_at: string | null }>;
+        extra = new Map(exRows.map((c) => [c.id, { code: c.code ?? null, opr_code: c.opr_code ?? null, created_at: c.created_at ?? null }]));
       } catch {
-        // ignore if code column missing
+        // ignore if columns missing
       }
     }
 
@@ -145,17 +160,15 @@ export async function fetchTechniciansPage(params: {
       phone_number: r.phone_number,
       latitude: r.latitude,
       longitude: r.longitude,
-      code: codeMap.get(r.id) ?? (r as any).code ?? null,
+      code: extra.get(r.id)?.code ?? null,
+      opr_code: extra.get(r.id)?.opr_code ?? null,
+      created_at: extra.get(r.id)?.created_at ?? null,
     }));
 
     if (codeFilter !== "all") {
-      if (codeFilter === "none") {
-        technicians = technicians.filter((t) => !t.code);
-      } else if (codeFilter === "has_code") {
-        technicians = technicians.filter((t) => !!t.code);
-      } else {
-        technicians = technicians.filter((t) => t.code?.toLowerCase() === codeFilter.toLowerCase());
-      }
+      if (codeFilter === "none") technicians = technicians.filter((t) => !t.opr_code);
+      else if (codeFilter === "has_code") technicians = technicians.filter((t) => !!t.opr_code);
+      else technicians = technicians.filter((t) => (t.opr_code ?? "").toLowerCase() === codeFilter.toLowerCase());
     }
 
     return { technicians, totalCount: codeFilter !== "all" ? technicians.length : totalCount };
@@ -163,83 +176,42 @@ export async function fetchTechniciansPage(params: {
 
   let query = supabase.from("technicians").select(TECHNICIAN_SELECT, { count: "exact" });
 
-  if (codeFilter === "none") {
-    query = query.is("code", null);
-  } else if (codeFilter === "has_code") {
-    query = query.not("code", "is", null);
-  } else if (codeFilter && codeFilter !== "all") {
-    query = query.eq("code", codeFilter);
-  }
+  if (visibility.mode === "own") query = query.eq("opr_code", visibility.oprCode as string);
+  else if (visibility.mode === "coded") query = query.not("opr_code", "is", null);
+
+  if (codeFilter === "none") query = query.is("opr_code", null);
+  else if (codeFilter === "has_code") query = query.not("opr_code", "is", null);
+  else if (codeFilter && codeFilter !== "all") query = query.eq("opr_code", codeFilter);
 
   // Per-column header filters (each an independent contains-match).
   if (nameFilter) query = query.ilike("name", `%${nameFilter}%`);
-  if (codeColFilter) query = query.ilike("code", `%${codeColFilter}%`);
+  if (codeColFilter) query = query.ilike("opr_code", `%${codeColFilter}%`);
   if (serviceFilter) query = query.ilike("service", `%${serviceFilter}%`);
   if (areaFilter) query = query.ilike("area", `%${areaFilter}%`);
 
-  // Global search runs here only when combined with column filters (otherwise the
-  // RPC path above handles it); match it across the visible text columns.
   if (search) {
     const term = sanitizeIlikeTerm(search);
     if (term) {
       query = query.or(
-        `name.ilike.%${term}%,code.ilike.%${term}%,service.ilike.%${term}%,area.ilike.%${term}%,phone_number.ilike.%${term}%`,
+        `name.ilike.%${term}%,opr_code.ilike.%${term}%,service.ilike.%${term}%,area.ilike.%${term}%,phone_number.ilike.%${term}%`,
       );
     }
   }
 
-  if (sortBy === "name_desc") {
-    query = query.order("name", { ascending: false }).order("id", { ascending: true });
-  } else if (sortBy === "code_asc") {
-    query = query.order("code", { ascending: true, nullsFirst: false }).order("name", { ascending: true });
-  } else if (sortBy === "code_desc") {
-    query = query.order("code", { ascending: false, nullsFirst: false }).order("name", { ascending: true });
-  } else if (sortBy === "service_asc") {
-    query = query.order("service", { ascending: true, nullsFirst: false }).order("name", { ascending: true });
-  } else if (sortBy === "service_desc") {
-    query = query.order("service", { ascending: false, nullsFirst: false }).order("name", { ascending: true });
-  } else if (sortBy === "area_asc") {
-    query = query.order("area", { ascending: true, nullsFirst: false }).order("name", { ascending: true });
-  } else if (sortBy === "area_desc") {
-    query = query.order("area", { ascending: false, nullsFirst: false }).order("name", { ascending: true });
-  } else {
-    // Default: name_asc
-    query = query.order("name", { ascending: true }).order("id", { ascending: true });
-  }
+  if (sortBy === "name_desc") query = query.order("name", { ascending: false }).order("id", { ascending: true });
+  else if (sortBy === "code_asc") query = query.order("opr_code", { ascending: true, nullsFirst: false }).order("name", { ascending: true });
+  else if (sortBy === "code_desc") query = query.order("opr_code", { ascending: false, nullsFirst: false }).order("name", { ascending: true });
+  else if (sortBy === "service_asc") query = query.order("service", { ascending: true, nullsFirst: false }).order("name", { ascending: true });
+  else if (sortBy === "service_desc") query = query.order("service", { ascending: false, nullsFirst: false }).order("name", { ascending: true });
+  else if (sortBy === "area_asc") query = query.order("area", { ascending: true, nullsFirst: false }).order("name", { ascending: true });
+  else if (sortBy === "area_desc") query = query.order("area", { ascending: false, nullsFirst: false }).order("name", { ascending: true });
+  else query = query.order("name", { ascending: true }).order("id", { ascending: true });
 
   query = query.range(from, to);
-
-  let { data, error, count } = await query;
-
-  if (error && (error.message?.includes("code") || (error as any).code === "42703")) {
-    // Fallback if column not yet added (the code column filter is dropped here).
-    let fbQuery = supabase
-      .from("technicians")
-      .select(TECHNICIAN_FALLBACK_SELECT, { count: "exact" })
-      .order("name", { ascending: sortBy !== "name_desc" })
-      .order("id", { ascending: true })
-      .range(from, to);
-    if (nameFilter) fbQuery = fbQuery.ilike("name", `%${nameFilter}%`);
-    if (serviceFilter) fbQuery = fbQuery.ilike("service", `%${serviceFilter}%`);
-    if (areaFilter) fbQuery = fbQuery.ilike("area", `%${areaFilter}%`);
-    if (search) {
-      const term = sanitizeIlikeTerm(search);
-      if (term) {
-        fbQuery = fbQuery.or(
-          `name.ilike.%${term}%,service.ilike.%${term}%,area.ilike.%${term}%,phone_number.ilike.%${term}%`,
-        );
-      }
-    }
-    const fbRes = await fbQuery;
-    if (fbRes.error) throw fbRes.error;
-    data = fbRes.data as any;
-    count = fbRes.count;
-    error = null;
-  }
-
+  const { data, error, count } = await query;
   if (error) throw error;
   return {
-    technicians: (data ?? []) as TechnicianRecord[],
+    technicians: (data ?? []) as unknown as TechnicianRecord[],
     totalCount: count ?? 0,
   };
 }

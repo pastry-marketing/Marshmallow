@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
+import { isOperatorRole } from "@/lib/access";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -59,7 +60,7 @@ export default function NoteThread({ leadId, noteType, label, profiles = {}, onN
   const isCS = role === "customer_service";
   const isCsAdmin = role === "cs_admin";
   const isProcessor = role === "processor";
-  const isOpr = role === "opr";
+  const isOpr = isOperatorRole(role);
 
   const canViewThread = useMemo(() => {
     if (isAdmin) return true;

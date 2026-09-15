@@ -2,6 +2,7 @@ import { useState } from "react";
 import { CalendarDays } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAuth } from "@/contexts/AuthContext";
+import { isOperatorRole } from "@/lib/access";
 import { getAssignableLeadTags } from "@/lib/lead-tags";
 import { saveLeadTag } from "@/lib/lead-tag-actions";
 import { CS_TAG_LABELS, type CsTag, type Lead } from "@/types";
@@ -25,7 +26,7 @@ export default function LeadTagControl({ lead, onSaved, className }: Props) {
   const [bookingOpen, setBookingOpen] = useState(false);
   const [bookingMode, setBookingMode] = useState<"add" | "edit">("add");
 
-  const isOpr = role === "opr";
+  const isOpr = isOperatorRole(role);
   const currentTag = (lead.cs_tag ?? null) as CsTag | null;
   const assignableTags = getAssignableLeadTags(role, { isQuotationMaster: profile?.is_quotation_master });
   const editor = { id: user?.id, name: profile?.full_name || user?.email || "Unknown user" };

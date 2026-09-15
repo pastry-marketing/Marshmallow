@@ -8,6 +8,7 @@ import { useNavigate } from 'react-router-dom';
 import { formatDistanceToNow } from 'date-fns';
 import { toast } from 'sonner';
 import { playAssignmentSound } from '@/lib/notification-sound';
+import { isOperatorRole } from '@/lib/access';
 
 const NOTIFICATION_POLL_INTERVAL_MS = 15 * 1000;
 const MAX_REMEMBERED_CANCELLATION_POPUPS = 200;
@@ -190,7 +191,7 @@ export default function NotificationBell() {
           void fetchNotifications();
 
           // Play sound and show prominent toast for operator assignment notifications
-          if (role === 'opr') {
+          if (isOperatorRole(role)) {
             const newRow = payload.new as { title?: string; message?: string; lead_id?: string } | undefined;
             if (newRow?.title?.includes('Lead Assigned') && await hasOperatorLeadAssignment(user.id, newRow.lead_id)) {
               playAssignmentSound();

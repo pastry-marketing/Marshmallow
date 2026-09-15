@@ -256,6 +256,8 @@ const STATUS_CHANGE_ACCESS: Record<AppRole, LeadStatus[]> = {
     "cancelled",
     "pending_to_send",
   ],
+  // opr_admin has the same (read-only) lead access as opr.
+  opr_admin: [],
 };
 
 export function getChangeableStatuses(role?: string | null): LeadStatus[] {

@@ -25,13 +25,16 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { TechnicianDialog, TechnicianRecord } from "@/components/technicians/TechnicianDialog";
 import { ImportTechniciansDialog } from "@/components/technicians/ImportTechniciansDialog";
+import { TechnicianReport } from "@/components/technicians/TechnicianReport";
 import { toast } from "@/hooks/use-toast";
 import {
   fetchAllTechnicians,
   fetchTechniciansPage,
   TECHNICIANS_ROOT_KEY,
   TechnicianSortOption,
+  type TechnicianVisibility,
 } from "@/lib/technicians";
+import { canAddTechnicians, canImportTechnicians, technicianVisibility } from "@/lib/access";
 import { toTelHref } from "@/lib/phone";
 import {
   Contact,
@@ -89,7 +92,15 @@ function buildPageWindow(current: number, total: number): Array<number | "ellips
   return out;
 }
 
-const COPY_COLUMNS = ["Name", "Name Code", "Phone Number", "Service", "Area", "Quo Chat Link", "Notes"] as const;
+const COPY_COLUMNS = ["Name", "OPR Code", "Phone Number", "Service", "Area", "Quo Chat Link", "Notes"] as const;
+
+/** Format a technician's created_at as a plain date for tables and exports. */
+function formatAddedDate(value?: string | null): string {
+  if (!value) return "";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+}
 
 /** Strip tabs/newlines from a single clipboard cell so one row stays on one TSV line. */
 function sanitizeClipboardCell(value: string | null | undefined): string {
@@ -100,7 +111,7 @@ function sanitizeClipboardCell(value: string | null | undefined): string {
 function technicianToClipboardCells(t: TechnicianRecord): string[] {
   return [
     sanitizeClipboardCell(t.name),
-    sanitizeClipboardCell(t.code),
+    sanitizeClipboardCell(t.opr_code),
     sanitizeClipboardCell(t.phone_number),
     sanitizeClipboardCell(t.service),
     sanitizeClipboardCell(t.area),
@@ -118,12 +129,13 @@ function buildTechniciansTsv(techs: TechnicianRecord[]): string {
 function buildSingleTechnicianText(t: TechnicianRecord): string {
   const pairs: Array<[string, string | null | undefined]> = [
     ["Name", t.name],
-    ["Name Code", t.code],
+    ["OPR Code", t.opr_code],
     ["Phone Number", t.phone_number],
     ["Service", t.service],
     ["Area", t.area],
     ["Quo Chat Link", t.chat_link],
     ["Notes", t.notes],
+    ["Added Date", formatAddedDate(t.created_at)],
   ];
   return pairs
     .filter(([, v]) => v != null && String(v).trim() !== "")
@@ -255,8 +267,17 @@ function HeaderColumnFilter({
 
 export default function TechniciansPage() {
   const qc = useQueryClient();
-  const { role } = useAuth();
+  const { role, profile } = useAuth();
   const isAdmin = role === "admin";
+  const canReport = isAdmin || profile?.can_view_tech_report === true;
+  const [activeView, setActiveView] = useState<"directory" | "report">("directory");
+
+  // Scope of technicians this user may see (opr → own, opr_admin → coded).
+  const visibility = useMemo<TechnicianVisibility>(
+    () => ({ mode: technicianVisibility(role), oprCode: profile?.opr_code ?? null }),
+    [role, profile?.opr_code],
+  );
+  const visibilityKey = `${visibility.mode}:${visibility.oprCode ?? ""}`;
 
   const [addOpen, setAddOpen] = useState(false);
   const [editTech, setEditTech] = useState<TechnicianRecord | null>(null);
@@ -319,20 +340,19 @@ export default function TechniciansPage() {
     staleTime: 60_000,
   });
 
-  // Query to summarize existing codes and their technician counts
+  // Summarize the OPR codes that own technicians (drives the OPR filter).
   const codesSummaryQuery = useQuery({
-    queryKey: [...TECHNICIANS_ROOT_KEY, "codes-summary"] as const,
+    queryKey: [...TECHNICIANS_ROOT_KEY, "opr-codes-summary", visibilityKey] as const,
     queryFn: async () => {
       try {
-        const { data, error } = await supabase
-          .from("technicians")
-          .select("code")
-          .not("code", "is", null);
+        let q = supabase.from("technicians").select("opr_code").not("opr_code", "is", null);
+        if (visibility.mode === "own") q = q.eq("opr_code", visibility.oprCode ?? "");
+        const { data, error } = await q;
         if (error || !data) return { codes: [], totalWithCode: 0 };
         const map = new Map<string, number>();
         let totalWithCode = 0;
-        for (const row of data) {
-          const c = (row.code || "").trim();
+        for (const row of data as Array<{ opr_code: string | null }>) {
+          const c = (row.opr_code || "").trim();
           if (c) {
             map.set(c, (map.get(c) || 0) + 1);
             totalWithCode++;
@@ -340,14 +360,7 @@ export default function TechniciansPage() {
         }
         const codes = Array.from(map.entries())
           .map(([codeKey, count]) => ({ code: codeKey, count }))
-          .sort((a, b) => {
-            // Sort by count descending (most technicians first), then by code sequence
-            if (b.count !== a.count) return b.count - a.count;
-            const ma = a.code.match(/tech\s*(\d+)/i);
-            const mb = b.code.match(/tech\s*(\d+)/i);
-            if (ma && mb) return parseInt(ma[1], 10) - parseInt(mb[1], 10);
-            return a.code.localeCompare(b.code);
-          });
+          .sort((a, b) => a.code.localeCompare(b.code));
         return { codes, totalWithCode };
       } catch {
         return { codes: [], totalWithCode: 0 };
@@ -363,7 +376,7 @@ export default function TechniciansPage() {
     queryKey: [
       ...TECHNICIANS_ROOT_KEY,
       "paginated",
-      { page: currentPage, pageSize, search: debouncedSearch, codeFilter, sortBy, columnFilters: columnFiltersKey },
+      { page: currentPage, pageSize, search: debouncedSearch, codeFilter, sortBy, columnFilters: columnFiltersKey, visibility: visibilityKey },
     ] as const,
     queryFn: () =>
       fetchTechniciansPage({
@@ -373,6 +386,7 @@ export default function TechniciansPage() {
         codeFilter,
         sortBy,
         columnFilters: debouncedColumnFilters,
+        visibility,
       }),
     placeholderData: keepPreviousData,
     staleTime: 30_000,
@@ -454,15 +468,16 @@ export default function TechniciansPage() {
     setDeleteTech(null);
   };
 
-  const EXPORT_HEADERS = ["Technician Name", "Name Code", "Phone Number", "Service", "Area", "Quo Chat Link", "Notes"];
+  const EXPORT_HEADERS = ["Technician Name", "OPR Code", "Phone Number", "Service", "Area", "Quo Chat Link", "Notes", "Added Date"];
   const toExportRow = (t: TechnicianRecord) => ({
     "Technician Name": t.name ?? "",
-    "Name Code": t.code ?? "",
+    "OPR Code": t.opr_code ?? "",
     "Phone Number": t.phone_number ?? "",
     Service: t.service ?? "",
     Area: t.area ?? "",
     "Quo Chat Link": t.chat_link ?? "",
     Notes: t.notes ?? "",
+    "Added Date": formatAddedDate(t.created_at),
   });
   const [exporting, setExporting] = useState(false);
 
@@ -681,14 +696,43 @@ export default function TechniciansPage() {
               </DropdownMenuContent>
             </DropdownMenu>
           )}
-          <Button variant="outline" size="sm" onClick={() => setImportOpen(true)}>
-            <Upload className="mr-1.5 h-4 w-4" /> Import
-          </Button>
-          <Button size="sm" onClick={() => { setEditTech(null); setAddOpen(true); }}>
-            <Plus className="mr-1.5 h-4 w-4" /> Add Technician
-          </Button>
+          {canImportTechnicians(role) && (
+            <Button variant="outline" size="sm" onClick={() => setImportOpen(true)}>
+              <Upload className="mr-1.5 h-4 w-4" /> Import
+            </Button>
+          )}
+          {canAddTechnicians(role) && (
+            <Button size="sm" onClick={() => { setEditTech(null); setAddOpen(true); }}>
+              <Plus className="mr-1.5 h-4 w-4" /> Add Technician
+            </Button>
+          )}
         </div>
       </div>
+
+      {canReport && (
+        <div className="inline-flex rounded-lg border border-border/60 bg-muted/40 p-0.5 text-xs">
+          <button
+            type="button"
+            onClick={() => setActiveView("directory")}
+            className={`rounded-md px-3 py-1.5 font-medium transition-colors ${activeView === "directory" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+          >
+            Directory
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveView("report")}
+            className={`rounded-md px-3 py-1.5 font-medium transition-colors ${activeView === "report" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+          >
+            Report
+          </button>
+        </div>
+      )}
+
+      {canReport && activeView === "report" && (
+        <TechnicianReport isAdmin={isAdmin} />
+      )}
+
+      <div hidden={canReport && activeView === "report"}>
 
       <Card className="border-border/60">
         <CardContent className="p-3 flex flex-wrap items-center justify-between gap-3">
@@ -713,15 +757,15 @@ export default function TechniciansPage() {
                 }}
               >
               <SelectTrigger className="h-10 w-full text-sm sm:h-8 sm:w-[190px] sm:text-xs">
-                  <SelectValue placeholder="Filter by code..." />
+                  <SelectValue placeholder="Filter by OPR..." />
                 </SelectTrigger>
                 <SelectContent className="max-h-64">
-                  <SelectItem value="all">All Codes ({headerTotal})</SelectItem>
-                  <SelectItem value="has_code">With Code ({totalWithCode})</SelectItem>
-                  <SelectItem value="none">Without Code ({Math.max(0, headerTotal - totalWithCode)})</SelectItem>
+                  <SelectItem value="all">All OPRs ({headerTotal})</SelectItem>
+                  <SelectItem value="has_code">With OPR ({totalWithCode})</SelectItem>
+                  <SelectItem value="none">Without OPR ({Math.max(0, headerTotal - totalWithCode)})</SelectItem>
                   {distinctCodes.length > 0 && (
                     <div className="px-2 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider border-t border-border mt-1 pt-1.5">
-                      Technicians per Code ({distinctCodes.length})
+                      Technicians per OPR ({distinctCodes.length})
                     </div>
                   )}
                   {distinctCodes.map((item) => (
@@ -870,13 +914,13 @@ export default function TechniciansPage() {
                       type="button"
                       onClick={() => setSortBy(sortBy === "code_asc" ? "code_desc" : "code_asc")}
                       className="inline-flex items-center gap-1 hover:text-foreground transition-colors font-medium text-xs text-muted-foreground"
-                      title="Click to sort by Code"
+                      title="Click to sort by OPR Code"
                     >
-                      Code
+                      OPR Code
                       {sortBy === "code_asc" ? " ↑" : sortBy === "code_desc" ? " ↓" : ""}
                     </button>
                     <HeaderColumnFilter
-                      label="Code"
+                      label="OPR Code"
                       value={columnFilters.code}
                       onChange={(v) => setColumnFilters((f) => ({ ...f, code: v }))}
                       sortKey="code"
@@ -914,20 +958,21 @@ export default function TechniciansPage() {
                 </TableHead>
                 <TableHead>Chat Link</TableHead>
                 <TableHead>Notes</TableHead>
+                <TableHead className="w-[120px]">Added</TableHead>
                 <TableHead className="w-[130px] text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {paginatedQuery.isPending && rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center text-sm text-muted-foreground py-8">
+                  <TableCell colSpan={10} className="text-center text-sm text-muted-foreground py-8">
                     Loading…
                   </TableCell>
                 </TableRow>
               )}
               {paginatedQuery.isError && rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center text-sm py-10">
+                  <TableCell colSpan={10} className="text-center text-sm py-10">
                     <div className="flex flex-col items-center gap-2">
                       <span className="text-destructive">
                         {(paginatedQuery.error as Error)?.message ?? "Failed to load technicians."}
@@ -941,7 +986,7 @@ export default function TechniciansPage() {
               )}
               {!paginatedQuery.isPending && !paginatedQuery.isError && rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center text-sm text-muted-foreground py-10">
+                  <TableCell colSpan={10} className="text-center text-sm text-muted-foreground py-10">
                     {isSearching || codeFilter !== "all" || hasColumnFilters
                       ? "No technicians match your filters."
                       : "No technicians yet. Add one manually or import from CSV/XLSX."}
@@ -966,9 +1011,9 @@ export default function TechniciansPage() {
                     </TableCell>
                     <TableCell className="font-medium">{t.name}</TableCell>
                     <TableCell>
-                      {t.code ? (
+                      {t.opr_code ? (
                         <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-primary/10 text-primary border border-primary/20 tracking-wider">
-                          {t.code}
+                          {t.opr_code}
                         </span>
                       ) : (
                         <span className="text-muted-foreground text-xs">—</span>
@@ -1000,6 +1045,9 @@ export default function TechniciansPage() {
                     </TableCell>
                     <TableCell className="max-w-[320px] truncate text-muted-foreground" title={t.notes ?? ""}>
                       {t.notes || <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                      {formatAddedDate(t.created_at) || <span className="text-muted-foreground">—</span>}
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="inline-flex gap-1">
@@ -1144,6 +1192,7 @@ export default function TechniciansPage() {
           </div>
         </div>
       </Card>
+      </div>
 
       <TechnicianDialog
         open={addOpen || editTech !== null}

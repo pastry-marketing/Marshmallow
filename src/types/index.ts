@@ -1,4 +1,4 @@
-export type AppRole = 'admin' | 'processor' | 'customer_service' | 'opr' | 'cs_admin';
+export type AppRole = 'admin' | 'processor' | 'customer_service' | 'opr' | 'cs_admin' | 'opr_admin';
 
 export type CsTag = 'confirmation_sent' | 'waiting_schedule_confirmation' | 'booked' | 'ready_to_schedule' | 'incomplete_details';
 
@@ -72,6 +72,8 @@ export interface Profile {
   created_at: string;
   is_quotation_master?: boolean;
   can_manage_users?: boolean;
+  opr_code?: string | null;
+  can_view_tech_report?: boolean | null;
 }
 
 export interface UserRole {

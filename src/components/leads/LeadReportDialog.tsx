@@ -381,16 +381,18 @@ export default function LeadReportDialog({ open, onOpenChange }: LeadReportDialo
               <RefreshCw className={`h-4 w-4 text-muted-foreground ${loading ? "animate-spin" : ""}`} />
             </Button>
 
-            <Button
-              variant="outline"
-              size="icon"
-              className="h-9 w-9 rounded-xl border-border/60"
-              onClick={exportToCSV}
-              disabled={loading || rawLeads.length === 0}
-              title="Export all leads to CSV"
-            >
-              <Download className="h-4 w-4 text-muted-foreground" />
-            </Button>
+            {role === "admin" && (
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-9 w-9 rounded-xl border-border/60"
+                onClick={exportToCSV}
+                disabled={loading || rawLeads.length === 0}
+                title="Export all leads to CSV"
+              >
+                <Download className="h-4 w-4 text-muted-foreground" />
+              </Button>
+            )}
           </div>
         </DialogHeader>
 
