@@ -24,10 +24,13 @@ export function useAllowedStatuses() {
       if (role === "admin") return baseAllowed;
       if (!user?.id) return baseAllowed;
 
+      // OPR Admin inherits every role-wide status granted to OPR. User-specific
+      // overrides still apply last, so an admin can fine-tune an individual.
+      const visibilityRole = role === "opr_admin" ? "opr" : role;
       const { data, error } = await supabase
         .from("lead_status_visibility")
         .select("user_id,role,status,is_visible")
-        .or(`user_id.eq.${user.id},and(user_id.is.null,role.eq.${role})`);
+        .or(`user_id.eq.${user.id},and(user_id.is.null,role.eq.${visibilityRole})`);
 
       if (error || !Array.isArray(data)) {
         return baseAllowed;
@@ -35,7 +38,7 @@ export function useAllowedStatuses() {
 
       const finalAllowed = new Set<string>(baseAllowed);
       const rows = data as VisibilityRow[];
-      const roleRows = rows.filter((row) => !row.user_id && row.role === role);
+      const roleRows = rows.filter((row) => !row.user_id && row.role === visibilityRole);
       const userSpecificRows = rows.filter((row) => row.user_id === user.id);
 
       for (const row of [...roleRows, ...userSpecificRows]) {

@@ -58,3 +58,9 @@ describe("technician details", () => {
     }
   });
 });
+
+describe("OPR Admin inheritance", () => {
+  it("has the same default navigation as OPR", () => {
+    expect([...getDefaultNavAccess("opr_admin")]).toEqual([...getDefaultNavAccess("opr")]);
+  });
+});

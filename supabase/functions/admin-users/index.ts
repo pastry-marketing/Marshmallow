@@ -336,6 +336,14 @@ Deno.serve(async (req) => {
         return jsonResponse({ error: "Failed to assign role: " + roleError.message }, 400);
       }
 
+      if (role === "opr" || role === "opr_admin") {
+        const { error: oprCodeError } = await adminClient.rpc("assign_next_opr_code", { _user_id: userId });
+        if (oprCodeError) {
+          await rollback(oprCodeError.message);
+          return jsonResponse({ error: "Failed to assign OPR code: " + oprCodeError.message }, 400);
+        }
+      }
+
       if (role !== "admin" && access_code) {
         const { error: codeError } = await adminClient
           .from("user_access_codes")

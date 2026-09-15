@@ -158,7 +158,9 @@ function TemplateEditor({
   );
 }
 
-const MANAGED_ROLES: AppRole[] = ["customer_service", "processor", "opr", "cs_admin", "opr_admin"];
+// OPR Admin always inherits the OPR role defaults, so it intentionally has no
+// separate role row that could drift out of sync.
+const MANAGED_ROLES: AppRole[] = ["customer_service", "processor", "opr", "cs_admin"];
 
 const Settings = () => {
   const { user, role: currentRole } = useAuth();
@@ -963,24 +965,6 @@ const Settings = () => {
                       </span>
                     )}
 
-                    {isAdmin && u.role !== "admin" && (
-                      <div className="flex items-center gap-2 rounded-2xl border border-border/60 bg-background/70 px-3 py-2">
-                        <Switch
-                          checked={u.can_view_tech_report || false}
-                          onCheckedChange={(checked) => toggleCanViewTechReport.mutate({ userId: u.id, canView: checked })}
-                        />
-                        <span className="text-[12px] font-medium leading-none">Tech Report Access</span>
-                      </div>
-                    )}
-
-                    {isAdmin && <div className="flex items-center gap-2 rounded-2xl border border-border/60 bg-background/70 px-3 py-2">
-                      <Switch 
-                        checked={u.is_quotation_master || false}
-                        onCheckedChange={(checked) => toggleQuotationMaster.mutate({ userId: u.id, isMaster: checked })}
-                      />
-                      <span className="text-[12px] font-medium leading-none">Quotation Master</span>
-                    </div>}
-                    
                     {isAdmin && u.role === "cs_admin" && (
                       <div className="flex items-center gap-2 rounded-2xl border border-border/60 bg-background/70 px-3 py-2">
                         <Switch 
@@ -1187,6 +1171,12 @@ const Settings = () => {
                         {NAV_SECTION_LABELS[section] || section}
                       </th>
                     ))}
+                    <th className="px-3 py-3 text-[10px] font-semibold text-muted-foreground/60 text-center uppercase tracking-wider">
+                      Tech Report
+                    </th>
+                    <th className="px-3 py-3 text-[10px] font-semibold text-muted-foreground/60 text-center uppercase tracking-wider">
+                      Quotation Master
+                    </th>
                   </tr>
                 </thead>
 
@@ -1225,6 +1215,22 @@ const Settings = () => {
                           </td>
                         );
                       })}
+                      <td className="px-3 py-3 text-center">
+                        <Switch
+                          checked={u.can_view_tech_report || false}
+                          onCheckedChange={(checked) =>
+                            toggleCanViewTechReport.mutate({ userId: u.id, canView: checked })
+                          }
+                        />
+                      </td>
+                      <td className="px-3 py-3 text-center">
+                        <Switch
+                          checked={u.is_quotation_master || false}
+                          onCheckedChange={(checked) =>
+                            toggleQuotationMaster.mutate({ userId: u.id, isMaster: checked })
+                          }
+                        />
+                      </td>
                     </tr>
                   ))}
                 </tbody>

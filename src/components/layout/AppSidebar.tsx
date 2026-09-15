@@ -313,6 +313,11 @@ export default function AppSidebar() {
                 <span className="mt-0.5 block text-[10px] font-medium capitalize tracking-[0.16em] text-sidebar-foreground/38">
                   {role?.replace("_", " ")}
                 </span>
+                {(role === "opr" || role === "opr_admin") && profile?.opr_code && (
+                  <span className="mt-1 block font-mono text-[10px] font-semibold tracking-[0.14em] text-sidebar-foreground/65">
+                    {profile.opr_code}
+                  </span>
+                )}
               </motion.div>
           </div>
         </motion.div>
