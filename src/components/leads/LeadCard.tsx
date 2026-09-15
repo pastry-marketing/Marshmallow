@@ -90,6 +90,7 @@ import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { useQuoAttention } from "@/hooks/useQuoAttention";
 import { History } from "lucide-react";
 import LeadStatusHistoryDialog from "./LeadStatusHistoryDialog";
+import ImageLightbox from "./ImageLightbox";
 
 interface LeadCardProps {
   lead: Lead;
@@ -750,6 +751,9 @@ function LeadCard({
   }, []);
   const [photoPaths, setPhotoPaths] = useState<string[]>([]);
   const [photoOriginals, setPhotoOriginals] = useState<(string | undefined)[]>([]);
+  const [photoLightboxOpen, setPhotoLightboxOpen] = useState(false);
+  const [photoLightboxIndex, setPhotoLightboxIndex] = useState(0);
+  const photoClickTimer = useRef<number | null>(null);
   const [resolvedPaymentOriginal, setResolvedPaymentOriginal] = useState<string | null>(null);
   const [photoCount, setPhotoCount] = useState(
     initialPhotoCount !== undefined ? initialPhotoCount : 0
@@ -1072,6 +1076,50 @@ function LeadCard({
       toast.error(`Failed to copy Photo ${index + 1}`);
     }
   };
+
+  const handlePhotoClick = (path: string, index: number) => {
+    if (photoClickTimer.current !== null) {
+      window.clearTimeout(photoClickTimer.current);
+    }
+    photoClickTimer.current = window.setTimeout(() => {
+      photoClickTimer.current = null;
+      void handleCopyPhotoLink(path, index);
+    }, 250);
+  };
+
+  const handlePhotoDoubleClick = async (index: number) => {
+    if (photoClickTimer.current !== null) {
+      window.clearTimeout(photoClickTimer.current);
+      photoClickTimer.current = null;
+    }
+
+    setPhotoLightboxIndex(index);
+    setPhotoLightboxOpen(true);
+
+    const missingIndexes = photoPaths
+      .map((_, photoIndex) => photoIndex)
+      .filter((photoIndex) => !photoOriginals[photoIndex]);
+    if (missingIndexes.length === 0) return;
+
+    const { getSignedUrl } = await import("@/lib/storage");
+    const resolved = await Promise.all(
+      missingIndexes.map(async (photoIndex) => ({
+        photoIndex,
+        url: await getSignedUrl(photoPaths[photoIndex]),
+      })),
+    );
+    setPhotoOriginals((current) => {
+      const next = [...current];
+      for (const item of resolved) {
+        if (item.url) next[item.photoIndex] = item.url;
+      }
+      return next;
+    });
+  };
+
+  useEffect(() => () => {
+    if (photoClickTimer.current !== null) window.clearTimeout(photoClickTimer.current);
+  }, []);
 
   const handleStatusChange = async (newStatus: string, cancellationReason?: string) => {
     if (isPaid) return;
@@ -1795,8 +1843,14 @@ function LeadCard({
                     onClick={(e) => {
                       e.stopPropagation();
                       e.preventDefault();
-                      void handleCopyPhotoLink(path, i);
+                      handlePhotoClick(path, i);
                     }}
+                    onDoubleClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      void handlePhotoDoubleClick(i);
+                    }}
+                    title="Click to copy; double-click to open"
                   >
                     <Copy className="h-2.5 w-2.5" />
                     Photo {i + 1}
@@ -1806,6 +1860,15 @@ function LeadCard({
             </div>
           </div>
         )}
+
+        <ImageLightbox
+          images={photoPaths.map((path, index) => ({
+            src: photoOriginals[index] || path,
+          }))}
+          initialIndex={photoLightboxIndex}
+          open={photoLightboxOpen}
+          onOpenChange={setPhotoLightboxOpen}
+        />
 
         {(isCS || isCsAdmin || isProcessor || isAdmin || isOpr) && lead.status !== "scheduled" && (
           <div className="px-4 pt-2">
