@@ -65,6 +65,9 @@ const getNavItems = (role: string) => [
   ...(role === "cs_admin" ? [{ title: "Users", url: "/settings", icon: Shield, navKey: "settings", group: "Manage" }] : [{ title: "Settings", url: "/settings", icon: Settings, navKey: "settings", group: "Admin" }]),
 ];
 
+// localStorage key used to broadcast a New Quote Request dismissal to other tabs.
+const QUOTE_DISMISS_KEY = "quote-request-dismissed";
+
 export default function AppSidebar() {
   const { state } = useSidebar();
   const collapsed = state === "collapsed";
@@ -77,6 +80,37 @@ export default function AppSidebar() {
   const [urgentQuoteLead, setUrgentQuoteLead] = useState<any>(null);
   // Leads already announced as Pending to Send, so one status change alerts exactly once.
   const announcedQuotePendingIds = useRef<Set<string>>(new Set());
+
+  // Dismissing the New Quote Request popup in one tab clears it in every other
+  // open tab (broadcast via localStorage), so it only has to be dismissed once.
+  const dismissQuoteRequest = () => {
+    const id = urgentQuoteLead?.id as string | undefined;
+    setUrgentQuoteLead(null);
+    if (id) {
+      announcedQuotePendingIds.current.add(id);
+      try {
+        localStorage.setItem(QUOTE_DISMISS_KEY, JSON.stringify({ id, ts: Date.now() }));
+      } catch {
+        // ignore storage errors
+      }
+    }
+  };
+
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== QUOTE_DISMISS_KEY || !event.newValue) return;
+      try {
+        const { id } = JSON.parse(event.newValue) as { id?: string };
+        if (!id) return;
+        announcedQuotePendingIds.current.add(id);
+        setUrgentQuoteLead((current: { id?: string } | null) => (current?.id === id ? null : current));
+      } catch {
+        // ignore malformed payloads
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   // Fetch pending cancellation requests count for the sidebar badge
   const { data: pendingCancellationCount = 0 } = useQuery({
@@ -581,7 +615,7 @@ export default function AppSidebar() {
         userEmail={user?.email || profile?.email || null}
       />
       
-      <AlertDialog open={!!urgentQuoteLead} onOpenChange={(open) => !open && setUrgentQuoteLead(null)}>
+      <AlertDialog open={!!urgentQuoteLead} onOpenChange={(open) => !open && dismissQuoteRequest()}>
         <AlertDialogContent className="border-amber-500/50 shadow-[0_0_40px_rgba(245,158,11,0.25)]">
           <AlertDialogHeader>
             <AlertDialogTitle className="text-xl flex items-center gap-2 text-amber-500">
@@ -593,10 +627,10 @@ export default function AppSidebar() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="mt-4">
-            <AlertDialogCancel onClick={() => setUrgentQuoteLead(null)}>Dismiss</AlertDialogCancel>
+            <AlertDialogCancel onClick={dismissQuoteRequest}>Dismiss</AlertDialogCancel>
             <AlertDialogAction onClick={() => {
               navigate("/quote-pending");
-              setUrgentQuoteLead(null);
+              dismissQuoteRequest();
             }} className="bg-amber-500 hover:bg-amber-600 text-white">
               View Request
             </AlertDialogAction>

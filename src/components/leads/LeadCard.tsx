@@ -32,6 +32,7 @@ import {
   Clipboard,
   ExternalLink,
   UserPlus,
+  AlertTriangle,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -301,6 +302,33 @@ function isScheduleRequirementFarFuture(text?: string | null, daysThreshold = 3)
   const earliestFuture = futureDates.sort((a, b) => a.getTime() - b.getTime())[0];
   const diffDays = differenceInCalendarDays(earliestFuture, now);
   return diffDays > daysThreshold;
+}
+
+/**
+ * True when a schedule requirement names a date that is today or already in the
+ * past — used to flag urgent leads that "need attention". Undated requirements
+ * and clearly next-year intentions (a bare month/day more than ~6 months back)
+ * do not count.
+ */
+function scheduleRequirementDueOrOverdue(text?: string | null): boolean {
+  if (!text || !text.trim()) return false;
+  const dates = findDatesInScheduleText(text);
+  if (!dates.length) return false;
+
+  const now = startOfDay(new Date());
+  const currentYear = now.getFullYear();
+
+  for (const d of dates) {
+    const y = d.year ?? currentYear;
+    const dt = startOfDay(new Date(y, d.month, d.day));
+    // Positive when dt is in the past, 0 when today, negative when in the future.
+    const daysPast = differenceInCalendarDays(now, dt);
+    if (daysPast < 0) continue; // future date
+    // A bare (year-less) date far in the past likely means next year — skip it.
+    if (!d.year && daysPast > 180) continue;
+    return true;
+  }
+  return false;
 }
 
 function formatScheduleRequirementCompact(text?: string | null): { summary: string; full: string } | null {
@@ -888,6 +916,12 @@ function LeadCard({
   const { isFromCustomer } = useIsLastMessageFromCustomer(lead.customer_phone, hasScheduleTag);
   const needsScheduleBlink = hasScheduleTag && isFromCustomer;
   const isActivateCustomer = lead.status === "activate_customer";
+  // Urgent leads whose requested schedule date is today or already past "need
+  // attention". Only Admin / CS / CS Admin see this tag.
+  const needsAttention =
+    lead.status === "urgent_job" &&
+    (isAdmin || isCS || isCsAdmin) &&
+    scheduleRequirementDueOrOverdue(lead.customer_schedule_requirements);
   const isQuoteUpdatedForMe = lead.status === "quote_updated" && (role === "cs_admin" || lead.quote_requested_by === user?.id);
   const isPendingQuoteForMaster = lead.status === "pending_to_send" && isQuotationMaster(role, profile?.is_quotation_master);
   const baseShouldBlink =
@@ -1576,6 +1610,15 @@ function LeadCard({
                       className="inline-flex items-center gap-1 rounded-full border border-emerald-500/50 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300"
                     >
                       📌 Activate Customer
+                    </span>
+                  )}
+                  {needsAttention && (
+                    <span
+                      title="Urgent lead with a schedule requirement due today or overdue"
+                      className="inline-flex items-center gap-1 rounded-full border border-rose-500/50 bg-rose-500/15 px-2 py-0.5 text-[10px] font-semibold text-rose-700 dark:text-rose-300 animate-pulse"
+                    >
+                      <AlertTriangle className="h-3 w-3" />
+                      Need Attention
                     </span>
                   )}
                   {lead.cs_tag === "booked" && lead.booked_at && (
