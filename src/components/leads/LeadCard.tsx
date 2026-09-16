@@ -1613,12 +1613,16 @@ function LeadCard({
                     </span>
                   )}
                   {needsAttention && (
+                    /* Auto/system tag — deliberately styled unlike the manual
+                       round tag pills: square, dashed border, uppercase, with an
+                       AUTO marker so it reads as computed, not manually applied. */
                     <span
-                      title="Urgent lead with a schedule requirement due today or overdue"
-                      className="inline-flex items-center gap-1 rounded-full border border-rose-500/50 bg-rose-500/15 px-2 py-0.5 text-[10px] font-semibold text-rose-700 dark:text-rose-300 animate-pulse"
+                      title="Auto tag: urgent lead with a schedule requirement due today or overdue"
+                      className="inline-flex items-center gap-1 rounded-md border border-dashed border-rose-500/70 bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-700 dark:text-rose-300 animate-pulse"
                     >
                       <AlertTriangle className="h-3 w-3" />
                       Need Attention
+                      <span className="ml-0.5 rounded-sm bg-rose-500/25 px-1 py-px text-[7px] font-bold leading-none tracking-normal">AUTO</span>
                     </span>
                   )}
                   {lead.cs_tag === "booked" && lead.booked_at && (
