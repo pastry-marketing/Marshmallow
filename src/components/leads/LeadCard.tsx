@@ -20,7 +20,6 @@ import {
   Pencil,
   MessageSquare,
   Wrench,
-  ChevronDown,
   CalendarDays,
   Ban,
   CalendarClock,
@@ -77,7 +76,7 @@ import { createPaymentRequest } from "@/lib/payment-requests";
 import type { LeadCancellationRequest } from "@/types";
 import { optimizeImageForUpload } from "@/lib/image-upload";
 import { getAssignableLeadTags, isQuotationMaster } from "@/lib/lead-tags";
-import { countTechs, formatTechCount } from "@/lib/lead-techs";
+import { countTechs } from "@/lib/lead-techs";
 import { dispatchLeadStatusNotification } from "@/lib/lead-notifications";
 import { saveLeadTag } from "@/lib/lead-tag-actions";
 import { canSeeTechDetails, isOperatorRole } from "@/lib/access";
@@ -562,6 +561,10 @@ function NoteCollapsible({
   const dotColor =
     tone === "cs" ? "bg-amber-500" : tone === "processor" ? "bg-sky-500" : tone === "opr" ? "bg-emerald-500" : "bg-primary";
 
+  // Compact label so all four note toggles fit on one row of a narrow card.
+  const shortLabel =
+    noteType === "general" ? "Notes" : noteType === "cs" ? "CS" : noteType === "processor" ? "Processor" : "OPR";
+
   const handleMouseEnter = () => {
     if (leaveTimerRef.current) {
       clearTimeout(leaveTimerRef.current);
@@ -597,7 +600,7 @@ function NoteCollapsible({
 
   return (
     <div
-      className="min-w-[112px] flex-1"
+      className="min-w-0 flex-1"
       onMouseEnter={handleMouseEnter}
       onMouseMove={handleMouseMove}
       onMouseLeave={handleMouseLeave}
@@ -632,37 +635,24 @@ function NoteCollapsible({
                 setOpen(true);
               }
             }}
-            className={`w-full justify-between h-11 rounded-xl border px-3 text-[12px] text-muted-foreground hover:text-foreground ${toneClasses}`}
+            title={hasNotes ? `${label} — has notes` : label}
+            className={`flex w-full items-center justify-center gap-1.5 h-11 rounded-xl border px-1.5 text-[11px] text-muted-foreground hover:text-foreground ${open ? "border-primary/30" : ""} ${toneClasses}`}
           >
-            <span className="flex items-center gap-2">
-              <span className="relative inline-flex h-3.5 w-3.5 items-center justify-center">
-                <MessageSquare className="h-3.5 w-3.5" />
-                {hasNotes && (
-                  <span className="absolute -right-1 -top-1 flex h-2 w-2">
-                    <span
-                      className={`absolute inline-flex h-full w-full animate-ping rounded-full ${dotColor} opacity-70`}
-                    />
-                    <span className={`relative inline-flex h-2 w-2 rounded-full ${dotColor}`} />
-                  </span>
-                )}
-              </span>
-              <span className="font-medium">{label}</span>
+            <span className="relative inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+              <MessageSquare className="h-3.5 w-3.5" />
+              {hasNotes && (
+                <span className="absolute -right-1 -top-1 flex h-2 w-2">
+                  <span className={`absolute inline-flex h-full w-full animate-ping rounded-full ${dotColor} opacity-70`} />
+                  <span className={`relative inline-flex h-2 w-2 rounded-full ${dotColor}`} />
+                </span>
+              )}
             </span>
-            {hasNotes && (
-              <span className={`flex items-center gap-1.5 text-[10px] font-semibold ${tone === "cs" ? "text-amber-600 dark:text-amber-300" : tone === "processor" ? "text-sky-600 dark:text-sky-300" : tone === "opr" ? "text-emerald-600 dark:text-emerald-300" : "text-primary"}`}>
-                {/* Techs are recorded inside the processor thread, so the count is worth seeing
-                    without opening it. */}
-                {techCount > 0 && (
-                  <span className="rounded-full bg-sky-500/12 px-1.5 py-0.5 text-sky-700 dark:bg-sky-400/15 dark:text-sky-200">
-                    {formatTechCount(techCount)}
-                  </span>
-                )}
-                has notes
+            <span className="min-w-0 truncate font-medium">{shortLabel}</span>
+            {techCount > 0 && (
+              <span className="shrink-0 rounded-full bg-sky-500/15 px-1 py-px text-[9px] font-semibold text-sky-700 dark:bg-sky-400/15 dark:text-sky-200">
+                {techCount}
               </span>
             )}
-            <motion.span animate={{ rotate: open ? 180 : 0 }} transition={{ duration: reduceMotion ? 0 : 0.35, ease: "easeInOut" }}>
-              <ChevronDown className="h-3.5 w-3.5" />
-            </motion.span>
           </Button>
         </PopoverTrigger>
 
@@ -672,9 +662,9 @@ function NoteCollapsible({
               forceMount 
               asChild
               side="bottom"
-              align="start"
+              align="center"
               sideOffset={8}
-              avoidCollisions={false}
+              collisionPadding={12}
               className="z-[100] w-[min(360px,calc(100vw-2rem))] p-2"
               onInteractOutside={(e) => {
                 if (pinned) {
@@ -1950,7 +1940,7 @@ function LeadCard({
           </div>
         )}
 
-        <div className="space-y-2 px-4 pt-3">
+        <div className="flex gap-1.5 px-4 pt-3">
           {renderCollapsible({
             open: generalOpen,
             setOpen: setGeneralOpen,
