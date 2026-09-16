@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { format } from "date-fns";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,13 @@ export interface ExportOptions {
   dateRangePreset: "all_time" | "today" | "yesterday" | "7d" | "30d" | "custom";
   customDateRange: DateRange | undefined;
   scope: "all" | "current";
+  status: string;
   limit: number | "all";
+}
+
+export interface StatusExportOption {
+  value: string;
+  label: string;
 }
 
 interface ExportLeadsDialogProps {
@@ -24,6 +30,9 @@ interface ExportLeadsDialogProps {
   onExport: (options: ExportOptions) => Promise<void>;
   isExporting: boolean;
   totalFiltered: number;
+  statusOptions: StatusExportOption[];
+  /** The status tab currently open, used as the default status for the export. */
+  currentStatus: string;
 }
 
 export default function ExportLeadsDialog({
@@ -32,12 +41,20 @@ export default function ExportLeadsDialog({
   onExport,
   isExporting,
   totalFiltered,
+  statusOptions,
+  currentStatus,
 }: ExportLeadsDialogProps) {
   const [formatType, setFormatType] = useState<"csv" | "xlsx">("csv");
   const [dateRangePreset, setDateRangePreset] = useState<ExportOptions["dateRangePreset"]>("all_time");
   const [customDateRange, setCustomDateRange] = useState<DateRange | undefined>();
   const [scope, setScope] = useState<"all" | "current">("current");
+  const [status, setStatus] = useState<string>(currentStatus);
   const [limit, setLimit] = useState<number | "all">("all");
+
+  // Default the export to whichever status section the user opened it from.
+  useEffect(() => {
+    if (open) setStatus(currentStatus);
+  }, [open, currentStatus]);
 
   const handleExport = () => {
     onExport({
@@ -45,6 +62,7 @@ export default function ExportLeadsDialog({
       dateRangePreset,
       customDateRange,
       scope,
+      status,
       limit,
     });
   };
@@ -82,6 +100,23 @@ export default function ExportLeadsDialog({
               <SelectContent>
                 <SelectItem value="current">Current Search & Filters ({totalFiltered} leads)</SelectItem>
                 <SelectItem value="all">Entire Database (All Leads)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Status</Label>
+            <Select value={status} onValueChange={setStatus}>
+              <SelectTrigger className="h-10">
+                <SelectValue placeholder="Select status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Statuses</SelectItem>
+                {statusOptions.map((s) => (
+                  <SelectItem key={s.value} value={s.value}>
+                    {s.label}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>

@@ -368,6 +368,16 @@ export default function LeadsPage() {
     return result;
   }, [currentLeads, deferredSearch, safeStatusFilter, scheduleDateRange, user?.id, role]);
 
+  // Status choices for the export dialog — the same set the on-page status
+  // filter offers, so a user can export any status section they can see.
+  const statusExportOptions = useMemo(
+    () =>
+      ALL_LEAD_STATUSES.filter(
+        (s) => allowedStatuses.has(s) || (isOperatorRole(role) && leads.some((l) => Boolean(l.cs_tag) && l.status === s)),
+      ).map((s) => ({ value: s, label: STATUS_LABELS[s] })),
+    [allowedStatuses, role, leads],
+  );
+
   const totalPages = Math.ceil(filtered.length / pageSize);
   const paged = filtered.slice(page * pageSize, (page + 1) * pageSize);
   useEffect(() => {
@@ -544,6 +554,12 @@ export default function LeadsPage() {
 
       let baseLeads = options.scope === "current" ? filtered : allLeadsList;
 
+      // Apply Status Filter (from the export dialog). Lets the user export a
+      // specific status section even from the "Entire Database" scope.
+      if (options.status && options.status !== "all") {
+        baseLeads = baseLeads.filter((lead) => lead?.status === options.status);
+      }
+
       // Apply Date Filter
       if (options.dateRangePreset !== "all_time") {
         const now = new Date();
@@ -634,7 +650,7 @@ export default function LeadsPage() {
           "Customer Name": lead?.customer_name,
           "Customer Phone": lead?.customer_phone,
           "Customer Address": lead?.address,
-          "Date Received": lead?.created_at ? new Date(lead.created_at).toLocaleString() : "",
+          "Date Created": lead?.created_at ? new Date(lead.created_at).toLocaleString() : "",
           "Created By": lead?.created_by_name || (lead?.created_by ? profiles[lead.created_by] : "") || "",
           "Schedule Requirement": lead?.customer_schedule_requirements,
           "Assigned Technician": lead?.tech_name || "",
@@ -803,6 +819,8 @@ export default function LeadsPage() {
           onExport={handleExportData}
           isExporting={isExporting}
           totalFiltered={filtered.length}
+          currentStatus={safeStatusFilter}
+          statusOptions={statusExportOptions}
         />
 
           <InstallExtensionDialog
