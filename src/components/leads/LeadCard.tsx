@@ -21,7 +21,6 @@ import {
   MessageSquare,
   Wrench,
   ChevronDown,
-  Image as ImageIcon,
   CalendarDays,
   Ban,
   CalendarClock,
@@ -901,7 +900,6 @@ function LeadCard({
   const isPaid = lead.status === "paid";
   const isUrgent = lead.status === "urgent_job";
   const canCompleteCopy = isAdmin || isProcessor || isOpr;
-  const pictureLabel = photoCount === 1 ? "Picture attached" : "Pictures attached";
   const currentTag = lead.cs_tag ?? null;
   const assignableTags = getAssignableLeadTags(role, { isQuotationMaster: profile?.is_quotation_master });
 
@@ -1746,10 +1744,7 @@ function LeadCard({
             {lead.service_type && (
               <div className="flex items-start gap-3 py-3 text-[13px] text-foreground/90">
                 <Wrench className="mt-0.5 h-4 w-4 shrink-0 text-primary/70" />
-                <div className="min-w-0 flex-1">
-                  <p className="text-[10px] font-semibold uppercase text-muted-foreground/72">Service</p>
-                  <p className="mt-0.5 break-words leading-5">{lead.service_type}</p>
-                </div>
+                <p className="min-w-0 flex-1 break-words leading-5">{lead.service_type}</p>
                 <CopyValueButton value={lead.service_type} label="Service" className="h-7 w-7 shrink-0 rounded-lg" />
               </div>
             )}
@@ -1758,8 +1753,7 @@ function LeadCard({
               <div className="flex items-start gap-3 py-3 text-[13px] text-foreground/90">
                 <Clipboard className="mt-0.5 h-4 w-4 shrink-0 text-primary/70" />
                 <div className="min-w-0 flex-1">
-                  <p className="text-[10px] font-semibold uppercase text-muted-foreground/72">Service Details</p>
-                  <p className={`mt-0.5 whitespace-pre-wrap break-words leading-5 ${serviceDetailsExpanded ? "" : "line-clamp-2"}`}>
+                  <p className={`whitespace-pre-wrap break-words leading-5 ${serviceDetailsExpanded ? "" : "line-clamp-2"}`}>
                     {serviceDetails}
                   </p>
                   {serviceDetailsLong && (
@@ -1784,10 +1778,7 @@ function LeadCard({
             {lead.address && (
               <div className="flex items-start gap-3 py-3 text-[13px] text-foreground/90">
                 <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-primary/70" />
-                <div className="min-w-0 flex-1">
-                  <p className="text-[10px] font-semibold uppercase text-muted-foreground/72">Address</p>
-                  <p className="mt-0.5 break-words leading-5">{expandStateAbbreviation(lead.address)}</p>
-                </div>
+                <p className="min-w-0 flex-1 break-words leading-5">{expandStateAbbreviation(lead.address)}</p>
                 <CopyValueButton value={expandStateAbbreviation(lead.address)} label="Address" className="h-7 w-7 shrink-0 rounded-lg" />
               </div>
             )}
@@ -1799,16 +1790,10 @@ function LeadCard({
               >
                 <Icon className="mt-0.5 h-4 w-4 shrink-0 text-primary/70" />
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/72">{label}</p>
-                    <CopyValueButton value={value} label={label} className="h-6 w-6 rounded-full" />
-                  </div>
                   {key === "landline" ? (
-                    <div className="mt-1 flex min-w-0 items-center gap-1.5">
-                      <span className="truncate text-[13px] font-medium leading-5">{value}</span>
-                    </div>
+                    <span className="truncate text-[13px] font-medium leading-5">{value}</span>
                   ) : key === "technician" && lead.tech_number ? (
-                    <div className={`mt-1 text-[13px] leading-5 text-foreground/90 ${wrap ? "break-words" : "truncate"}`}>
+                    <div className={`text-[13px] leading-5 text-foreground/90 ${wrap ? "break-words" : "truncate"}`}>
                       {lead.tech_name ? <span>{lead.tech_name} {" · "}</span> : null}
                       <span>{lead.tech_number}</span>
                     </div>
@@ -1817,16 +1802,17 @@ function LeadCard({
                       href={value}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="mt-1 text-[13px] leading-5 text-primary hover:underline inline-flex items-center gap-1 font-medium"
+                      className="text-[13px] leading-5 text-primary hover:underline inline-flex items-center gap-1 font-medium"
                       onClick={(e) => e.stopPropagation()}
                     >
                       <span>Quo Chat Thread</span>
                       <ExternalLink className="h-3 w-3" />
                     </a>
                   ) : (
-                    <p className={`mt-1 text-[13px] leading-5 text-foreground/90 ${wrap ? "break-words" : "truncate"}`}>{value}</p>
+                    <p className={`text-[13px] leading-5 text-foreground/90 ${wrap ? "break-words" : "truncate"}`}>{value}</p>
                   )}
                 </div>
+                <CopyValueButton value={value} label={label} className="h-7 w-7 shrink-0 rounded-lg" />
               </div>
             ))}
           </div>
@@ -2012,33 +1998,19 @@ function LeadCard({
               hasNotes: hasNotes.opr,
             })}
 
-          {photoCount > 0 && (
-            <div className="crm-lead-card-soft flex items-center justify-between rounded-xl border border-primary/12 px-3 py-2 text-[11px] font-semibold text-primary/85">
-              <span className="inline-flex items-center gap-1.5">
-                <ImageIcon className="h-3.5 w-3.5" />
-                {pictureLabel}
-              </span>
-              <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] text-primary">{photoCount}</span>
-            </div>
-          )}
         </div>
 
         <div className="mt-3 px-4">
-          {(lead.last_edited_by || lead.last_edited_by_name) && (
-            <div className="rounded-[20px] border border-warning/26 bg-[radial-gradient(circle_at_top_left,hsl(48_100%_84%/0.16),transparent_32%),linear-gradient(180deg,hsl(42_100%_98%/0.88),hsl(40_100%_95%/0.72))] px-3.5 py-2.5 shadow-[0_18px_26px_-22px_rgba(245,158,11,0.18)] dark:border-warning/20 dark:bg-[linear-gradient(180deg,hsl(38_24%_21%/0.94),hsl(36_22%_18%/0.9))]">
+          <div className="crm-lead-card-inner space-y-1 rounded-[18px] px-3.5 py-2.5 shadow-[0_16px_24px_-22px_rgba(59,130,246,0.14)] dark:shadow-none">
+            {(lead.last_edited_by || lead.last_edited_by_name) && (
               <div className="flex items-center gap-2">
-                <ShieldCheck className="h-3.5 w-3.5 text-warning/80" />
+                <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-warning/80" />
                 <p className="text-[11px] text-muted-foreground/90">
                   Last edited <span className="font-medium text-foreground">{formatDateTime(lead.updated_at)}</span> by{" "}
                   <span className="font-semibold text-foreground">{(lead.last_edited_by ? profiles[lead.last_edited_by] : null) || lead.last_edited_by_name || "Unknown"}</span>
                 </p>
               </div>
-            </div>
-          )}
-        </div>
-
-        <div className="px-4 pt-3">
-          <div className="crm-lead-card-inner rounded-[18px] px-3 py-2 shadow-[0_16px_24px_-22px_rgba(59,130,246,0.14)] dark:shadow-none">
+            )}
             <p className="text-[10px] text-muted-foreground/80">
               Created by <span className="font-semibold text-foreground">{(lead.created_by ? profiles[lead.created_by] : null) || lead.created_by_name || "Deleted user"}</span>{" "}
               · {formatDate(lead.created_at)}
