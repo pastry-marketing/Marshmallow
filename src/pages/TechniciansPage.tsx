@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   AlertDialog,
@@ -286,6 +287,7 @@ export default function TechniciansPage() {
   const [deleteTech, setDeleteTech] = useState<TechnicianRecord | null>(null);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [togglingTechId, setTogglingTechId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [codeFilter, setCodeFilter] = useState<string>("all");
@@ -428,6 +430,27 @@ export default function TechniciansPage() {
       return next;
     });
     await invalidateAll();
+  };
+
+  const handleActiveChange = async (tech: TechnicianRecord, active: boolean) => {
+    if (togglingTechId) return;
+    setTogglingTechId(tech.id);
+    try {
+      const { data, error } = await supabase
+        .from("technicians")
+        .update({ is_active: active })
+        .eq("id", tech.id)
+        .select("id")
+        .single();
+      if (error || !data) {
+        toast({ title: "Could not update technician", description: error?.message ?? "Please try again.", variant: "destructive" });
+        return;
+      }
+      await invalidateAll();
+      toast({ title: active ? "Technician active" : "Technician inactive", description: active ? "The technician is visible on the map." : "The technician moved to the bottom of the list and is hidden from the map." });
+    } finally {
+      setTogglingTechId(null);
+    }
   };
 
   // Keep the selection map in sync with the currently-visible page rows so
@@ -933,6 +956,7 @@ export default function TechniciansPage() {
                   </span>
                 </TableHead>
                 <TableHead>Phone Number</TableHead>
+                <TableHead>Active</TableHead>
                 <TableHead>
                   <span className="inline-flex items-center">
                     Service
@@ -968,14 +992,14 @@ export default function TechniciansPage() {
             <TableBody>
               {paginatedQuery.isPending && rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={10} className="text-center text-sm text-muted-foreground py-8">
+                  <TableCell colSpan={11} className="text-center text-sm text-muted-foreground py-8">
                     Loading…
                   </TableCell>
                 </TableRow>
               )}
               {paginatedQuery.isError && rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={10} className="text-center text-sm py-10">
+                  <TableCell colSpan={11} className="text-center text-sm py-10">
                     <div className="flex flex-col items-center gap-2">
                       <span className="text-destructive">
                         {(paginatedQuery.error as Error)?.message ?? "Failed to load technicians."}
@@ -989,7 +1013,7 @@ export default function TechniciansPage() {
               )}
               {!paginatedQuery.isPending && !paginatedQuery.isError && rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={10} className="text-center text-sm text-muted-foreground py-10">
+                  <TableCell colSpan={11} className="text-center text-sm text-muted-foreground py-10">
                     {isSearching || codeFilter !== "all" || hasColumnFilters
                       ? "No technicians match your filters."
                       : "No technicians yet. Add one manually or import from CSV/XLSX."}
@@ -1003,7 +1027,7 @@ export default function TechniciansPage() {
                   <TableRow
                     key={t.id}
                     data-state={isSelected ? "selected" : undefined}
-                    className={isSelected ? "bg-primary/5 border-l-2 border-l-primary" : undefined}
+                    className={isSelected ? "bg-primary/5 border-l-2 border-l-primary" : t.is_active === false ? "opacity-60" : undefined}
                   >
                     <TableCell className="align-middle">
                       <Checkbox
@@ -1028,6 +1052,17 @@ export default function TechniciansPage() {
                       ) : (
                         <span className="text-muted-foreground text-xs">No phone number</span>
                       )}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        <Switch
+                          checked={t.is_active !== false}
+                          onCheckedChange={(active) => void handleActiveChange(t, active)}
+                          disabled={togglingTechId !== null}
+                          aria-label={`${t.is_active === false ? "Activate" : "Deactivate"} ${t.name}`}
+                        />
+                        <span className="text-xs text-muted-foreground">{t.is_active === false ? "Off" : "On"}</span>
+                      </div>
                     </TableCell>
                     <TableCell>{t.service || <span className="text-muted-foreground">—</span>}</TableCell>
                     <TableCell className="max-w-[280px] truncate" title={t.area}>{t.area}</TableCell>

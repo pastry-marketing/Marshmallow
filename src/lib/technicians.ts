@@ -2,9 +2,9 @@ import { supabase } from "@/integrations/supabase/client";
 import type { TechnicianRecord } from "@/components/technicians/TechnicianDialog";
 
 export const TECHNICIAN_SELECT =
-  "id, name, area, service, notes, chat_link, phone_number, latitude, longitude, code, opr_code, created_at";
+  "id, name, area, service, notes, chat_link, phone_number, latitude, longitude, code, opr_code, is_active, created_at";
 export const TECHNICIAN_FALLBACK_SELECT =
-  "id, name, area, service, notes, chat_link, phone_number, latitude, longitude";
+  "id, name, area, service, notes, chat_link, phone_number, latitude, longitude, is_active";
 
 /** How the technician list is scoped for the requesting user. */
 export interface TechnicianVisibility {
@@ -25,6 +25,7 @@ export async function fetchAllTechnicians(): Promise<TechnicianRecord[]> {
     let res = await supabase
       .from("technicians")
       .select(selectCols as any)
+      .order("is_active", { ascending: false })
       .order("name", { ascending: true })
       .order("id", { ascending: true })
       .range(from, to);
@@ -34,6 +35,7 @@ export async function fetchAllTechnicians(): Promise<TechnicianRecord[]> {
       res = await supabase
         .from("technicians")
         .select(TECHNICIAN_FALLBACK_SELECT as any)
+        .order("is_active", { ascending: false })
         .order("name", { ascending: true })
         .order("id", { ascending: true })
         .range(from, to);
@@ -45,6 +47,7 @@ export async function fetchAllTechnicians(): Promise<TechnicianRecord[]> {
     if (rows.length < PAGE_SIZE) break;
   }
   return Array.from(byId.values()).sort((a, b) =>
+    Number(b.is_active !== false) - Number(a.is_active !== false) ||
     (a.name ?? "").localeCompare(b.name ?? "", undefined, { sensitivity: "base" }),
   );
 }
@@ -61,6 +64,7 @@ export function upsertTechnicianInList(
   const base = list ? list.filter((t) => t.id !== tech.id) : [];
   base.push(tech);
   return base.sort((a, b) =>
+    Number(b.is_active !== false) - Number(a.is_active !== false) ||
     (a.name ?? "").localeCompare(b.name ?? "", undefined, { sensitivity: "base" }),
   );
 }
@@ -138,13 +142,13 @@ export async function fetchTechniciansPage(params: {
     const totalCount = rows.length > 0 ? Number(rows[0].total_count ?? 0) : 0;
 
     // Attach opr_code / created_at (and legacy code) for the returned rows.
-    let extra = new Map<string, { code: string | null; opr_code: string | null; created_at: string | null }>();
+    let extra = new Map<string, { code: string | null; opr_code: string | null; is_active: boolean; created_at: string | null }>();
     if (rows.length > 0) {
       try {
         const ids = rows.map((r) => r.id);
-        const { data: ex } = await supabase.from("technicians").select("id, code, opr_code, created_at").in("id", ids);
-        const exRows = (ex ?? []) as Array<{ id: string; code: string | null; opr_code: string | null; created_at: string | null }>;
-        extra = new Map(exRows.map((c) => [c.id, { code: c.code ?? null, opr_code: c.opr_code ?? null, created_at: c.created_at ?? null }]));
+        const { data: ex } = await supabase.from("technicians").select("id, code, opr_code, is_active, created_at").in("id", ids);
+        const exRows = (ex ?? []) as Array<{ id: string; code: string | null; opr_code: string | null; is_active: boolean; created_at: string | null }>;
+        extra = new Map(exRows.map((c) => [c.id, { code: c.code ?? null, opr_code: c.opr_code ?? null, is_active: c.is_active, created_at: c.created_at ?? null }]));
       } catch {
         // ignore if columns missing
       }
@@ -160,6 +164,7 @@ export async function fetchTechniciansPage(params: {
       phone_number: r.phone_number,
       latitude: r.latitude,
       longitude: r.longitude,
+      is_active: extra.get(r.id)?.is_active ?? true,
       code: extra.get(r.id)?.code ?? null,
       opr_code: extra.get(r.id)?.opr_code ?? null,
       created_at: extra.get(r.id)?.created_at ?? null,
@@ -198,6 +203,7 @@ export async function fetchTechniciansPage(params: {
     }
   }
 
+  query = query.order("is_active", { ascending: false });
   if (sortBy === "name_desc") query = query.order("name", { ascending: false }).order("id", { ascending: true });
   else if (sortBy === "code_asc") query = query.order("opr_code", { ascending: true, nullsFirst: false }).order("name", { ascending: true });
   else if (sortBy === "code_desc") query = query.order("opr_code", { ascending: false, nullsFirst: false }).order("name", { ascending: true });

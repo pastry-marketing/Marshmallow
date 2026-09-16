@@ -20,6 +20,7 @@ import { AreaCombobox } from "@/components/technicians/AreaCombobox";
 export interface TechnicianRecord {
   id: string;
   name: string;
+  is_active: boolean;
   area: string;
   service: string | null;
   notes: string | null;
@@ -158,7 +159,7 @@ export function TechnicianDialog({ open, onOpenChange, technician, onSaved }: Pr
         longitude,
       };
 
-      const SELECT = "id, name, area, service, notes, chat_link, phone_number, latitude, longitude, opr_code, created_at";
+      const SELECT = "id, name, area, service, notes, chat_link, phone_number, latitude, longitude, opr_code, is_active, created_at";
       let saved: TechnicianRecord | null = null;
       let error: { message: string; code?: string } | null = null;
       if (technician) {

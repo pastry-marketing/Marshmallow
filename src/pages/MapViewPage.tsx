@@ -747,7 +747,7 @@ export default function MapViewPage() {
 
   const searchableTechs = useMemo<SearchableTech[]>(() => {
     if (!zipDatasetReady) return [];
-    return (techniciansQuery.data ?? []).map((t) => {
+    return (techniciansQuery.data ?? []).filter((t) => t.is_active !== false).map((t) => {
       if (isValidLatLng(t.latitude, t.longitude)) {
         return {
           ...t,
@@ -777,7 +777,7 @@ export default function MapViewPage() {
 
   const services = useMemo(() => {
     const set = new Set<string>();
-    for (const t of techniciansQuery.data ?? []) if (t.service) set.add(t.service);
+    for (const t of techniciansQuery.data ?? []) if (t.is_active !== false && t.service) set.add(t.service);
     return Array.from(set).sort();
   }, [techniciansQuery.data]);
 
