@@ -1775,6 +1775,7 @@ export type Database = {
       can_use_quick_chat: { Args: { _user_id: string }; Returns: boolean }
       cron_quo_reconcile_sync: { Args: never; Returns: undefined }
       cron_quo_sync_contacts: { Args: never; Returns: undefined }
+      current_user_opr_code: { Args: never; Returns: string }
       delete_lead_by_admin: { Args: { target_lead_id: string }; Returns: Json }
       dispatch_lead_status_notification: {
         Args: {
@@ -1822,6 +1823,7 @@ export type Database = {
           }
       healthcheck: { Args: never; Returns: Json }
       is_admin_user: { Args: { check_user_id: string }; Returns: boolean }
+      is_assigned_opr_code: { Args: { _opr_code: string }; Returns: boolean }
       list_opr_codes: {
         Args: never
         Returns: {
