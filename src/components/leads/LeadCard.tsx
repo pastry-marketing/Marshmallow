@@ -13,7 +13,6 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
-  UserCircle,
   Phone,
   MapPin,
   UserRound,
@@ -50,7 +49,6 @@ import {
 import NoteThread from "./NoteThread";
 import PaymentDialog from "./PaymentDialog";
 import LeadShareDialog from "./LeadShareDialog";
-import StatusBadge from "./StatusBadge";
 import CancelledStatusBadge from "./CancelledStatusBadge";
 import NearbyUrgentLeads from "./NearbyUrgentLeads";
 import type { ProximityLead } from "@/lib/lead-proximity";
@@ -600,7 +598,7 @@ function NoteCollapsible({
 
   return (
     <div
-      className="w-full"
+      className="min-w-[112px] flex-1"
       onMouseEnter={handleMouseEnter}
       onMouseMove={handleMouseMove}
       onMouseLeave={handleMouseLeave}
@@ -678,7 +676,7 @@ function NoteCollapsible({
               align="start"
               sideOffset={8}
               avoidCollisions={false}
-              className="w-[var(--radix-popover-trigger-width)] p-2 z-[100]"
+              className="z-[100] w-[min(360px,calc(100vw-2rem))] p-2"
               onInteractOutside={(e) => {
                 if (pinned) {
                   e.preventDefault(); 
@@ -988,28 +986,14 @@ function LeadCard({
     }
   };
 
-  const detailRows = [
-    {
-      key: "phone",
-      label: "Contact",
-      value: lead.customer_phone,
-      icon: Phone,
-      wrap: false,
-    },
+  const secondaryDetailRows = [
     // A second number, marked so nobody tries to text it.
     {
       key: "landline",
-      label: "Contact",
+      label: "Landline",
       value: lead.customer_landline ?? "",
       icon: Phone,
       wrap: false,
-    },
-    {
-      key: "address",
-      label: "Address",
-      value: expandStateAbbreviation(lead.address),
-      icon: MapPin,
-      wrap: true,
     },
     // CS Admins never see technician details.
     ...(canSeeTechDetails(role)
