@@ -1543,16 +1543,11 @@ function LeadCard({
           <div className="absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r from-destructive via-destructive/70 to-transparent" />
         )}
 
-        <div className="relative p-4 pb-3">
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex min-w-0 items-start gap-3">
-              <div className="crm-lead-card-inner flex h-11 w-11 shrink-0 items-center justify-center rounded-[18px] border border-primary/16 shadow-[0_16px_24px_-22px_rgba(56,189,248,0.24),inset_0_1px_0_rgba(255,255,255,0.75)] dark:border-primary/18">
-                <UserCircle className="h-5 w-5 text-primary/75" />
-              </div>
-
-              <div className="min-w-0">
+        <div className="relative px-4 pb-3 pt-4">
+          <div className="flex items-start justify-between gap-3 border-b border-border/55 pb-3">
+            <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <p className="truncate text-[14px] font-semibold tracking-[-0.015em] text-foreground">
+                  <p className="truncate text-lg font-semibold text-foreground">
                     {lead.customer_name}
                   </p>
                   {lead.source_url && (
@@ -1567,14 +1562,9 @@ function LeadCard({
                       QUO
                     </a>
                   )}
-                  {lead.service_type && (
-                    <span className="crm-lead-card-soft inline-block max-w-[180px] truncate rounded-full border border-sky-200/90 px-2.5 py-1 text-[10px] font-semibold text-foreground/84 shadow-[0_16px_28px_-18px_rgba(59,130,246,0.18)] dark:border-sky-400/18 dark:text-foreground/86">
-                      {lead.service_type}
-                    </span>
-                  )}
                 </div>
 
-                <div className="mt-1 flex items-center gap-2 flex-wrap">
+                <div className="mt-1.5 flex items-center gap-2 flex-wrap">
                   <p className="font-mono text-[10px] text-muted-foreground/70">{lead.job_id}</p>
                   {lead.number_name && (
                     <span className="inline-flex max-w-[160px] items-center gap-1 truncate rounded-full border border-primary/15 bg-primary/[0.07] px-2 py-0.5 text-[10px] font-semibold text-white">
@@ -1691,7 +1681,6 @@ function LeadCard({
                     );
                   })()}
                 </div>
-              </div>
             </div>
 
 
@@ -1745,36 +1734,78 @@ function LeadCard({
             </div>
           )}
 
-          <div className="mt-2 grid gap-2">
-            {detailRows.map(({ key, label, value, icon: Icon, wrap }) => (
+          <div className="divide-y divide-border/50">
+            {lead.customer_phone && (
+              <div className="flex items-start gap-3 py-3 text-[13px] text-foreground/90">
+                <Phone className="mt-0.5 h-4 w-4 shrink-0 text-primary/70" />
+                <p className="min-w-0 flex-1 truncate font-medium">{lead.customer_phone}</p>
+                <CopyValueButton value={lead.customer_phone} label="Phone number" className="h-7 w-7 shrink-0 rounded-lg" />
+              </div>
+            )}
+
+            {lead.service_type && (
+              <div className="flex items-start gap-3 py-3 text-[13px] text-foreground/90">
+                <Wrench className="mt-0.5 h-4 w-4 shrink-0 text-primary/70" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-[10px] font-semibold uppercase text-muted-foreground/72">Service</p>
+                  <p className="mt-0.5 break-words leading-5">{lead.service_type}</p>
+                </div>
+                <CopyValueButton value={lead.service_type} label="Service" className="h-7 w-7 shrink-0 rounded-lg" />
+              </div>
+            )}
+
+            {serviceDetails && (
+              <div className="flex items-start gap-3 py-3 text-[13px] text-foreground/90">
+                <Clipboard className="mt-0.5 h-4 w-4 shrink-0 text-primary/70" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-[10px] font-semibold uppercase text-muted-foreground/72">Service Details</p>
+                  <p className={`mt-0.5 whitespace-pre-wrap break-words leading-5 ${serviceDetailsExpanded ? "" : "line-clamp-2"}`}>
+                    {serviceDetails}
+                  </p>
+                  {serviceDetailsLong && (
+                    <Button
+                      type="button"
+                      variant="link"
+                      size="sm"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setServiceDetailsExpanded((value) => !value);
+                      }}
+                      className="mt-0 h-auto p-0 text-[11px] font-semibold"
+                    >
+                      {serviceDetailsExpanded ? "Show less" : "Show more"}
+                    </Button>
+                  )}
+                </div>
+                <CopyValueButton value={serviceDetails} label="Service Details" className="h-7 w-7 shrink-0 rounded-lg" />
+              </div>
+            )}
+
+            {lead.address && (
+              <div className="flex items-start gap-3 py-3 text-[13px] text-foreground/90">
+                <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-primary/70" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-[10px] font-semibold uppercase text-muted-foreground/72">Address</p>
+                  <p className="mt-0.5 break-words leading-5">{expandStateAbbreviation(lead.address)}</p>
+                </div>
+                <CopyValueButton value={expandStateAbbreviation(lead.address)} label="Address" className="h-7 w-7 shrink-0 rounded-lg" />
+              </div>
+            )}
+
+            {secondaryDetailRows.map(({ key, label, value, icon: Icon, wrap }) => (
               <div
                 key={key}
-                className="crm-lead-card-inner flex items-start gap-3 rounded-[20px] px-3 py-2.5 text-[13px] text-foreground/88 shadow-[0_16px_24px_-22px_rgba(59,130,246,0.12),inset_0_1px_0_rgba(255,255,255,0.75)] dark:shadow-none"
+                className="flex items-start gap-3 py-3 text-[13px] text-foreground/90"
               >
-                <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-xl border border-primary/12 bg-primary/[0.06] dark:border-primary/18 dark:bg-primary/[0.08]">
-                  <Icon className="h-3.5 w-3.5 text-primary/70" />
-                </div>
+                <Icon className="mt-0.5 h-4 w-4 shrink-0 text-primary/70" />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/72">{label}</p>
                     <CopyValueButton value={value} label={label} className="h-6 w-6 rounded-full" />
                   </div>
-                  {key === "phone" ? (
-                    <a href={`tel:${value}`} className={`mt-1 text-[13px] font-medium leading-5 text-primary hover:underline inline-block ${wrap ? "break-words" : "truncate"}`} onClick={(e) => e.stopPropagation()}>
-                      {value}
-                    </a>
-                  ) : key === "landline" ? (
+                  {key === "landline" ? (
                     <div className="mt-1 flex min-w-0 items-center gap-1.5">
-                      <span className="shrink-0 rounded-full border border-border/70 bg-muted/60 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                        Landline
-                      </span>
-                      <a
-                        href={`tel:${value}`}
-                        className="truncate text-[13px] font-medium leading-5 text-primary hover:underline"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        {value}
-                      </a>
+                      <span className="truncate text-[13px] font-medium leading-5">{value}</span>
                     </div>
                   ) : key === "technician" && lead.tech_number ? (
                     <div className={`mt-1 text-[13px] leading-5 text-foreground/90 ${wrap ? "break-words" : "truncate"}`}>
@@ -1799,60 +1830,16 @@ function LeadCard({
               </div>
             ))}
           </div>
-
-          {serviceDetails && (
-            <div className="crm-lead-card-inner mt-2 flex items-start gap-3 rounded-[20px] px-3 py-2.5 text-[13px] text-foreground/88 shadow-[0_16px_24px_-22px_rgba(59,130,246,0.12),inset_0_1px_0_rgba(255,255,255,0.75)] dark:shadow-none">
-              <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-xl border border-primary/12 bg-primary/[0.06] dark:border-primary/18 dark:bg-primary/[0.08]">
-                <Clipboard className="h-3.5 w-3.5 text-primary/70" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/72">Service Details</p>
-                  <CopyValueButton value={serviceDetails} label="Service Details" className="h-6 w-6 rounded-full" />
-                </div>
-                <p
-                  className={`mt-1 whitespace-pre-wrap break-words text-[13px] leading-5 text-foreground/90 ${
-                    serviceDetailsExpanded ? "" : "line-clamp-2"
-                  }`}
-                >
-                  {serviceDetails}
-                </p>
-                {serviceDetailsLong && (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setServiceDetailsExpanded((v) => !v);
-                    }}
-                    className="mt-1 text-[11px] font-semibold text-primary hover:underline"
-                  >
-                    {serviceDetailsExpanded ? "Show less" : "Show more"}
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
         </div>
 
         {(lead.payment_screenshot_url || photoPaths.length > 0) && (
-          <div className="relative px-4 pb-1">
-            <div className="crm-lead-card-soft rounded-[24px] p-3.5 shadow-[0_22px_34px_-26px_rgba(59,130,246,0.16)] dark:shadow-none">
-              <div className="mb-2 flex items-center justify-between">
-                <div className="flex items-center gap-1.5">
-                  <ImageIcon className="h-3.5 w-3.5 text-muted-foreground/40" />
-                  <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70">
-                    {lead.payment_screenshot_url && photoPaths.length > 0 ? "Payment & Photos" : photoPaths.length > 0 ? "Photos" : "Payment"}
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap gap-1.5">
+          <div className="relative flex flex-wrap gap-2 border-t border-border/55 px-4 py-3">
                 {lead.payment_screenshot_url && (
                   <Button
                     type="button"
                     variant="outline"
                     size="sm"
-                    className="h-6 px-2 gap-1 rounded-lg border border-dashed border-primary/20 bg-primary/[0.02] text-[11px] font-medium text-primary hover:bg-primary/5 active:scale-95"
+                    className="h-8 gap-1.5 rounded-lg px-2.5 text-[11px] font-medium"
                     onClick={(e) => {
                       e.stopPropagation();
                       e.preventDefault();
@@ -1870,7 +1857,7 @@ function LeadCard({
                     type="button"
                     variant="outline"
                     size="sm"
-                    className="h-6 px-2 gap-1 rounded-lg border border-dashed border-muted-foreground/20 bg-muted-foreground/[0.02] text-[11px] font-medium text-muted-foreground hover:bg-muted-foreground/5 active:scale-95"
+                    className="h-8 gap-1.5 rounded-lg px-2.5 text-[11px] font-medium"
                     onClick={(e) => {
                       e.stopPropagation();
                       e.preventDefault();
@@ -1887,8 +1874,6 @@ function LeadCard({
                     Photo {i + 1}
                   </Button>
                 ))}
-              </div>
-            </div>
           </div>
         )}
 
