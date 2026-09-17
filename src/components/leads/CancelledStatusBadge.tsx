@@ -6,12 +6,18 @@ import { fetchLatestCancellationRequest } from "@/lib/cancellation-requests";
 import StatusBadge from "./StatusBadge";
 import type { LeadCancellationRequest, LeadStatus } from "@/types";
 
+/** What to reveal on hover over a Paid badge: a heading and a display value. */
+export interface PaidAmountInfo {
+  heading: string;
+  value: string;
+}
+
 interface Props {
   leadId: string;
   status: LeadStatus;
   size?: "sm" | "md";
-  /** Paid amount, shown on hover over a Paid badge. Pass null to hide it. */
-  amount?: number | null;
+  /** Amount details shown on hover over a Paid badge. Pass null to hide it. */
+  paidInfo?: PaidAmountInfo | null;
 }
 
 function formatWhen(value: string | null): string | null {
@@ -20,15 +26,11 @@ function formatWhen(value: string | null): string | null {
   return Number.isNaN(date.getTime()) ? null : format(date, "MMM d, yyyy 'at' h:mm a");
 }
 
-function formatAmount(value: number): string {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
-}
-
 /**
  * Paid badge that reveals the payment amount on hover (and tap on touch),
  * so the number is one glance away without opening the lead.
  */
-function PaidAmountBadge({ status, size, amount }: { status: LeadStatus; size: "sm" | "md"; amount: number }) {
+function PaidAmountBadge({ status, size, info }: { status: LeadStatus; size: "sm" | "md"; info: PaidAmountInfo }) {
   const [open, setOpen] = useState(false);
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -38,7 +40,7 @@ function PaidAmountBadge({ status, size, amount }: { status: LeadStatus; size: "
           onClick={(e) => e.stopPropagation()}
           onMouseEnter={() => setOpen(true)}
           onFocus={() => setOpen(true)}
-          aria-label={`Paid — ${formatAmount(amount)}`}
+          aria-label={`${info.heading}: ${info.value}`}
           className="inline-flex items-center rounded-full transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
         >
           <StatusBadge status={status} size={size} />
@@ -46,13 +48,13 @@ function PaidAmountBadge({ status, size, amount }: { status: LeadStatus; size: "
       </PopoverTrigger>
       <PopoverContent
         align="end"
-        className="w-auto px-3 py-2"
+        className="w-auto max-w-[240px] px-3 py-2"
         onClick={(e) => e.stopPropagation()}
         onMouseLeave={() => setOpen(false)}
         onOpenAutoFocus={(e) => e.preventDefault()}
       >
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Payment amount</p>
-        <p className="text-base font-bold leading-tight text-[hsl(var(--status-green))]">{formatAmount(amount)}</p>
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{info.heading}</p>
+        <p className="whitespace-pre-wrap break-words text-base font-bold leading-tight text-[hsl(var(--status-green))]">{info.value}</p>
       </PopoverContent>
     </Popover>
   );
@@ -64,7 +66,7 @@ function PaidAmountBadge({ status, size, amount }: { status: LeadStatus; size: "
  * reason off it: one quiet info dot, and the request is only read when someone opens it — which
  * also means leads cancelled long before this existed show their reason too.
  */
-export default function CancelledStatusBadge({ leadId, status, size = "sm", amount }: Props) {
+export default function CancelledStatusBadge({ leadId, status, size = "sm", paidInfo }: Props) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -89,7 +91,7 @@ export default function CancelledStatusBadge({ leadId, status, size = "sm", amou
     [leadId, loaded, loading],
   );
 
-  if (isPaid && amount != null) return <PaidAmountBadge status={status} size={size} amount={amount} />;
+  if (isPaid && paidInfo) return <PaidAmountBadge status={status} size={size} info={paidInfo} />;
 
   if (!isCancelled) return <StatusBadge status={status} size={size} />;
 

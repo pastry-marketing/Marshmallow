@@ -889,6 +889,24 @@ function LeadCard({
   const isOpr = isOperatorRole(role);
   const isPaid = lead.status === "paid";
   const isUrgent = lead.status === "urgent_job";
+
+  // Amount revealed on hover over the Paid badge. Prefer the recorded payment
+  // amount; if none was recorded, fall back to the CS quote. The legacy numeric
+  // `amount` column is intentionally not used — it holds stale placeholder data.
+  const paidAmountInfo = (() => {
+    if (!isPaid) return null;
+    const paidRaw = lead.payment_amount;
+    const paid = paidRaw == null ? NaN : Number(paidRaw);
+    if (Number.isFinite(paid) && paid > 0) {
+      return {
+        heading: "Payment amount",
+        value: new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(paid),
+      };
+    }
+    const quote = (lead.quote ?? "").trim();
+    if (quote) return { heading: "Quote", value: quote };
+    return null;
+  })();
   const canCompleteCopy = isAdmin || isProcessor || isOpr;
   const currentTag = lead.cs_tag ?? null;
   const assignableTags = getAssignableLeadTags(role, { isQuotationMaster: profile?.is_quotation_master });
@@ -1677,7 +1695,7 @@ function LeadCard({
                 leadId={lead.id}
                 status={lead.status}
                 size="sm"
-                amount={isOpr ? null : (lead.payment_amount ?? lead.amount)}
+                paidInfo={isOpr ? null : paidAmountInfo}
               />
               {hasQuickChatAccess && lead.customer_phone && (
                 <QuoPhoneTrigger
