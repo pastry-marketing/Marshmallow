@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Route, Routes, Navigate } from "react-router-dom";
-import { lazy, Suspense, type ReactNode } from "react";
+import { Suspense, type ReactNode } from "react";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -8,23 +8,26 @@ import { useAuth } from "@/contexts/AuthContext";
 import AppLayout from "@/components/layout/AppLayout";
 import Login from "@/pages/Login";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { lazyWithReload } from "@/lib/lazyWithReload";
 
-// Lazy-load heavy routes so the initial bundle stays small and the CRM feels snappy.
-const LeadsPage = lazy(() => import("@/pages/LeadsPage"));
-const LeadDetailPage = lazy(() => import("@/pages/LeadDetailPage"));
-const SchedulePage = lazy(() => import("@/pages/SchedulePage"));
-const Analytics = lazy(() => import("@/pages/Analytics"));
-const AreasPage = lazy(() => import("@/pages/AreasPage"));
-const ActivityLogs = lazy(() => import("@/pages/ActivityLogs"));
-const Settings = lazy(() => import("@/pages/Settings"));
-const NotFound = lazy(() => import("@/pages/NotFound"));
-const LeadCancellationRequests = lazy(() => import("@/pages/LeadCancellationRequests"));
-const LeadPaymentRequests = lazy(() => import("@/pages/LeadPaymentRequests"));
-const QuotePendingRequests = lazy(() => import("@/pages/QuotePendingRequests"));
-const QuoMonitorPage = lazy(() => import("@/pages/quo-monitor/QuoMonitorPage"));
-const CrmUpdates = lazy(() => import("@/pages/CrmUpdates"));
-const MapViewPage = lazy(() => import("@/pages/MapViewPage"));
-const TechniciansPage = lazy(() => import("@/pages/TechniciansPage"));
+// Lazy-load heavy routes so the initial bundle stays small and the CRM feels
+// snappy. lazyWithReload recovers from post-deploy stale-chunk errors by
+// reloading the page once instead of showing an error screen.
+const LeadsPage = lazyWithReload(() => import("@/pages/LeadsPage"));
+const LeadDetailPage = lazyWithReload(() => import("@/pages/LeadDetailPage"));
+const SchedulePage = lazyWithReload(() => import("@/pages/SchedulePage"));
+const Analytics = lazyWithReload(() => import("@/pages/Analytics"));
+const AreasPage = lazyWithReload(() => import("@/pages/AreasPage"));
+const ActivityLogs = lazyWithReload(() => import("@/pages/ActivityLogs"));
+const Settings = lazyWithReload(() => import("@/pages/Settings"));
+const NotFound = lazyWithReload(() => import("@/pages/NotFound"));
+const LeadCancellationRequests = lazyWithReload(() => import("@/pages/LeadCancellationRequests"));
+const LeadPaymentRequests = lazyWithReload(() => import("@/pages/LeadPaymentRequests"));
+const QuotePendingRequests = lazyWithReload(() => import("@/pages/QuotePendingRequests"));
+const QuoMonitorPage = lazyWithReload(() => import("@/pages/quo-monitor/QuoMonitorPage"));
+const CrmUpdates = lazyWithReload(() => import("@/pages/CrmUpdates"));
+const MapViewPage = lazyWithReload(() => import("@/pages/MapViewPage"));
+const TechniciansPage = lazyWithReload(() => import("@/pages/TechniciansPage"));
 
 const queryClient = new QueryClient({
   defaultOptions: {
