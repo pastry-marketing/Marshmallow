@@ -472,7 +472,7 @@ export default function AppSidebar() {
 
                             {!collapsed && (
                               <>
-                                <span className="relative z-10 ml-3 flex-1 text-[13px] font-medium tracking-[-0.01em] flex items-center gap-2">
+                                <span className="relative z-10 ml-3 flex-1 min-w-0 text-[13px] font-medium tracking-[-0.01em] flex items-center gap-2">
                                   {item.navKey === "cancellation_requests" && pendingCancellationCount > 0 && (
                                     <span className="relative flex h-2 w-2 shrink-0">
                                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
@@ -497,25 +497,27 @@ export default function AppSidebar() {
                                       <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500 shadow-[0_0_8px_#f43f5e]"></span>
                                     </span>
                                   )}
-                                  {item.title}
+                                  <span className="truncate">{item.title}</span>
                                   {isNeedAttention && needAttentionCount > 0 && (
-                                    <span className="ml-auto rounded-full bg-rose-500/15 px-1.5 py-0.5 text-[10px] font-bold text-rose-600 dark:text-rose-300">
+                                    <span className="ml-auto shrink-0 rounded-full bg-rose-500/15 px-1.5 py-0.5 text-[10px] font-bold leading-none text-rose-600 dark:text-rose-300">
                                       {needAttentionCount}
                                     </span>
                                   )}
                                 </span>
 
-                                <ChevronRight
-                                  className={`relative z-10 h-3.5 w-3.5 transition-all duration-200 ${
-                                    isActive
-                                      ? "translate-x-0 text-sidebar-foreground/38"
-                                      : "-translate-x-1 opacity-0 text-sidebar-foreground/25 group-hover/nav:translate-x-0 group-hover/nav:opacity-100"
-                                  }`}
-                                />
+                                {!isNeedAttention && (
+                                  <ChevronRight
+                                    className={`relative z-10 h-3.5 w-3.5 transition-all duration-200 ${
+                                      isActive
+                                        ? "translate-x-0 text-sidebar-foreground/38"
+                                        : "-translate-x-1 opacity-0 text-sidebar-foreground/25 group-hover/nav:translate-x-0 group-hover/nav:opacity-100"
+                                    }`}
+                                  />
+                                )}
                               </>
                             )}
 
-                            {isActive && !collapsed && (
+                            {isActive && !collapsed && !isNeedAttention && (
                               <motion.div
                                 layoutId="nav-active-indicator-dot"
                                 className="absolute right-3 h-1.5 w-1.5 rounded-full bg-primary shadow-[0_0_14px_hsl(var(--primary)/0.9)]"
