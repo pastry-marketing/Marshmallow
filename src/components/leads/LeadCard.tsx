@@ -1673,7 +1673,12 @@ function LeadCard({
 
 
             <div className="flex shrink-0 flex-col items-end gap-1.5">
-              <CancelledStatusBadge leadId={lead.id} status={lead.status} size="sm" />
+              <CancelledStatusBadge
+                leadId={lead.id}
+                status={lead.status}
+                size="sm"
+                amount={isOpr ? null : (lead.payment_amount ?? lead.amount)}
+              />
               {hasQuickChatAccess && lead.customer_phone && (
                 <QuoPhoneTrigger
                   contactName={lead.customer_name}
