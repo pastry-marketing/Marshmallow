@@ -304,9 +304,18 @@ export default function AppSidebar() {
   }, [role, profile?.id]);
 
   const visibleItems = getNavItems(role || "").filter((item) => canAccess(item.navKey));
+  // "Need Attention" is a virtual Review item (Admin/CS/CS Admin), rendered with
+  // its own blinking dot + count under the Review header rather than a real route.
+  const needAttentionItem =
+    canSeeNeedAttention && canAccess("leads")
+      ? { title: "Need Attention", url: "/leads?attention=1", icon: AlertTriangle, navKey: "need_attention", group: "Review" }
+      : null;
   const visibleGroups = ["Work", "Review", "Manage", "Insights", "Admin"].map((label) => ({
     label,
-    items: visibleItems.filter((item) => item.group === label),
+    items: [
+      ...visibleItems.filter((item) => item.group === label),
+      ...(label === "Review" && needAttentionItem ? [needAttentionItem] : []),
+    ],
   })).filter((group) => group.items.length > 0);
   const visibleStatuses = ALL_LEAD_STATUSES.filter((status) => allowedStatuses.has(status));
 
@@ -396,8 +405,10 @@ export default function AppSidebar() {
             <SidebarGroupContent>
               <SidebarMenu className="gap-1">
                 {items.map((item, index) => {
-                  const isActive =
-                    location.pathname.startsWith(item.url) && !currentStatus && !(item.navKey === "leads" && attentionActive);
+                  const isNeedAttention = item.navKey === "need_attention";
+                  const isActive = isNeedAttention
+                    ? attentionActive
+                    : location.pathname.startsWith(item.url) && !currentStatus && !(item.navKey === "leads" && attentionActive);
 
                   return (
                     <motion.div
@@ -451,6 +462,12 @@ export default function AppSidebar() {
                                   <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500 shadow-[0_0_6px_#f59e0b]"></span>
                                 </span>
                               )}
+                              {isNeedAttention && needAttentionCount > 0 && collapsed && (
+                                <span className="absolute -top-1.5 -right-1.5 flex h-2 w-2 z-20">
+                                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                                  <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500 shadow-[0_0_6px_#f43f5e]"></span>
+                                </span>
+                              )}
                             </div>
 
                             {!collapsed && (
@@ -474,7 +491,18 @@ export default function AppSidebar() {
                                       <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500 shadow-[0_0_8px_#f59e0b]"></span>
                                     </span>
                                   )}
+                                  {isNeedAttention && needAttentionCount > 0 && (
+                                    <span className="relative flex h-2 w-2 shrink-0">
+                                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                                      <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500 shadow-[0_0_8px_#f43f5e]"></span>
+                                    </span>
+                                  )}
                                   {item.title}
+                                  {isNeedAttention && needAttentionCount > 0 && (
+                                    <span className="ml-auto rounded-full bg-rose-500/15 px-1.5 py-0.5 text-[10px] font-bold text-rose-600 dark:text-rose-300">
+                                      {needAttentionCount}
+                                    </span>
+                                  )}
                                 </span>
 
                                 <ChevronRight
@@ -504,64 +532,6 @@ export default function AppSidebar() {
             </SidebarGroupContent>
           </SidebarGroup>
           ))}
-
-          {canAccess("leads") && canSeeNeedAttention && (
-            <SidebarGroup className="mt-3">
-              {!collapsed && (
-                <SidebarGroupLabel className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-sidebar-foreground/55">
-                  Alerts
-                </SidebarGroupLabel>
-              )}
-              <SidebarGroupContent>
-                <SidebarMenu className="gap-1">
-                  <SidebarMenuItem>
-                    <SidebarMenuButton asChild isActive={attentionActive} tooltip="Need Attention">
-                      <NavLink
-                        to="/leads?attention=1"
-                        className={`group/nav relative flex items-center rounded-[18px] border border-transparent px-3 py-2.5 transition-all duration-300 ${
-                          attentionActive
-                            ? "border-rose-400/40 bg-[linear-gradient(180deg,hsl(350_90%_60%/0.16),hsl(350_90%_60%/0.06))] text-sidebar-accent-foreground shadow-[0_18px_28px_-20px_rgba(244,63,94,0.28)] ring-1 ring-rose-400/20"
-                            : "hover:border-rose-400/20 hover:bg-[linear-gradient(180deg,hsl(350_90%_60%/0.10),transparent)]"
-                        }`}
-                        activeClassName="text-sidebar-accent-foreground"
-                      >
-                        <div className="relative shrink-0">
-                          <AlertTriangle
-                            className={`relative z-10 h-4 w-4 transition-all duration-200 ${
-                              attentionActive ? "text-rose-500" : "text-rose-500/70 group-hover/nav:text-rose-500"
-                            }`}
-                          />
-                          {needAttentionCount > 0 && collapsed && (
-                            <span className="absolute -top-1.5 -right-1.5 flex h-2 w-2 z-20">
-                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
-                              <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500 shadow-[0_0_6px_#f43f5e]"></span>
-                            </span>
-                          )}
-                        </div>
-
-                        {!collapsed && (
-                          <span className="relative z-10 ml-3 flex-1 text-[13px] font-medium tracking-[-0.01em] flex items-center gap-2">
-                            {needAttentionCount > 0 && (
-                              <span className="relative flex h-2 w-2 shrink-0">
-                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
-                                <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500 shadow-[0_0_8px_#f43f5e]"></span>
-                              </span>
-                            )}
-                            Need Attention
-                            {needAttentionCount > 0 && (
-                              <span className="ml-auto rounded-full bg-rose-500/15 px-1.5 py-0.5 text-[10px] font-bold text-rose-600 dark:text-rose-300">
-                                {needAttentionCount}
-                              </span>
-                            )}
-                          </span>
-                        )}
-                      </NavLink>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
-          )}
 
           {canAccess("leads") && !collapsed && visibleStatuses.length > 0 && (
             <>
