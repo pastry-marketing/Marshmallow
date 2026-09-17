@@ -140,6 +140,14 @@ function getLeadCreatedAtTime(lead: Pick<Lead, "created_at">) {
   return Number.isNaN(timestamp) ? 0 : timestamp;
 }
 
+// When a lead became urgent. Falls back to created_at for leads that predate the
+// urgent_at column (or were never urgent), so ordering stays well-defined.
+function getLeadUrgentTime(lead: Pick<Lead, "created_at"> & { urgent_at?: string | null }) {
+  const raw = lead.urgent_at ?? lead.created_at;
+  const timestamp = new Date(raw).getTime();
+  return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
 const TAG_ELIGIBLE_STATUSES: Partial<Record<LeadStatus, true>> = {
   waiting_complete_details: true,
   urgent_job: true,
@@ -168,8 +176,8 @@ function hasTagRank(tag: string | null | undefined): tag is string {
 }
 
 export function compareLeadDisplayPriority(
-  a: Pick<Lead, "status" | "created_at"> & { cs_tag?: string | null; created_by?: string | null; quote_requested_by?: string | null },
-  b: Pick<Lead, "status" | "created_at"> & { cs_tag?: string | null; created_by?: string | null; quote_requested_by?: string | null },
+  a: Pick<Lead, "status" | "created_at"> & { cs_tag?: string | null; created_by?: string | null; quote_requested_by?: string | null; urgent_at?: string | null },
+  b: Pick<Lead, "status" | "created_at"> & { cs_tag?: string | null; created_by?: string | null; quote_requested_by?: string | null; urgent_at?: string | null },
   userId?: string | null,
   userRole?: string | null,
 ) {
@@ -195,6 +203,17 @@ export function compareLeadDisplayPriority(
       : (LEAD_PRIORITY_RANK[b.status] ?? 10);
 
   if (rankA !== rankB) return rankA - rankB;
+
+  // Within the Urgent Job bucket, order by when each lead BECAME urgent (most
+  // recent first), so a lead just flipped to urgent — even a long-existing one —
+  // rises to the top like a brand-new urgent lead. Pinned/tag-ranked leads are in
+  // other buckets, so their ordering is unaffected. All other buckets keep the
+  // newest-created-first ordering.
+  if (a.status === "urgent_job" && b.status === "urgent_job" && !aPinned && !bPinned) {
+    const aUrgent = getLeadUrgentTime(a);
+    const bUrgent = getLeadUrgentTime(b);
+    if (aUrgent !== bUrgent) return bUrgent - aUrgent;
+  }
 
   return getLeadCreatedAtTime(b) - getLeadCreatedAtTime(a);
 }

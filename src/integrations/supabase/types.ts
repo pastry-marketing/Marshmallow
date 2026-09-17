@@ -795,6 +795,7 @@ export type Database = {
           tech_number: string | null
           terms: string | null
           updated_at: string | null
+          urgent_at: string | null
           zip_code: string | null
         }
         Insert: {
@@ -850,6 +851,7 @@ export type Database = {
           tech_number?: string | null
           terms?: string | null
           updated_at?: string | null
+          urgent_at?: string | null
           zip_code?: string | null
         }
         Update: {
@@ -905,6 +907,7 @@ export type Database = {
           tech_number?: string | null
           terms?: string | null
           updated_at?: string | null
+          urgent_at?: string | null
           zip_code?: string | null
         }
         Relationships: [

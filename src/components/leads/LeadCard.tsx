@@ -6,6 +6,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { useIsLastMessageFromCustomer } from "@/hooks/useIsLastMessageFromCustomer";
 import { expandStateAbbreviation } from "@/lib/utils";
+import { scheduleRequirementDueOrOverdue } from "@/lib/schedule-date-filter";
 import { Lead, LeadStatus, STATUS_LABELS, getChangeableStatuses, canChangeStatus } from "@/lib/constants";
 import { CS_TAG_LABELS, type CsTag } from "@/types";
 import { Card } from "@/components/ui/card";
@@ -298,33 +299,6 @@ function isScheduleRequirementFarFuture(text?: string | null, daysThreshold = 3)
   const earliestFuture = futureDates.sort((a, b) => a.getTime() - b.getTime())[0];
   const diffDays = differenceInCalendarDays(earliestFuture, now);
   return diffDays > daysThreshold;
-}
-
-/**
- * True when a schedule requirement names a date that is today or already in the
- * past — used to flag urgent leads that "need attention". Undated requirements
- * and clearly next-year intentions (a bare month/day more than ~6 months back)
- * do not count.
- */
-function scheduleRequirementDueOrOverdue(text?: string | null): boolean {
-  if (!text || !text.trim()) return false;
-  const dates = findDatesInScheduleText(text);
-  if (!dates.length) return false;
-
-  const now = startOfDay(new Date());
-  const currentYear = now.getFullYear();
-
-  for (const d of dates) {
-    const y = d.year ?? currentYear;
-    const dt = startOfDay(new Date(y, d.month, d.day));
-    // Positive when dt is in the past, 0 when today, negative when in the future.
-    const daysPast = differenceInCalendarDays(now, dt);
-    if (daysPast < 0) continue; // future date
-    // A bare (year-less) date far in the past likely means next year — skip it.
-    if (!d.year && daysPast > 180) continue;
-    return true;
-  }
-  return false;
 }
 
 function formatScheduleRequirementCompact(text?: string | null): { summary: string; full: string } | null {

@@ -17,6 +17,7 @@ import {
   KeyRound,
   FileWarning,
   Shield,
+  AlertTriangle,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useNavigate } from "react-router-dom";
@@ -24,6 +25,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { STATUS_LABELS, STATUS_DOT_COLORS, ALL_LEAD_STATUSES } from "@/lib/constants";
+import { scheduleRequirementDueOrOverdue } from "@/lib/schedule-date-filter";
 import { useAllowedStatuses } from "@/hooks/useAllowedStatuses";
 import {
   Sidebar,
@@ -162,6 +164,27 @@ export default function AppSidebar() {
     refetchInterval: 30000,
   });
 
+  // "Need Attention" leads: urgent jobs whose schedule is due today or overdue.
+  // The date logic lives in text, so we pull the urgent leads and evaluate it
+  // client-side (same helper the lead card uses, so the count matches the tab).
+  // Only Admin / CS / CS Admin see this tab; CS is scoped to its own leads.
+  const canSeeNeedAttention = role === "admin" || role === "customer_service" || role === "cs_admin";
+  const { data: needAttentionCount = 0 } = useQuery({
+    queryKey: ["need-attention-count", role, profile?.id],
+    enabled: canSeeNeedAttention,
+    queryFn: async () => {
+      let q = supabase.from("leads").select("id, customer_schedule_requirements").eq("status", "urgent_job");
+      if (role === "customer_service" && profile?.id) q = q.eq("created_by", profile.id);
+      const { data, error } = await q;
+      if (error) {
+        console.error("Error fetching need-attention count:", error.message);
+        return 0;
+      }
+      return (data ?? []).filter((l) => scheduleRequirementDueOrOverdue(l.customer_schedule_requirements)).length;
+    },
+    refetchInterval: 30000,
+  });
+
   // Realtime subscription for instant sidebar updates when a cancellation is requested/resolved
   useEffect(() => {
     const channel = supabase
@@ -296,8 +319,10 @@ export default function AppSidebar() {
         .slice(0, 2)
     : "?";
 
-  const rawCurrentStatus = new URLSearchParams(location.search).get("status");
+  const searchParamsForLocation = new URLSearchParams(location.search);
+  const rawCurrentStatus = searchParamsForLocation.get("status");
   const currentStatus = rawCurrentStatus && allowedStatuses.has(rawCurrentStatus) ? rawCurrentStatus : null;
+  const attentionActive = location.pathname.startsWith("/leads") && searchParamsForLocation.get("attention") === "1";
 
   return (
     <Sidebar collapsible="icon" className="border-r border-sidebar-border/45 bg-[hsl(var(--sidebar-background)/0.8)]">
@@ -371,7 +396,8 @@ export default function AppSidebar() {
             <SidebarGroupContent>
               <SidebarMenu className="gap-1">
                 {items.map((item, index) => {
-                  const isActive = location.pathname.startsWith(item.url) && !currentStatus;
+                  const isActive =
+                    location.pathname.startsWith(item.url) && !currentStatus && !(item.navKey === "leads" && attentionActive);
 
                   return (
                     <motion.div
@@ -478,6 +504,64 @@ export default function AppSidebar() {
             </SidebarGroupContent>
           </SidebarGroup>
           ))}
+
+          {canAccess("leads") && canSeeNeedAttention && (
+            <SidebarGroup className="mt-3">
+              {!collapsed && (
+                <SidebarGroupLabel className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-sidebar-foreground/55">
+                  Alerts
+                </SidebarGroupLabel>
+              )}
+              <SidebarGroupContent>
+                <SidebarMenu className="gap-1">
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={attentionActive} tooltip="Need Attention">
+                      <NavLink
+                        to="/leads?attention=1"
+                        className={`group/nav relative flex items-center rounded-[18px] border border-transparent px-3 py-2.5 transition-all duration-300 ${
+                          attentionActive
+                            ? "border-rose-400/40 bg-[linear-gradient(180deg,hsl(350_90%_60%/0.16),hsl(350_90%_60%/0.06))] text-sidebar-accent-foreground shadow-[0_18px_28px_-20px_rgba(244,63,94,0.28)] ring-1 ring-rose-400/20"
+                            : "hover:border-rose-400/20 hover:bg-[linear-gradient(180deg,hsl(350_90%_60%/0.10),transparent)]"
+                        }`}
+                        activeClassName="text-sidebar-accent-foreground"
+                      >
+                        <div className="relative shrink-0">
+                          <AlertTriangle
+                            className={`relative z-10 h-4 w-4 transition-all duration-200 ${
+                              attentionActive ? "text-rose-500" : "text-rose-500/70 group-hover/nav:text-rose-500"
+                            }`}
+                          />
+                          {needAttentionCount > 0 && collapsed && (
+                            <span className="absolute -top-1.5 -right-1.5 flex h-2 w-2 z-20">
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                              <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500 shadow-[0_0_6px_#f43f5e]"></span>
+                            </span>
+                          )}
+                        </div>
+
+                        {!collapsed && (
+                          <span className="relative z-10 ml-3 flex-1 text-[13px] font-medium tracking-[-0.01em] flex items-center gap-2">
+                            {needAttentionCount > 0 && (
+                              <span className="relative flex h-2 w-2 shrink-0">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                                <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500 shadow-[0_0_8px_#f43f5e]"></span>
+                              </span>
+                            )}
+                            Need Attention
+                            {needAttentionCount > 0 && (
+                              <span className="ml-auto rounded-full bg-rose-500/15 px-1.5 py-0.5 text-[10px] font-bold text-rose-600 dark:text-rose-300">
+                                {needAttentionCount}
+                              </span>
+                            )}
+                          </span>
+                        )}
+                      </NavLink>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          )}
 
           {canAccess("leads") && !collapsed && visibleStatuses.length > 0 && (
             <>

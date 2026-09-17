@@ -110,6 +110,8 @@ export interface Lead {
   last_edited_at: string | null;
   created_at: string;
   updated_at: string;
+  /** When the lead was last flipped to urgent_job (drives Urgent Job ordering). */
+  urgent_at?: string | null;
   // Payment fields
   payment_amount: number | null;
   payment_screenshot_url: string | null;

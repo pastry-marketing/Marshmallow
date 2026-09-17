@@ -1,4 +1,4 @@
-import { startOfDay, endOfDay } from "date-fns";
+import { startOfDay, endOfDay, differenceInCalendarDays } from "date-fns";
 
 export type ScheduleDateEntry = { month: number; day: number; year?: number; endDay?: number };
 
@@ -173,6 +173,43 @@ export function doesLeadMatchScheduleDateRange(
   }
 
   return false;
+}
+
+/**
+ * True when a schedule requirement names a date that is today or already in the
+ * past — used to flag urgent leads that "need attention". Undated requirements
+ * and clearly next-year intentions (a bare month/day more than ~6 months back)
+ * do not count. Shared by the lead card's auto tag and the Need Attention view
+ * so both agree on exactly which leads qualify.
+ */
+export function scheduleRequirementDueOrOverdue(text?: string | null): boolean {
+  if (!text || !text.trim()) return false;
+  const dates = findDatesInScheduleText(text);
+  if (!dates.length) return false;
+
+  const now = startOfDay(new Date());
+  const currentYear = now.getFullYear();
+
+  for (const d of dates) {
+    const y = d.year ?? currentYear;
+    const dt = startOfDay(new Date(y, d.month, d.day));
+    // Positive when dt is in the past, 0 when today, negative when in the future.
+    const daysPast = differenceInCalendarDays(now, dt);
+    if (daysPast < 0) continue; // future date
+    // A bare (year-less) date far in the past likely means next year — skip it.
+    if (!d.year && daysPast > 180) continue;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Whether a lead should surface in the "Need Attention" view: an urgent job whose
+ * requested schedule date is today or overdue. Role-gating (Admin / CS / CS Admin)
+ * is handled by the caller.
+ */
+export function leadNeedsAttention(lead: { status?: string | null; customer_schedule_requirements?: string | null }): boolean {
+  return lead.status === "urgent_job" && scheduleRequirementDueOrOverdue(lead.customer_schedule_requirements);
 }
 
 export const SCHEDULE_PRESETS = [

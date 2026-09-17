@@ -24,7 +24,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Calendar } from "@/components/ui/calendar";
 import { type DateRange } from "react-day-picker";
 import { ScheduleDateFilter } from "@/components/leads/ScheduleDateFilter";
-import { doesLeadMatchScheduleDateRange } from "@/lib/schedule-date-filter";
+import { doesLeadMatchScheduleDateRange, leadNeedsAttention } from "@/lib/schedule-date-filter";
 import { Plus, Search, Download, Share2, X, SlidersHorizontal, BarChart3, Puzzle, FileText, Calendar as CalendarIcon, LayoutGrid, List, MapPin } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { useNotepad } from "@/contexts/NotepadContext";
@@ -113,6 +113,8 @@ export default function LeadsPage() {
   const deferredSearch = useDeferredValue(search);
 
   const rawStatusFilter = searchParams.get("status") || "all";
+  // "Need Attention" view: urgent leads whose schedule is due/overdue (auto tag).
+  const attentionView = searchParams.get("attention") === "1";
   const isAdmin = role === "admin";
   const isCS = role === "customer_service";
   // CS Admins create leads with the same access a CS has.
@@ -139,6 +141,11 @@ export default function LeadsPage() {
     if (value === "all") setSearchParams({});
     else setSearchParams({ status: value });
   };
+
+  // Reset to the first page when entering or leaving the Need Attention view.
+  useEffect(() => {
+    setPage(0);
+  }, [attentionView]);
 
   const fetchProfiles = useCallback(async () => {
     const { data, error } = await supabase.from("profiles_public" as never).select("id, full_name") as { data: { id: string; full_name: string | null }[] | null; error: unknown };
@@ -338,7 +345,11 @@ export default function LeadsPage() {
   const filtered = useMemo(() => {
     let result = [...currentLeads];
 
-    if (safeStatusFilter !== "all") {
+    // The Need Attention view overrides the status filter: it always shows the
+    // auto-tagged urgent leads (due/overdue schedule), never a single status.
+    if (attentionView) {
+      result = result.filter((l) => leadNeedsAttention(l));
+    } else if (safeStatusFilter !== "all") {
       result = result.filter((l) => l.status === safeStatusFilter);
     }
 
@@ -366,7 +377,7 @@ export default function LeadsPage() {
     result.sort((a, b) => compareLeadDisplayPriority(a, b, user?.id, role));
 
     return result;
-  }, [currentLeads, deferredSearch, safeStatusFilter, scheduleDateRange, user?.id, role]);
+  }, [currentLeads, deferredSearch, safeStatusFilter, scheduleDateRange, user?.id, role, attentionView]);
 
   // Status choices for the export dialog — the same set the on-page status
   // filter offers, so a user can export any status section they can see.
@@ -712,7 +723,15 @@ export default function LeadsPage() {
             Lead Workspace
           </div>
           <h1 className="text-2xl sm:text-3xl font-semibold tracking-[-0.04em] text-foreground">
-            {safeStatusFilter !== "all" ? (
+            {attentionView ? (
+              <span className="flex items-center gap-2.5">
+                <span className="relative flex h-2.5 w-2.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75" />
+                  <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-rose-500 shadow-[0_0_10px_#f43f5e]" />
+                </span>
+                Need Attention
+              </span>
+            ) : safeStatusFilter !== "all" ? (
               <span className="flex items-center gap-2.5">
                 <span className={`h-2.5 w-2.5 rounded-full ${STATUS_DOT_COLORS[safeStatusFilter as LeadStatus]}`} />
                 {STATUS_LABELS[safeStatusFilter as LeadStatus]}
