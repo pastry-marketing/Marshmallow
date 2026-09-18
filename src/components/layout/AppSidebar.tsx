@@ -26,6 +26,7 @@ import { useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { STATUS_LABELS, STATUS_DOT_COLORS, ALL_LEAD_STATUSES } from "@/lib/constants";
 import { scheduleRequirementDueOrOverdue } from "@/lib/schedule-date-filter";
+import { fetchAllRows } from "@/lib/supabase-paginate";
 import { useAllowedStatuses } from "@/hooks/useAllowedStatuses";
 import {
   Sidebar,
@@ -173,14 +174,24 @@ export default function AppSidebar() {
     queryKey: ["need-attention-count", role, profile?.id],
     enabled: canSeeNeedAttention,
     queryFn: async () => {
-      let q = supabase.from("leads").select("id, customer_schedule_requirements").eq("status", "urgent_job");
-      if (role === "customer_service" && profile?.id) q = q.eq("created_by", profile.id);
-      const { data, error } = await q;
-      if (error) {
-        console.error("Error fetching need-attention count:", error.message);
+      try {
+        // Page through every urgent lead (PostgREST caps one response at 1000),
+        // so the badge can never undercount even with a large urgent backlog.
+        const rows = await fetchAllRows<{ id: string; customer_schedule_requirements: string | null }>((from, to) => {
+          let q = supabase
+            .from("leads")
+            .select("id, customer_schedule_requirements")
+            .eq("status", "urgent_job")
+            .order("id", { ascending: true })
+            .range(from, to);
+          if (role === "customer_service" && profile?.id) q = q.eq("created_by", profile.id);
+          return q;
+        });
+        return rows.filter((l) => scheduleRequirementDueOrOverdue(l.customer_schedule_requirements)).length;
+      } catch (error) {
+        console.error("Error fetching need-attention count:", error instanceof Error ? error.message : error);
         return 0;
       }
-      return (data ?? []).filter((l) => scheduleRequirementDueOrOverdue(l.customer_schedule_requirements)).length;
     },
     refetchInterval: 30000,
   });
