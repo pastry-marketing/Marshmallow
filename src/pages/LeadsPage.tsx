@@ -24,6 +24,7 @@ import { Calendar } from "@/components/ui/calendar";
 import { type DateRange } from "react-day-picker";
 import { ScheduleDateFilter } from "@/components/leads/ScheduleDateFilter";
 import { doesLeadMatchScheduleDateRange, leadNeedsAttention } from "@/lib/schedule-date-filter";
+import { readLeadsCache, writeLeadsCache } from "@/lib/leadsCache";
 import { Plus, Search, Download, Share2, X, SlidersHorizontal, BarChart3, Puzzle, FileText, Calendar as CalendarIcon, LayoutGrid, List, MapPin } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { useNotepad } from "@/contexts/NotepadContext";
@@ -209,8 +210,11 @@ export default function LeadsPage() {
       }
       if (gen !== leadsLoadGenRef.current) return;
       // Atomic replace with the complete dataset — counts are never partial.
-      setLeads(Array.from(acc.values()));
+      const full = Array.from(acc.values());
+      setLeads(full);
       if (!isBackground) setLoading(false);
+      // Persist the complete set so the next visit paints instantly from cache.
+      void writeLeadsCache(`${role}:${user.id}`, full);
     } catch (err) {
       if (gen !== leadsLoadGenRef.current) return;
       toast.error(err instanceof Error ? err.message : "Failed to load leads");
@@ -257,8 +261,24 @@ export default function LeadsPage() {
 
   useEffect(() => {
     if (!user || !role) return;
+    let cancelled = false;
 
-    void fetchLeads();
+    // Stale-while-revalidate: paint instantly from the last complete set in the
+    // browser cache (no spinner), then refresh in the background. Only the very
+    // first load (empty cache) shows the loading state. The cache always holds
+    // the whole list, so counts from it are complete — never capped.
+    void (async () => {
+      const cached = await readLeadsCache(`${role}:${user.id}`);
+      if (cancelled) return;
+      if (cached && cached.length > 0) {
+        setLeads(cached);
+        setLoading(false);
+        void fetchLeads(true); // refresh quietly in the background
+      } else {
+        void fetchLeads(false); // first load — show the loading state
+      }
+    })();
+
     void fetchProfiles();
 
     if (role === "customer_service") {
@@ -266,6 +286,10 @@ export default function LeadsPage() {
     } else {
       setSharedLeads([]);
     }
+
+    return () => {
+      cancelled = true;
+    };
   }, [fetchLeads, fetchProfiles, fetchSharedLeads, role, user]);
 
   // Safety-net polling. The realtime subscription above already merges every
