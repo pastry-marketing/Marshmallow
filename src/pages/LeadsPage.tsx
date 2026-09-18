@@ -1,6 +1,5 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { fetchAllRows } from "@/lib/supabase-paginate";
 import * as XLSX from "xlsx";
 import { useDeferredValue } from "react";
 import { useCallback } from "react";
@@ -172,34 +171,57 @@ export default function LeadsPage() {
     }
   }, []);
 
+  // Guards against stale/overlapping loads: each call bumps this, and a load
+  // abandons its remaining work if a newer load has started since.
+  const leadsLoadGenRef = useRef(0);
+
   const fetchLeads = useCallback(async (isBackground = false) => {
     if (!user || !role) return;
 
+    const gen = ++leadsLoadGenRef.current;
     if (!isBackground) setLoading(true);
 
+    // Page through the whole table (PostgREST caps a single response at 1000),
+    // but for a foreground load render each page as it arrives so the newest
+    // leads paint almost immediately instead of blocking on the full dataset.
+    // Background refreshes replace the list once at the end to avoid flicker.
+    const PAGE = 1000;
+    const acc = new Map<string, Lead>();
     try {
-      // Page through the whole table so status tabs/counts reflect every lead,
-      // not just the newest 1000 (PostgREST's default single-response cap).
-      const all = await fetchAllRows<Lead>((from, to) => {
+      for (let page = 0; ; page++) {
         let query = supabase
           .from("leads")
           .select(LEAD_LIST_COLUMNS)
           .order("created_at", { ascending: false })
           .order("id", { ascending: false })
-          .range(from, to);
+          .range(page * PAGE, page * PAGE + PAGE - 1);
         // CS can see only own created leads
         if (role === "customer_service") {
           query = query.eq("created_by", user.id);
         }
-        return query;
-      });
-      setLeads(all);
+        const { data, error } = await query;
+        if (error) throw error;
+        if (gen !== leadsLoadGenRef.current) return; // superseded by a newer load
+
+        const rows = (data ?? []) as unknown as Lead[];
+        for (const r of rows) if (r?.id) acc.set(r.id, r);
+
+        if (!isBackground) {
+          // Progressive render: show what we have so far.
+          setLeads(Array.from(acc.values()));
+          if (page === 0) setLoading(false);
+        }
+        if (rows.length < PAGE) break;
+      }
+      // Background refresh: single atomic replace once everything is loaded.
+      if (isBackground) setLeads(Array.from(acc.values()));
+      if (!isBackground) setLoading(false);
     } catch (err) {
+      if (gen !== leadsLoadGenRef.current) return;
       toast.error(err instanceof Error ? err.message : "Failed to load leads");
       setLeads([]);
+      if (!isBackground) setLoading(false);
     }
-
-    if (!isBackground) setLoading(false);
   }, [role, user]);
 
   const fetchSharedLeads = useCallback(async () => {
