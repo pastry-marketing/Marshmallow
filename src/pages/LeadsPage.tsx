@@ -63,6 +63,14 @@ interface LeadNoteExportRow {
   created_at: string | null;
 }
 
+// Columns the leads list/cards actually use. This is every `leads` column
+// EXCEPT `nearby_areas` — a potentially large JSON blob only the detail view
+// reads (and that view fetches its own row). Selecting explicitly keeps the
+// list payload small instead of pulling that blob for every lead.
+// NOTE: if a new leads column needs to appear on the card/list, add it here.
+const LEAD_LIST_COLUMNS =
+  "address, amount, assigned_cs, booked_at, cancellation_reason, city, created_at, created_by, created_by_name, cs_notes, cs_tag, customer_email, customer_landline, customer_name, customer_phone, customer_schedule_requirements, direction, expected_completion_date, for_us_amount, for_you_amount, general_notes, half_address, id, job_id, labor_amount, last_edited_at, last_edited_by, last_edited_by_name, latitude, longitude, material_amount, number_name, payment_amount, payment_screenshot_url, processor_notes, quote, quote_requested_by, reference_name, scheduled_date, scheduled_time_end, scheduled_time_start, service_details, service_type, show_quote_to_opr, source_url, state, status, tech_name, tech_number, terms, updated_at, urgent_at, zip_code";
+
 export default function LeadsPage() {
   const { user, role } = useAuth();
   const { toggleNotepad, isNotepadOpen, activeUserIds } = useNotepad();
@@ -175,7 +183,7 @@ export default function LeadsPage() {
       const all = await fetchAllRows<Lead>((from, to) => {
         let query = supabase
           .from("leads")
-          .select("*")
+          .select(LEAD_LIST_COLUMNS)
           .order("created_at", { ascending: false })
           .order("id", { ascending: false })
           .range(from, to);
@@ -217,7 +225,7 @@ export default function LeadsPage() {
 
     const { data: leadsData, error: leadsError } = await supabase
       .from("leads")
-      .select("*")
+      .select(LEAD_LIST_COLUMNS)
       .in("id", leadIds)
       .order("created_at", { ascending: false });
 
@@ -243,18 +251,33 @@ export default function LeadsPage() {
     }
   }, [fetchLeads, fetchProfiles, fetchSharedLeads, role, user]);
 
-  // Fallback Polling every 15 seconds (bulletproof fallback if Realtime is blocked by RLS)
+  // Safety-net polling. The realtime subscription above already merges every
+  // INSERT/UPDATE/DELETE surgically, so a full refetch is only a fallback for
+  // missed events (e.g. RLS-blocked realtime). Instead of re-downloading every
+  // lead every 15s in every open tab — including hidden ones — poll only while
+  // the tab is visible, and far less often, plus refresh once when the user
+  // returns to the tab so it's immediately up to date.
   useEffect(() => {
     if (!user || !role) return;
-    
-    const intervalId = setInterval(() => {
+
+    const refresh = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
       void fetchLeads(true);
       if (role === "customer_service") {
         void fetchSharedLeads();
       }
-    }, 15000);
+    };
 
-    return () => clearInterval(intervalId);
+    const intervalId = setInterval(refresh, 60000);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [fetchLeads, fetchSharedLeads, user, role]);
 
 
