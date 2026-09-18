@@ -181,10 +181,10 @@ export default function LeadsPage() {
     const gen = ++leadsLoadGenRef.current;
     if (!isBackground) setLoading(true);
 
-    // Page through the whole table (PostgREST caps a single response at 1000),
-    // but for a foreground load render each page as it arrives so the newest
-    // leads paint almost immediately instead of blocking on the full dataset.
-    // Background refreshes replace the list once at the end to avoid flicker.
+    // Page through the WHOLE table — PostgREST caps a single response at 1000
+    // rows, so we keep fetching pages until one comes back short. Every lead is
+    // loaded (no cap), and the list is only shown once the full set is in hand,
+    // so status counts always reflect every lead — never a partial/short count.
     const PAGE = 1000;
     const acc = new Map<string, Lead>();
     try {
@@ -205,16 +205,11 @@ export default function LeadsPage() {
 
         const rows = (data ?? []) as unknown as Lead[];
         for (const r of rows) if (r?.id) acc.set(r.id, r);
-
-        if (!isBackground) {
-          // Progressive render: show what we have so far.
-          setLeads(Array.from(acc.values()));
-          if (page === 0) setLoading(false);
-        }
-        if (rows.length < PAGE) break;
+        if (rows.length < PAGE) break; // last page reached — every lead is loaded
       }
-      // Background refresh: single atomic replace once everything is loaded.
-      if (isBackground) setLeads(Array.from(acc.values()));
+      if (gen !== leadsLoadGenRef.current) return;
+      // Atomic replace with the complete dataset — counts are never partial.
+      setLeads(Array.from(acc.values()));
       if (!isBackground) setLoading(false);
     } catch (err) {
       if (gen !== leadsLoadGenRef.current) return;
