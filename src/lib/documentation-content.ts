@@ -163,7 +163,7 @@ export const DOC_SECTIONS: DocSection[] = [
         rows: [
           ["ready_to_schedule", "Ready to schedule", "Admin, CS, Processor"],
           ["confirmation_sent", "Confirmation sent to CX", "Admin, CS"],
-          ["waiting_schedule_confirmation", "Customer Require New Schedule", "Admin, CS, Processor"],
+          ["waiting_schedule_confirmation", "Waiting for CX for schedule confirmation", "Admin, CS, Processor"],
           ["booked", "Booked", "Admin, CS"],
           ["incomplete_details", "Incomplete details", "Admin, Processor, Quotation Master"],
         ],

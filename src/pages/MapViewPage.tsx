@@ -237,14 +237,6 @@ class MapPinCanvasLayer extends L.Layer {
     this.scheduleRedraw();
   }
 
-  refreshNow() {
-    if (this.resetFrame !== null) window.cancelAnimationFrame(this.resetFrame);
-    if (this.redrawFrame !== null) window.cancelAnimationFrame(this.redrawFrame);
-    this.resetFrame = null;
-    this.redrawFrame = null;
-    this.reset();
-  }
-
   // Collapse any open spider when the zoom changes: the grouping can change, so
   // the fanned-out positions would no longer line up with a real cluster.
   private handleZoomStart = () => {
@@ -262,10 +254,6 @@ class MapPinCanvasLayer extends L.Layer {
 
   private scheduleReset = () => {
     if (this.resetFrame !== null) return;
-    if (document.visibilityState !== "visible") {
-      this.reset();
-      return;
-    }
     this.resetFrame = window.requestAnimationFrame(() => {
       this.resetFrame = null;
       this.reset();
@@ -274,10 +262,6 @@ class MapPinCanvasLayer extends L.Layer {
 
   private scheduleRedraw = () => {
     if (this.redrawFrame !== null) return;
-    if (document.visibilityState !== "visible") {
-      this.redraw();
-      return;
-    }
     this.redrawFrame = window.requestAnimationFrame(() => {
       this.redrawFrame = null;
       this.redraw();
@@ -676,6 +660,9 @@ export default function MapViewPage() {
   const isMobileRef = useRef(isMobile);
   const mapPopupRef = useRef<L.Popup | null>(null);
   const visibleLeadIdsRef = useRef<Set<string>>(new Set());
+  const desiredVisibleLeadIdsRef = useRef<Set<string>>(new Set());
+  const leadVisibilityFrameRef = useRef<number | null>(null);
+  const leadVisibilityGenerationRef = useRef(0);
   const mapInvalidateTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const leadFocusTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const techFocusTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1181,37 +1168,77 @@ export default function MapViewPage() {
     openSharedPopup(latlng, createLeadPopupElement(lead, selectedTechRef.current));
   }, [createLeadPopupElement, openSharedPopup]);
 
-  const scheduleLeadVisibility = useCallback((nextVisibleLeadIds: Set<string>) => {
-    if (!pinLayerRef.current) return;
-    const visibleLeadIds = visibleLeadIdsRef.current;
-
-    // Keep data reconciliation independent from animation frames. Browsers pause
-    // requestAnimationFrame in a background tab, which previously left this set
-    // half-updated until the CRM window became active again.
-    for (const id of Array.from(visibleLeadIds)) {
-      if (!nextVisibleLeadIds.has(id) || !leadDataRefs.current.has(id)) visibleLeadIds.delete(id);
+  const cancelLeadVisibilityWork = useCallback(() => {
+    leadVisibilityGenerationRef.current += 1;
+    if (leadVisibilityFrameRef.current !== null) {
+      window.cancelAnimationFrame(leadVisibilityFrameRef.current);
+      leadVisibilityFrameRef.current = null;
     }
-    for (const id of nextVisibleLeadIds) {
-      if (leadDataRefs.current.has(id)) visibleLeadIds.add(id);
-    }
-    setPinRenderVersion((version) => version + 1);
   }, []);
+
+  const scheduleLeadVisibility = useCallback((nextVisibleLeadIds: Set<string>) => {
+    desiredVisibleLeadIdsRef.current = new Set(nextVisibleLeadIds);
+    if (!pinLayerRef.current) return;
+    cancelLeadVisibilityWork();
+    const generation = leadVisibilityGenerationRef.current;
+    const visibleLeadIds = visibleLeadIdsRef.current;
+    const toAdd: string[] = [];
+    const toRemove: string[] = [];
+
+    for (const id of nextVisibleLeadIds) {
+      if (leadDataRefs.current.has(id) && !visibleLeadIds.has(id)) toAdd.push(id);
+    }
+    for (const id of visibleLeadIds) {
+      if (!nextVisibleLeadIds.has(id) || !leadDataRefs.current.has(id)) toRemove.push(id);
+    }
+
+    const applyAllNow = activeSelectedTechIdRef.current === null;
+    const batchSize = 40;
+    const runBatch = () => {
+      if (leadVisibilityGenerationRef.current !== generation) return;
+      let processed = 0;
+      while ((applyAllNow || processed < batchSize) && (toRemove.length || toAdd.length)) {
+        const removeId = toRemove.pop();
+        if (removeId) {
+          visibleLeadIds.delete(removeId);
+          processed += 1;
+          continue;
+        }
+
+        const addId = toAdd.pop();
+        if (addId) {
+          if (leadDataRefs.current.has(addId)) visibleLeadIds.add(addId);
+          processed += 1;
+        }
+      }
+      setPinRenderVersion((version) => version + 1);
+      if (toRemove.length || toAdd.length) {
+        leadVisibilityFrameRef.current = window.requestAnimationFrame(runBatch);
+      } else {
+        leadVisibilityFrameRef.current = null;
+      }
+    };
+
+    runBatch();
+  }, [cancelLeadVisibilityWork]);
 
   const handleTechMarkerClick = useCallback((techId: string, latlng: L.LatLng) => {
     const tech = techDataRefs.current.get(techId);
     if (!tech) return;
+    cancelLeadVisibilityWork();
     selectedTechRef.current = tech;
     applyTechMarkerSelection(techId);
     openTechPopup(techId, latlng);
     setSelectedTechId(techId);
     if (isMobileRef.current) setSheetOpen(true);
-  }, [applyTechMarkerSelection, openTechPopup]);
+  }, [applyTechMarkerSelection, cancelLeadVisibilityWork, openTechPopup]);
 
   const clearSelectedTech = useCallback(() => {
+    cancelLeadVisibilityWork();
     selectedTechRef.current = null;
     applyTechMarkerSelection(null);
     setSelectedTechId(null);
-  }, [applyTechMarkerSelection]);
+  }, [applyTechMarkerSelection, cancelLeadVisibilityWork]);
 
   useEffect(() => {
     if (!mapVisible) return;
@@ -1238,10 +1265,12 @@ export default function MapViewPage() {
     const leadData = leadDataRefs.current;
     const techData = techDataRefs.current;
     const visibleLeadIds = visibleLeadIdsRef.current;
+    const desiredVisibleLeadIds = desiredVisibleLeadIdsRef.current;
     mapInvalidateTimeout.current = setTimeout(() => map.invalidateSize(), 50);
     setMapReady(true);
     return () => {
       setMapReady(false);
+      cancelLeadVisibilityWork();
       if (mapInvalidateTimeout.current) clearTimeout(mapInvalidateTimeout.current);
       if (leadFocusTimeout.current) clearTimeout(leadFocusTimeout.current);
       if (techFocusTimeout.current) clearTimeout(techFocusTimeout.current);
@@ -1258,6 +1287,7 @@ export default function MapViewPage() {
       leadData.clear();
       techData.clear();
       visibleLeadIds.clear();
+      desiredVisibleLeadIds.clear();
       activeSelectedTechIdRef.current = null;
       mapRef.current = null;
       pinLayerRef.current = null;
@@ -1266,21 +1296,7 @@ export default function MapViewPage() {
       searchMarkerRef.current = null;
       coverageLayersRef.current.clear();
     };
-  }, [handleTechMarkerClick, mapVisible, openLeadPopup]);
-
-  useEffect(() => {
-    const refreshMapAfterBackground = () => {
-      if (document.visibilityState !== "visible") return;
-      mapRef.current?.invalidateSize({ pan: false });
-      pinLayerRef.current?.refreshNow();
-    };
-    document.addEventListener("visibilitychange", refreshMapAfterBackground);
-    window.addEventListener("focus", refreshMapAfterBackground);
-    return () => {
-      document.removeEventListener("visibilitychange", refreshMapAfterBackground);
-      window.removeEventListener("focus", refreshMapAfterBackground);
-    };
-  }, []);
+  }, [cancelLeadVisibilityWork, handleTechMarkerClick, mapVisible, openLeadPopup]);
 
   // Canvas marker data
   useEffect(() => {
