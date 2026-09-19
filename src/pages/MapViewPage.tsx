@@ -622,6 +622,9 @@ export default function MapViewPage() {
   // The searched area's outline (city / ZIP / county) and the pinpoint marker.
   const boundaryLayerRef = useRef<L.Layer | null>(null);
   const searchMarkerRef = useRef<L.Marker | null>(null);
+  // Coverage tool: a green "good coverage" circle the user draws by clicking.
+  const coverageCircleRef = useRef<L.Circle | null>(null);
+  const coverageDotRef = useRef<L.CircleMarker | null>(null);
   const leadDataRefs = useRef<Map<string, MappedLead>>(new Map());
   const techDataRefs = useRef<Map<string, SearchableTech>>(new Map());
   const selectedTechRef = useRef<SearchableTech | null>(null);
@@ -655,6 +658,16 @@ export default function MapViewPage() {
   const [stateFilter, setStateFilter] = useState<string>("all");
   const [mapReady, setMapReady] = useState(false);
   const [pinRenderVersion, setPinRenderVersion] = useState(0);
+  // Coverage tool state: when on, clicking the map drops a pin and draws a green
+  // "good coverage" circle of the chosen radius (in miles).
+  const [coverageOn, setCoverageOn] = useState(false);
+  const [coverageRadiusInput, setCoverageRadiusInput] = useState("40");
+  const [coverageCenter, setCoverageCenter] = useState<LatLng | null>(null);
+  const coverageRadiusMiles = useMemo(() => {
+    const n = parseFloat(coverageRadiusInput);
+    if (!Number.isFinite(n) || n <= 0) return 0;
+    return Math.min(n, 3000); // sanity cap
+  }, [coverageRadiusInput]);
 
   const urgentLeadsQuery = useQuery({
     queryKey: ["map-urgent-leads"],
@@ -1150,6 +1163,8 @@ export default function MapViewPage() {
       radiusLayer.current = null;
       boundaryLayerRef.current = null;
       searchMarkerRef.current = null;
+      coverageCircleRef.current = null;
+      coverageDotRef.current = null;
     };
   }, [cancelLeadVisibilityWork, handleTechMarkerClick, mapVisible, openLeadPopup]);
 
@@ -1258,6 +1273,67 @@ export default function MapViewPage() {
       radiusLayer.current = null;
     }
   }, [selectedTech, mapVisible]);
+
+  // Coverage tool: while active, an empty click on the map sets the coverage
+  // center. (Marker clicks are consumed by the pin layer, so they don't fire
+  // here.) A crosshair cursor signals the tool is armed.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady || !coverageOn) return;
+    const onClick = (e: L.LeafletMouseEvent) => {
+      setCoverageCenter({ latitude: e.latlng.lat, longitude: e.latlng.lng });
+    };
+    map.on("click", onClick);
+    const container = map.getContainer();
+    const prevCursor = container.style.cursor;
+    container.style.cursor = "crosshair";
+    return () => {
+      map.off("click", onClick);
+      container.style.cursor = prevCursor;
+    };
+  }, [coverageOn, mapReady]);
+
+  // Draw / update the green coverage circle + center dot.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const show = coverageOn && coverageCenter && coverageRadiusMiles > 0;
+    if (show && coverageCenter) {
+      const latlng: L.LatLngExpression = [coverageCenter.latitude, coverageCenter.longitude];
+      const radiusMeters = coverageRadiusMiles * 1609.344;
+      if (coverageCircleRef.current) {
+        coverageCircleRef.current.setLatLng(latlng).setRadius(radiusMeters);
+      } else {
+        coverageCircleRef.current = L.circle(latlng, {
+          radius: radiusMeters,
+          color: "#16a34a",
+          weight: 1.5,
+          fillColor: "#22c55e",
+          fillOpacity: 0.18,
+        }).addTo(map);
+      }
+      if (coverageDotRef.current) {
+        coverageDotRef.current.setLatLng(latlng);
+      } else {
+        coverageDotRef.current = L.circleMarker(latlng, {
+          radius: 5,
+          color: "#166534",
+          weight: 2,
+          fillColor: "#22c55e",
+          fillOpacity: 1,
+        }).addTo(map);
+      }
+    } else {
+      if (coverageCircleRef.current) {
+        map.removeLayer(coverageCircleRef.current);
+        coverageCircleRef.current = null;
+      }
+      if (coverageDotRef.current) {
+        map.removeLayer(coverageDotRef.current);
+        coverageDotRef.current = null;
+      }
+    }
+  }, [coverageOn, coverageCenter, coverageRadiusMiles, mapVisible, mapReady]);
 
   useEffect(() => {
     if (!mapVisible) return;
@@ -1568,6 +1644,32 @@ export default function MapViewPage() {
 
 
 
+  const [togglingTechActive, setTogglingTechActive] = useState(false);
+
+  // Toggle a technician on/off from the map panel — same active flag as the
+  // Technicians tab. Turning it off optimistically updates the shared cache, so
+  // the tech drops out of `searchableTechs` (which hides is_active === false)
+  // and disappears from the map; the Technicians tab reflects it on next visit.
+  const handleToggleTechActive = async (tech: SearchableTech, next: boolean) => {
+    if (togglingTechActive) return;
+    setTogglingTechActive(true);
+    const prev = queryClient.getQueryData<TechnicianRecord[]>(TECHNICIANS_QUERY_KEY);
+    queryClient.setQueryData<TechnicianRecord[]>(TECHNICIANS_QUERY_KEY, (old) =>
+      old ? old.map((t) => (t.id === tech.id ? { ...t, is_active: next } : t)) : old,
+    );
+    const { error } = await supabase.from("technicians").update({ is_active: next }).eq("id", tech.id);
+    setTogglingTechActive(false);
+    if (error) {
+      queryClient.setQueryData<TechnicianRecord[]>(TECHNICIANS_QUERY_KEY, prev);
+      toast.error("Could not update technician");
+      return;
+    }
+    toast.success(next ? "Technician is now visible on the map" : "Technician hidden from the map");
+    // Mark the Technicians-tab queries stale (refetch on next visit) without
+    // forcing an immediate heavy refetch of the full map technician list.
+    void queryClient.invalidateQueries({ queryKey: ["technicians"], refetchType: "none" });
+  };
+
   const SidePanel = (
     <div className="space-y-3">
       {selectedTech ? (
@@ -1582,6 +1684,20 @@ export default function MapViewPage() {
               )}
             </div>
             <Button size="icon" variant="ghost" onClick={clearSelectedTech}><X className="h-4 w-4" /></Button>
+          </div>
+          <div className="flex items-center justify-between rounded-lg border bg-muted/30 px-3 py-2">
+            <div className="min-w-0">
+              <div className="text-xs font-medium text-foreground">Active on map</div>
+              <div className="text-[11px] text-muted-foreground">
+                {selectedTech.is_active === false ? "Hidden from the map" : "Visible on the map"}
+              </div>
+            </div>
+            <Switch
+              checked={selectedTech.is_active !== false}
+              disabled={togglingTechActive}
+              onCheckedChange={(v) => void handleToggleTechActive(selectedTech, v === true)}
+              aria-label={selectedTech.is_active === false ? `Activate ${selectedTech.name}` : `Deactivate ${selectedTech.name}`}
+            />
           </div>
           <div className="border-t pt-3">
             <div className="flex flex-wrap gap-2 mb-2">
@@ -1734,11 +1850,56 @@ export default function MapViewPage() {
                 <Button size="sm" className="h-10 text-sm sm:h-8 sm:text-xs" onClick={runOmniActivate}>Search</Button>
               </div>
               {renderOmniDropdown()}
+
+              {/* Coverage tool: draw a green "good coverage" radius on click. */}
+              <div className="flex items-center gap-1.5">
+                <Button
+                  size="sm"
+                  variant={coverageOn ? "default" : "outline"}
+                  className="h-10 text-sm sm:h-8 sm:text-xs"
+                  onClick={() => setCoverageOn((v) => !v)}
+                  title="Draw a coverage radius: turn on, then click the map to drop a center"
+                >
+                  <span className={`mr-1.5 inline-block h-2.5 w-2.5 rounded-full border border-white ${coverageOn ? "bg-green-300" : "bg-green-500"}`} />
+                  Coverage
+                </Button>
+                {coverageOn && (
+                  <>
+                    <Input
+                      type="number"
+                      min={1}
+                      inputMode="numeric"
+                      value={coverageRadiusInput}
+                      onChange={(e) => setCoverageRadiusInput(e.target.value)}
+                      className="h-10 w-[68px] text-sm sm:h-8 sm:text-xs"
+                      aria-label="Coverage radius in miles"
+                    />
+                    <span className="text-[11px] text-muted-foreground">mi</span>
+                    {coverageCenter ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-10 px-2 text-xs sm:h-8"
+                        onClick={() => setCoverageCenter(null)}
+                        title="Remove the coverage circle"
+                      >
+                        Clear
+                      </Button>
+                    ) : (
+                      <span className="hidden text-[11px] text-muted-foreground sm:inline">Click map to set center</span>
+                    )}
+                  </>
+                )}
+              </div>
+
               <div className="ml-auto flex items-center gap-3 text-[11px] text-muted-foreground">
                 <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-blue-500 border border-white" /> Technician</span>
                 <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-red-500 border border-white" /> Urgent Lead</span>
                 {selectedTech && (
                   <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full border-2 border-blue-500 bg-blue-500/10" /> {RADIUS_MILES}-mi radius</span>
+                )}
+                {coverageOn && coverageCenter && coverageRadiusMiles > 0 && (
+                  <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full border-2 border-green-600 bg-green-500/25" /> Good coverage ({coverageRadiusMiles} mi)</span>
                 )}
               </div>
             </div>

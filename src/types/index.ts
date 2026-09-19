@@ -4,7 +4,7 @@ export type CsTag = 'confirmation_sent' | 'waiting_schedule_confirmation' | 'boo
 
 export const CS_TAG_LABELS: Record<CsTag, string> = {
   confirmation_sent: 'Confirmation sent to CX',
-  waiting_schedule_confirmation: 'Waiting for CX for schedule confirmation',
+  waiting_schedule_confirmation: 'Customer Require New Schedule',
   booked: 'Booked',
   ready_to_schedule: 'Ready to schedule',
   incomplete_details: 'Incomplete details',
