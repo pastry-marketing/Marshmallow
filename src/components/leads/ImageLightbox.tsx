@@ -48,7 +48,11 @@ export default function ImageLightbox({ images, initialIndex = 0, open, onOpenCh
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent hideClose className="max-w-[90vw] max-h-[90vh] p-0 bg-black/95 border-none overflow-hidden">
+      <DialogContent
+        hideClose
+        overlayClassName="z-[100]"
+        className="z-[100] max-w-[90vw] max-h-[90vh] p-0 bg-black/95 border-none overflow-hidden"
+      >
         <Button
           variant="ghost"
           size="icon"
