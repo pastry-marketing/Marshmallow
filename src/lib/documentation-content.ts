@@ -162,7 +162,7 @@ export const DOC_SECTIONS: DocSection[] = [
         headers: ["Tag key", "Label", "Assignable by"],
         rows: [
           ["ready_to_schedule", "Ready to schedule", "Admin, CS, Processor"],
-          ["confirmation_sent", "Confirmation sent to CX", "Admin, CS"],
+          ["confirmation_sent", "Customer Require New Schedule", "Admin, CS"],
           ["waiting_schedule_confirmation", "Waiting for CX for schedule confirmation", "Admin, CS, Processor"],
           ["booked", "Booked", "Admin, CS"],
           ["incomplete_details", "Incomplete details", "Admin, Processor, Quotation Master"],

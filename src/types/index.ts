@@ -3,7 +3,7 @@ export type AppRole = 'admin' | 'processor' | 'customer_service' | 'opr' | 'cs_a
 export type CsTag = 'confirmation_sent' | 'waiting_schedule_confirmation' | 'booked' | 'ready_to_schedule' | 'incomplete_details';
 
 export const CS_TAG_LABELS: Record<CsTag, string> = {
-  confirmation_sent: 'Confirmation sent to CX',
+  confirmation_sent: 'Customer Require New Schedule',
   waiting_schedule_confirmation: 'Waiting for CX for schedule confirmation',
   booked: 'Booked',
   ready_to_schedule: 'Ready to schedule',
