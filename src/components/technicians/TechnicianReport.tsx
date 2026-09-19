@@ -1,14 +1,17 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { format, subDays } from "date-fns";
+import type { DateRange } from "react-day-picker";
 import * as XLSX from "xlsx";
 import { supabase } from "@/integrations/supabase/client";
 import { fetchAllRows } from "@/lib/supabase-paginate";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Calendar } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Download, Loader2 } from "lucide-react";
+import { CalendarDays, ChevronDown, Download, Loader2, UsersRound } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface OprCodeOption {
   opr_code: string;
@@ -28,8 +31,21 @@ function toEndOfDayISO(dateStr: string): string {
   return new Date(`${dateStr}T23:59:59.999`).toISOString();
 }
 function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  return format(d, "yyyy-MM-dd");
 }
+
+function localDate(dateStr: string): Date {
+  return new Date(`${dateStr}T12:00:00`);
+}
+
+type DatePreset = "today" | "yesterday" | "last_week" | "last_month" | "custom";
+
+const DATE_PRESETS: Array<{ value: Exclude<DatePreset, "custom">; label: string; daysAgo: number }> = [
+  { value: "today", label: "Today", daysAgo: 0 },
+  { value: "yesterday", label: "Yesterday", daysAgo: 1 },
+  { value: "last_week", label: "Last Week", daysAgo: 6 },
+  { value: "last_month", label: "Last Month", daysAgo: 29 },
+];
 
 /**
  * Per-OPR technician report: how many technicians each OPR / OPR admin added
@@ -37,11 +53,36 @@ function isoDate(d: Date): string {
  */
 export function TechnicianReport({ isAdmin }: { isAdmin: boolean }) {
   const today = new Date();
-  const monthAgo = new Date();
-  monthAgo.setDate(today.getDate() - 30);
+  const monthAgo = subDays(today, 29);
 
   const [from, setFrom] = useState(isoDate(monthAgo));
   const [to, setTo] = useState(isoDate(today));
+  const [activePreset, setActivePreset] = useState<DatePreset>("last_month");
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [draftRange, setDraftRange] = useState<DateRange>({
+    from: localDate(from),
+    to: localDate(to),
+  });
+
+  const applyPreset = (preset: Exclude<DatePreset, "custom">, daysAgo: number) => {
+    const anchor = new Date();
+    const end = preset === "yesterday" ? subDays(anchor, 1) : anchor;
+    const start = preset === "yesterday" ? end : subDays(anchor, daysAgo);
+    setFrom(isoDate(start));
+    setTo(isoDate(end));
+    setDraftRange({ from: start, to: end });
+    setActivePreset(preset);
+    setCalendarOpen(false);
+  };
+
+  const applyCustomRange = (range: DateRange | undefined) => {
+    if (!range?.from) return;
+    setDraftRange(range);
+    setFrom(isoDate(range.from));
+    setTo(isoDate(range.to ?? range.from));
+    setActivePreset("custom");
+    if (range.to) setCalendarOpen(false);
+  };
 
   const { data: ownerMap = new Map<string, string>() } = useQuery({
     queryKey: ["opr-code-owners"],
@@ -124,44 +165,112 @@ export function TechnicianReport({ isAdmin }: { isAdmin: boolean }) {
   };
 
   return (
-    <Card className="border-border/60">
-      <CardContent className="space-y-4 p-4">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div className="flex flex-wrap items-end gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="report-from" className="text-xs text-muted-foreground">From</Label>
-              <Input id="report-from" type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} className="h-9 w-[160px] text-sm" />
+    <Card className="overflow-hidden rounded-2xl border-border/60 bg-card/90 shadow-sm">
+      <CardContent className="p-0">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/50 p-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
+              <UsersRound className="h-5 w-5" />
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="report-to" className="text-xs text-muted-foreground">To</Label>
-              <Input id="report-to" type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} className="h-9 w-[160px] text-sm" />
+            <div>
+              <h2 className="text-sm font-semibold text-foreground">Technician activity</h2>
+              <p className="text-xs text-muted-foreground">Technicians added by each OPR during the selected period.</p>
             </div>
           </div>
           {isAdmin && rows.length > 0 && (
             <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={() => exportReport("csv")}>
+              <Button variant="outline" size="sm" className="h-8 rounded-lg border-border/60 text-xs" onClick={() => exportReport("csv")}>
                 <Download className="mr-1.5 h-4 w-4" /> CSV
               </Button>
-              <Button variant="outline" size="sm" onClick={() => exportReport("xlsx")}>
+              <Button variant="outline" size="sm" className="h-8 rounded-lg border-border/60 text-xs" onClick={() => exportReport("xlsx")}>
                 <Download className="mr-1.5 h-4 w-4" /> XLSX
               </Button>
             </div>
           )}
         </div>
 
-        <p className="text-sm text-muted-foreground">
-          {reportQuery.isPending
-            ? "Loading…"
-            : `${total.toLocaleString()} technician${total === 1 ? "" : "s"} added across ${rows.length} OPR${rows.length === 1 ? "" : "s"} in this range.`}
-        </p>
+        <div className="flex flex-col gap-3 border-b border-border/50 bg-muted/20 p-4 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="mr-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Quick filters</span>
+            <div className="flex flex-wrap items-center gap-1 rounded-xl border border-border/60 bg-background/80 p-1">
+              {DATE_PRESETS.map((preset) => (
+                <button
+                  key={preset.value}
+                  type="button"
+                  aria-pressed={activePreset === preset.value}
+                  onClick={() => applyPreset(preset.value, preset.daysAgo)}
+                  className={cn(
+                    "rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
+                    activePreset === preset.value
+                      ? "bg-primary text-primary-foreground shadow-sm"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                  )}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
 
-        <div className="overflow-x-auto rounded-lg border border-border/60">
+            <Popover
+              open={calendarOpen}
+              onOpenChange={(open) => {
+                setCalendarOpen(open);
+                if (open) setDraftRange({ from: localDate(from), to: localDate(to) });
+              }}
+            >
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  className={cn(
+                    "h-9 min-w-[238px] justify-between rounded-xl border-border/60 bg-background px-3 text-xs font-medium",
+                    activePreset === "custom" && "border-primary/60 bg-primary/5 text-primary",
+                  )}
+                >
+                  <span className="flex items-center gap-2">
+                    <CalendarDays className="h-4 w-4" />
+                    {format(localDate(from), "MMM d, yyyy")} – {format(localDate(to), "MMM d, yyyy")}
+                  </span>
+                  <ChevronDown className="h-3.5 w-3.5 opacity-60" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-auto rounded-xl border-border/60 p-0 shadow-xl" align="start">
+                <Calendar
+                  initialFocus
+                  mode="range"
+                  defaultMonth={draftRange.from}
+                  selected={draftRange}
+                  onSelect={applyCustomRange}
+                  numberOfMonths={1}
+                  disabled={{ after: new Date() }}
+                  className="pointer-events-auto p-3"
+                />
+              </PopoverContent>
+            </Popover>
+          </div>
+
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            {reportQuery.isPending ? (
+              <><Loader2 className="h-4 w-4 animate-spin" /> Loading report…</>
+            ) : (
+              <>
+                <span className="rounded-lg border border-border/60 bg-background px-2.5 py-1.5">
+                  <strong className="text-foreground">{total.toLocaleString()}</strong> technician{total === 1 ? "" : "s"}
+                </span>
+                <span className="rounded-lg border border-border/60 bg-background px-2.5 py-1.5">
+                  <strong className="text-foreground">{rows.length}</strong> OPR{rows.length === 1 ? "" : "s"}
+                </span>
+              </>
+            )}
+          </div>
+        </div>
+
+        <div className="m-4 overflow-x-auto rounded-xl border border-border/60">
           <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>OPR Code</TableHead>
-                <TableHead>Owner</TableHead>
-                <TableHead className="text-right">Technicians Added</TableHead>
+            <TableHeader className="bg-muted/40">
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="h-10 text-[11px] font-semibold uppercase tracking-wider">OPR Code</TableHead>
+                <TableHead className="h-10 text-[11px] font-semibold uppercase tracking-wider">Owner</TableHead>
+                <TableHead className="h-10 text-right text-[11px] font-semibold uppercase tracking-wider">Technicians Added</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -180,10 +289,14 @@ export function TechnicianReport({ isAdmin }: { isAdmin: boolean }) {
                 </TableRow>
               )}
               {rows.map((r) => (
-                <TableRow key={r.opr_code}>
+                <TableRow key={r.opr_code} className="transition-colors hover:bg-muted/30">
                   <TableCell className="font-mono text-xs font-semibold tracking-wider">{r.opr_code}</TableCell>
                   <TableCell>{r.owner || <span className="text-muted-foreground">—</span>}</TableCell>
-                  <TableCell className="text-right font-medium">{r.count.toLocaleString()}</TableCell>
+                  <TableCell className="text-right">
+                    <span className="inline-flex min-w-10 justify-center rounded-lg bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">
+                      {r.count.toLocaleString()}
+                    </span>
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
