@@ -205,6 +205,30 @@ export async function geocodeArea(query: string): Promise<AreaGeocodeResult | nu
   return { latitude: lat, longitude: lng, boundingBox, geojson, isArea, displayName: String(r.display_name ?? q) };
 }
 
+/**
+ * Reverse-geocode a point to a human place name (city / town / county), used to
+ * default the label of a coverage circle. Best-effort; returns null on failure.
+ */
+export async function reverseGeocodeCity(lat: number, lng: number): Promise<string | null> {
+  try {
+    const url =
+      `https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=10&addressdetails=1` +
+      `&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}`;
+    const res = await fetch(url, { headers: { Accept: "application/json" } });
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      address?: { city?: string; town?: string; village?: string; hamlet?: string; municipality?: string; county?: string; state?: string };
+      name?: string;
+    };
+    const a = data.address ?? {};
+    return (
+      a.city || a.town || a.village || a.hamlet || a.municipality || a.county || data.name || a.state || null
+    );
+  } catch {
+    return null;
+  }
+}
+
 async function nominatimQuery(query: string): Promise<LatLng | null> {
   const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=us&q=${encodeURIComponent(query)}`;
   const res = await fetch(url, { headers: { Accept: "application/json" } });

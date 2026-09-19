@@ -723,3 +723,19 @@ html.dark body {
 .marshmallow-tech-phone-label.leaflet-tooltip:before {
   border-right-color: rgba(37, 99, 235, 0.95);
 }
+
+/* Coverage circle name label (centered, no arrow) */
+.coverage-label.leaflet-tooltip {
+  background: rgba(255, 255, 255, 0.9);
+  color: #166534;
+  border: 1px solid rgba(22, 101, 52, 0.35);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.coverage-label.leaflet-tooltip:before {
+  display: none;
+}

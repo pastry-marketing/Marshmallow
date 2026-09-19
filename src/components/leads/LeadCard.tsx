@@ -6,7 +6,6 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { useIsLastMessageFromCustomer } from "@/hooks/useIsLastMessageFromCustomer";
 import { expandStateAbbreviation } from "@/lib/utils";
-import { scheduleRequirementDueOrOverdue } from "@/lib/schedule-date-filter";
 import { Lead, LeadStatus, STATUS_LABELS, getChangeableStatuses, canChangeStatus } from "@/lib/constants";
 import { CS_TAG_LABELS, type CsTag } from "@/types";
 import { Card } from "@/components/ui/card";
@@ -30,7 +29,6 @@ import {
   Clipboard,
   ExternalLink,
   UserPlus,
-  AlertTriangle,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -894,12 +892,6 @@ function LeadCard({
   const { isFromCustomer } = useIsLastMessageFromCustomer(lead.customer_phone, hasScheduleTag);
   const needsScheduleBlink = hasScheduleTag && isFromCustomer;
   const isActivateCustomer = lead.status === "activate_customer";
-  // Urgent leads whose requested schedule date is today or already past "need
-  // attention". Only Admin / CS / CS Admin see this tag.
-  const needsAttention =
-    lead.status === "urgent_job" &&
-    (isAdmin || isCS || isCsAdmin) &&
-    scheduleRequirementDueOrOverdue(lead.customer_schedule_requirements);
   const isQuoteUpdatedForMe = lead.status === "quote_updated" && (role === "cs_admin" || lead.quote_requested_by === user?.id);
   const isPendingQuoteForMaster = lead.status === "pending_to_send" && isQuotationMaster(role, profile?.is_quotation_master);
   const baseShouldBlink =
@@ -1564,19 +1556,6 @@ function LeadCard({
                       className="inline-flex items-center gap-1 rounded-full border border-emerald-500/50 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300"
                     >
                       📌 Activate Customer
-                    </span>
-                  )}
-                  {needsAttention && (
-                    /* Auto/system tag — deliberately styled unlike the manual
-                       round tag pills: square, dashed border, uppercase, with an
-                       AUTO marker so it reads as computed, not manually applied. */
-                    <span
-                      title="Auto tag: urgent lead with a schedule requirement due today or overdue"
-                      className="inline-flex items-center gap-1 rounded-md border border-dashed border-rose-500/70 bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-700 dark:text-rose-300 animate-pulse"
-                    >
-                      <AlertTriangle className="h-3 w-3" />
-                      Need Attention
-                      <span className="ml-0.5 rounded-sm bg-rose-500/25 px-1 py-px text-[7px] font-bold leading-none tracking-normal">AUTO</span>
                     </span>
                   )}
                   {lead.cs_tag === "booked" && lead.booked_at && (
