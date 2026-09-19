@@ -492,16 +492,23 @@ export default function TechniciansPage() {
     setDeleteTech(null);
   };
 
-  const EXPORT_HEADERS = ["Technician Name", "OPR Code", "Phone Number", "Service", "Area", "Quo Chat Link", "Notes", "Added Date"];
+  const EXPORT_HEADERS = ["Technician ID", "Technician Name", "Status", "OPR Code", "Legacy Code", "Phone Number", "Service", "Area", "Quo Chat Link", "Notes", "Latitude", "Longitude", "Created By User ID", "Added Date", "Last Updated"];
   const toExportRow = (t: TechnicianRecord) => ({
+    "Technician ID": t.id ?? "",
     "Technician Name": t.name ?? "",
+    Status: t.is_active === false ? "Inactive" : "Active",
     "OPR Code": t.opr_code ?? "",
+    "Legacy Code": t.code ?? "",
     "Phone Number": t.phone_number ?? "",
     Service: t.service ?? "",
     Area: t.area ?? "",
     "Quo Chat Link": t.chat_link ?? "",
     Notes: t.notes ?? "",
+    Latitude: t.latitude ?? "",
+    Longitude: t.longitude ?? "",
+    "Created By User ID": t.created_by ?? "",
     "Added Date": formatAddedDate(t.created_at),
+    "Last Updated": formatAddedDate(t.updated_at),
   });
   const [exporting, setExporting] = useState(false);
 

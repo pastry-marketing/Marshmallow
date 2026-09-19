@@ -34,6 +34,26 @@ interface CoverageArea {
   center: LatLng;
   radiusMiles: number;
   name: string;
+  isActive: boolean;
+}
+
+interface CoverageAreaRow {
+  id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  radius_miles: number;
+  is_active: boolean;
+}
+
+function coverageAreaFromRow(row: CoverageAreaRow): CoverageArea {
+  return {
+    id: row.id,
+    name: row.name ?? "",
+    center: { latitude: row.latitude, longitude: row.longitude },
+    radiusMiles: row.radius_miles,
+    isActive: row.is_active,
+  };
 }
 const US_STATES: Record<string, string> = {
   AL:"Alabama",AK:"Alaska",AZ:"Arizona",AR:"Arkansas",CA:"California",CO:"Colorado",CT:"Connecticut",DE:"Delaware",FL:"Florida",GA:"Georgia",HI:"Hawaii",ID:"Idaho",IL:"Illinois",IN:"Indiana",IA:"Iowa",KS:"Kansas",KY:"Kentucky",LA:"Louisiana",ME:"Maine",MD:"Maryland",MA:"Massachusetts",MI:"Michigan",MN:"Minnesota",MS:"Mississippi",MO:"Missouri",MT:"Montana",NE:"Nebraska",NV:"Nevada",NH:"New Hampshire",NJ:"New Jersey",NM:"New Mexico",NY:"New York",NC:"North Carolina",ND:"North Dakota",OH:"Ohio",OK:"Oklahoma",OR:"Oregon",PA:"Pennsylvania",RI:"Rhode Island",SC:"South Carolina",SD:"South Dakota",TN:"Tennessee",TX:"Texas",UT:"Utah",VT:"Vermont",VA:"Virginia",WA:"Washington",WV:"West Virginia",WI:"Wisconsin",WY:"Wyoming",DC:"District of Columbia",
@@ -682,6 +702,95 @@ export default function MapViewPage() {
     return Math.min(n, 3000);
   }, [coverageRadiusInput]);
 
+  const loadCoverageAreas = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("map_coverage_areas")
+      .select("id, name, latitude, longitude, radius_miles, is_active")
+      .order("created_at", { ascending: true });
+    if (error) {
+      console.error("Failed to load synchronized coverage areas", error);
+      return;
+    }
+    setCoverageAreas(((data ?? []) as CoverageAreaRow[]).map(coverageAreaFromRow));
+  }, []);
+
+  useEffect(() => {
+    void loadCoverageAreas();
+    const channel = supabase
+      .channel("map-coverage-areas-sync")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "map_coverage_areas" },
+        () => void loadCoverageAreas(),
+      )
+      .subscribe();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [loadCoverageAreas]);
+
+  const updateCoverageAreaLocal = useCallback((id: string, patch: Partial<Omit<CoverageArea, "id" | "center">>) => {
+    setCoverageAreas((prev) => prev.map((area) => (area.id === id ? { ...area, ...patch } : area)));
+  }, []);
+
+  const saveCoverageArea = useCallback(async (
+    id: string,
+    patch: Partial<Pick<CoverageArea, "name" | "radiusMiles" | "isActive">>,
+  ) => {
+    updateCoverageAreaLocal(id, patch);
+    const databasePatch: { name?: string; radius_miles?: number; is_active?: boolean } = {};
+    if (patch.name !== undefined) databasePatch.name = patch.name;
+    if (patch.radiusMiles !== undefined) databasePatch.radius_miles = patch.radiusMiles;
+    if (patch.isActive !== undefined) databasePatch.is_active = patch.isActive;
+    const { error } = await supabase.from("map_coverage_areas").update(databasePatch).eq("id", id);
+    if (error) {
+      toast.error("Could not save coverage area");
+      await loadCoverageAreas();
+    }
+  }, [loadCoverageAreas, updateCoverageAreaLocal]);
+
+  const createCoverageArea = useCallback(async (center: LatLng) => {
+    const { data, error } = await supabase
+      .from("map_coverage_areas")
+      .insert({
+        name: "",
+        latitude: center.latitude,
+        longitude: center.longitude,
+        radius_miles: defaultCoverageMiles,
+        is_active: true,
+      })
+      .select("id, name, latitude, longitude, radius_miles, is_active")
+      .single();
+    if (error || !data) {
+      toast.error("Could not add coverage area");
+      return;
+    }
+    const area = coverageAreaFromRow(data as CoverageAreaRow);
+    setCoverageAreas((prev) => [...prev.filter((item) => item.id !== area.id), area]);
+    const city = await reverseGeocodeCity(center.latitude, center.longitude);
+    if (city) await saveCoverageArea(area.id, { name: city });
+  }, [defaultCoverageMiles, saveCoverageArea]);
+
+  const deleteCoverageArea = useCallback(async (id: string) => {
+    setCoverageAreas((prev) => prev.filter((area) => area.id !== id));
+    const { error } = await supabase.from("map_coverage_areas").delete().eq("id", id);
+    if (error) {
+      toast.error("Could not remove coverage area");
+      await loadCoverageAreas();
+    }
+  }, [loadCoverageAreas]);
+
+  const clearCoverageAreas = useCallback(async () => {
+    const ids = coverageAreas.map((area) => area.id);
+    if (ids.length === 0) return;
+    setCoverageAreas([]);
+    const { error } = await supabase.from("map_coverage_areas").delete().in("id", ids);
+    if (error) {
+      toast.error("Could not clear coverage areas");
+      await loadCoverageAreas();
+    }
+  }, [coverageAreas, loadCoverageAreas]);
+
   const urgentLeadsQuery = useQuery({
     queryKey: ["map-urgent-leads"],
     queryFn: async () => {
@@ -1303,17 +1412,8 @@ export default function MapViewPage() {
     const map = mapRef.current;
     if (!map || !mapReady || !coverageOn) return;
     const onClick = (e: L.LeafletMouseEvent) => {
-      const id = `cov_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
       const center: LatLng = { latitude: e.latlng.lat, longitude: e.latlng.lng };
-      setCoverageAreas((prev) => [
-        ...prev,
-        { id, center, radiusMiles: defaultCoverageMiles, name: "" },
-      ]);
-      void reverseGeocodeCity(center.latitude, center.longitude).then((city) => {
-        setCoverageAreas((prev) =>
-          prev.map((a) => (a.id === id && !a.name ? { ...a, name: city ?? "" } : a)),
-        );
-      });
+      void createCoverageArea(center);
     };
     map.on("click", onClick);
     const container = map.getContainer();
@@ -1323,14 +1423,14 @@ export default function MapViewPage() {
       map.off("click", onClick);
       container.style.cursor = prevCursor;
     };
-  }, [coverageOn, mapReady, defaultCoverageMiles]);
+  }, [coverageOn, createCoverageArea, mapReady]);
 
   // Draw / reconcile all coverage circles (+ center dots + name labels).
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
     const layers = coverageLayersRef.current;
-    const wanted = coverageOn ? coverageAreas.filter((a) => a.radiusMiles > 0) : [];
+    const wanted = coverageAreas.filter((a) => a.isActive && a.radiusMiles > 0);
     const wantedIds = new Set(wanted.map((a) => a.id));
 
     // Remove circles that are gone or hidden.
@@ -1373,7 +1473,7 @@ export default function MapViewPage() {
         layers.set(area.id, { circle, dot });
       }
     }
-  }, [coverageOn, coverageAreas, mapVisible, mapReady]);
+  }, [coverageAreas, mapVisible, mapReady]);
 
   useEffect(() => {
     if (!mapVisible) return;
@@ -1712,15 +1812,15 @@ export default function MapViewPage() {
 
   const SidePanel = (
     <div className="space-y-3">
-      {coverageOn && (
+      {(coverageOn || coverageAreas.length > 0) && (
         <div className="rounded-lg border bg-muted/20 p-2.5 space-y-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
               <span className="h-2.5 w-2.5 rounded-full border-2 border-green-600 bg-green-500/25" />
-              Coverage areas ({coverageAreas.length})
+              Synced coverage areas ({coverageAreas.length})
             </div>
             {coverageAreas.length > 0 && (
-              <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" onClick={() => setCoverageAreas([])}>Clear</Button>
+              <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" onClick={() => void clearCoverageAreas()}>Clear</Button>
             )}
           </div>
           {coverageAreas.length === 0 ? (
@@ -1730,10 +1830,16 @@ export default function MapViewPage() {
               {coverageAreas.map((a, i) => (
                 <li key={a.id} className="space-y-1.5 rounded-md border bg-background p-2">
                   <div className="flex items-center gap-1.5">
+                    <Switch
+                      checked={a.isActive}
+                      onCheckedChange={(active) => void saveCoverageArea(a.id, { isActive: active })}
+                      aria-label={`${a.isActive ? "Hide" : "Show"} ${a.name || `coverage ${i + 1}`}`}
+                    />
                     <Input
                       value={a.name}
                       placeholder={`Coverage ${i + 1}`}
-                      onChange={(e) => setCoverageAreas((prev) => prev.map((x) => (x.id === a.id ? { ...x, name: e.target.value } : x)))}
+                      onChange={(e) => updateCoverageAreaLocal(a.id, { name: e.target.value })}
+                      onBlur={(e) => void saveCoverageArea(a.id, { name: e.target.value.trim() })}
                       className="h-7 flex-1 text-xs"
                       aria-label="Coverage area name"
                     />
@@ -1741,7 +1847,7 @@ export default function MapViewPage() {
                       size="icon"
                       variant="ghost"
                       className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
-                      onClick={() => setCoverageAreas((prev) => prev.filter((x) => x.id !== a.id))}
+                      onClick={() => void deleteCoverageArea(a.id)}
                       title="Remove this coverage circle"
                     >
                       <X className="h-3.5 w-3.5" />
@@ -1755,7 +1861,12 @@ export default function MapViewPage() {
                       value={a.radiusMiles ? String(a.radiusMiles) : ""}
                       onChange={(e) => {
                         const n = parseFloat(e.target.value);
-                        setCoverageAreas((prev) => prev.map((x) => (x.id === a.id ? { ...x, radiusMiles: Number.isFinite(n) && n > 0 ? Math.min(n, 3000) : 0 } : x)));
+                        updateCoverageAreaLocal(a.id, { radiusMiles: Number.isFinite(n) && n > 0 ? Math.min(n, 3000) : 0 });
+                      }}
+                      onBlur={(e) => {
+                        const n = parseFloat(e.target.value);
+                        if (Number.isFinite(n) && n > 0) void saveCoverageArea(a.id, { radiusMiles: Math.min(n, 3000) });
+                        else void loadCoverageAreas();
                       }}
                       className="h-7 w-[68px] text-xs"
                       aria-label="Coverage radius in miles"
@@ -1984,7 +2095,7 @@ export default function MapViewPage() {
                   title="Draw a coverage radius: turn on, then click the map to drop a center"
                 >
                   <span className={`mr-1.5 inline-block h-2.5 w-2.5 rounded-full border border-white ${coverageOn ? "bg-green-300" : "bg-green-500"}`} />
-                  Coverage
+                  Add Coverage
                 </Button>
                 {coverageOn && (
                   <>
@@ -2004,7 +2115,7 @@ export default function MapViewPage() {
                         size="sm"
                         variant="ghost"
                         className="h-10 px-2 text-xs sm:h-8"
-                        onClick={() => setCoverageAreas([])}
+                        onClick={() => void clearCoverageAreas()}
                         title="Remove all coverage circles"
                       >
                         Clear all
@@ -2022,8 +2133,8 @@ export default function MapViewPage() {
                 {selectedTech && (
                   <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full border-2 border-blue-500 bg-blue-500/10" /> {RADIUS_MILES}-mi radius</span>
                 )}
-                {coverageOn && coverageAreas.length > 0 && (
-                  <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full border-2 border-green-600 bg-green-500/25" /> Good coverage ({coverageAreas.length})</span>
+                {coverageAreas.some((area) => area.isActive) && (
+                  <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full border-2 border-green-600 bg-green-500/25" /> Good coverage ({coverageAreas.filter((area) => area.isActive).length})</span>
                 )}
               </div>
             </div>
