@@ -26,7 +26,7 @@ import { ScheduleDateFilter } from "@/components/leads/ScheduleDateFilter";
 import { doesLeadMatchScheduleDateRange, leadNeedsAttention } from "@/lib/schedule-date-filter";
 import { readLeadsCache, writeLeadsCache } from "@/lib/leadsCache";
 import { Plus, Search, Download, Share2, X, SlidersHorizontal, BarChart3, Puzzle, FileText, Calendar as CalendarIcon, LayoutGrid, List, MapPin } from "lucide-react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import { useNotepad } from "@/contexts/NotepadContext";
 import LeadCard from "@/components/leads/LeadCard";
 import OprLeadCard from "@/components/leads/OprLeadCard";
@@ -41,7 +41,7 @@ import { isOperatorRole } from "@/lib/access";
 
 
 import { motion } from "framer-motion";
-import { heroTitle, premiumEase, silkySpring, cardGridContainer, cardGridItem } from "@/lib/motion";
+import { heroTitle, premiumEase, cardGridContainer, cardGridItem } from "@/lib/motion";
 
 const PAGE_SIZES = [20, 40, 60, 100];
 
@@ -76,6 +76,7 @@ export default function LeadsPage() {
   const { toggleNotepad, isNotepadOpen, activeUserIds } = useNotepad();
   const isAnyNotepadOpen = activeUserIds.length > 0;
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
 
   const [leads, setLeads] = useState<Lead[]>([]);
   const [sharedLeads, setSharedLeads] = useState<Lead[]>([]);
@@ -612,11 +613,24 @@ export default function LeadsPage() {
 
   const countSource = activeTab === "shared" ? visibleSharedLeads : visibleMyLeads;
 
-  const urgentCount = countSource.filter((l) => l.status === "urgent_job").length;
   const scheduledCount = countSource.filter((l) => l.status === "scheduled").length;
   const activeCount = countSource.filter(
     (l) => l.status !== "cancelled" && l.status !== "paid" && l.status !== "job_done",
   ).length;
+
+  // Urgent leads for the workspace overview table, built entirely from the
+  // already-loaded in-memory leads (no extra queries). Newest-urgent first.
+  const urgentLeadsForTable = useMemo(
+    () =>
+      countSource
+        .filter((l) => l.status === "urgent_job")
+        .sort((a, b) => {
+          const at = new Date(a.urgent_at ?? a.created_at).getTime();
+          const bt = new Date(b.urgent_at ?? b.created_at).getTime();
+          return (Number.isNaN(bt) ? 0 : bt) - (Number.isNaN(at) ? 0 : at);
+        }),
+    [countSource],
+  );
   const hasActiveFilters = Boolean(search) || safeStatusFilter !== "all" || Boolean(scheduleDateRange?.from);
 
   const handleExportData = async (options: ExportOptions) => {
@@ -914,44 +928,59 @@ export default function LeadsPage() {
         </div>
       </motion.section>
 
+      {/* Urgent leads overview — a compact, scrollable table built from the
+          already-loaded leads (no extra queries), replacing the stat tiles. */}
       <motion.div
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.1 }}
-        className="grid grid-cols-1 gap-3 sm:grid-cols-3"
+        className="glass-panel overflow-hidden rounded-[26px] shadow-[0_28px_54px_-34px_rgba(59,130,246,0.22)] dark:bg-[linear-gradient(180deg,hsl(var(--card)/0.86),hsl(var(--muted)/0.28))] dark:shadow-none"
       >
-        <motion.div whileHover={{ y: -3 }} transition={silkySpring} className="glass-panel rounded-[26px] p-4 shadow-[0_28px_54px_-34px_rgba(59,130,246,0.22)] dark:bg-[linear-gradient(180deg,hsl(var(--card)/0.86),hsl(var(--muted)/0.28))] dark:shadow-none">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/85">Active Pipeline</p>
-          <div className="mt-3 flex items-end justify-between gap-3">
-            <span className="text-3xl font-semibold tracking-[-0.04em] text-foreground tabular-nums">{activeCount}</span>
-            <span className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-primary/10 bg-primary/[0.08]">
-              <span className="h-2.5 w-2.5 rounded-full bg-primary" />
+        <div className="flex items-center justify-between gap-3 border-b border-border/50 px-4 py-2.5">
+          <div className="flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-destructive status-pulse" />
+            <h3 className="text-sm font-semibold text-foreground">Urgent leads</h3>
+            <span className="rounded-full bg-destructive/12 px-1.5 py-0.5 text-[11px] font-bold tabular-nums text-destructive">
+              {urgentLeadsForTable.length}
             </span>
           </div>
-        </motion.div>
+          <div className="hidden items-center gap-3 text-[11px] text-muted-foreground sm:flex">
+            <span>Active <b className="tabular-nums text-foreground">{activeCount}</b></span>
+            <span>Scheduled <b className="tabular-nums text-foreground">{scheduledCount}</b></span>
+          </div>
+        </div>
 
-        {urgentCount > 0 && (
-          <motion.div whileHover={{ y: -3 }} transition={silkySpring} className="rounded-[26px] border border-destructive/22 bg-[radial-gradient(circle_at_top_left,hsl(var(--destructive)/0.12),transparent_34%),linear-gradient(180deg,hsl(0_0%_100%/0.8),hsl(12_100%_97%/0.64))] p-4 shadow-[0_26px_50px_-30px_rgba(239,68,68,0.18),0_12px_24px_-20px_rgba(251,146,60,0.12)] dark:border-destructive/18 dark:bg-[radial-gradient(circle_at_top_left,hsl(var(--destructive)/0.12),transparent_34%),linear-gradient(180deg,hsl(225_28%_18%/0.96),hsl(226_26%_15%/0.92))] dark:shadow-[0_22px_42px_-30px_rgba(239,68,68,0.22)]">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-destructive/75">Urgent Attention</p>
-            <div className="mt-3 flex items-end justify-between gap-3">
-              <span className="text-3xl font-semibold tracking-[-0.04em] text-destructive tabular-nums">{urgentCount}</span>
-              <span className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-destructive/15 bg-destructive/[0.1] dark:border-destructive/22 dark:bg-destructive/[0.14]">
-                <span className="h-2.5 w-2.5 rounded-full bg-destructive status-pulse" />
-              </span>
-            </div>
-          </motion.div>
-        )}
-
-        {scheduledCount > 0 && (
-          <motion.div whileHover={{ y: -3 }} transition={silkySpring} className="glass-panel rounded-[26px] p-4 shadow-[0_28px_54px_-34px_rgba(59,130,246,0.22)] dark:bg-[linear-gradient(180deg,hsl(var(--card)/0.86),hsl(var(--muted)/0.28))] dark:shadow-none">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/85">Scheduled Jobs</p>
-            <div className="mt-3 flex items-end justify-between gap-3">
-              <span className="text-3xl font-semibold tracking-[-0.04em] text-foreground tabular-nums">{scheduledCount}</span>
-              <span className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-primary/10 bg-primary/[0.06]">
-                <span className="h-2.5 w-2.5 rounded-full bg-primary/60" />
-              </span>
-            </div>
-          </motion.div>
+        {urgentLeadsForTable.length === 0 ? (
+          <div className="px-4 py-6 text-center text-xs text-muted-foreground">No urgent leads right now.</div>
+        ) : (
+          <div className="max-h-[240px] overflow-auto">
+            <table className="w-full border-collapse text-left text-xs">
+              <thead className="sticky top-0 z-10 bg-card/95 backdrop-blur">
+                <tr className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                  <th className="px-4 py-1.5 font-semibold">Customer</th>
+                  <th className="px-2 py-1.5 font-semibold">Service</th>
+                  <th className="px-4 py-1.5 font-semibold">Area</th>
+                </tr>
+              </thead>
+              <tbody>
+                {urgentLeadsForTable.map((l) => {
+                  const area = [l.city, l.state].filter(Boolean).join(", ") || l.address || "—";
+                  return (
+                    <tr
+                      key={l.id}
+                      onClick={() => navigate(`/leads/${l.id}`)}
+                      className="cursor-pointer border-t border-border/40 transition-colors hover:bg-muted/40"
+                      title="Open lead"
+                    >
+                      <td className="max-w-[160px] truncate px-4 py-2 font-medium text-foreground">{l.customer_name || "—"}</td>
+                      <td className="max-w-[180px] truncate px-2 py-2 text-muted-foreground">{l.service_type || "—"}</td>
+                      <td className="max-w-[220px] truncate px-4 py-2 text-muted-foreground" title={area}>{area}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
       </motion.div>
 
