@@ -12,7 +12,7 @@ import { formatUSPhone, stripPhone } from "@/lib/phone";
 import { lookupZipCentroid, resolveZip } from "@/lib/zipCentroids";
 import { TECHNICIANS_QUERY_KEY, upsertTechnicianInList } from "@/lib/technicians";
 import { useQueryClient } from "@tanstack/react-query";
-import { Loader2 } from "lucide-react";
+import { Loader2, Star } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { mustChooseOprCode } from "@/lib/access";
 import { AreaCombobox } from "@/components/technicians/AreaCombobox";
@@ -33,6 +33,7 @@ export interface TechnicianRecord {
   code?: string | null;
   opr_code?: string | null;
   created_at?: string | null;
+  is_good_tech?: boolean | null;
 }
 
 interface Props {
@@ -59,6 +60,7 @@ export function TechnicianDialog({ open, onOpenChange, technician, onSaved }: Pr
   const [service, setService] = useState("");
   const [chatLink, setChatLink] = useState("");
   const [notes, setNotes] = useState("");
+  const [isGoodTech, setIsGoodTech] = useState(false);
   const [saving, setSaving] = useState(false);
 
   // A regular opr is locked to their own code; opr_admin / admin pick one.
@@ -76,6 +78,7 @@ export function TechnicianDialog({ open, onOpenChange, technician, onSaved }: Pr
       setService(technician?.service ?? "");
       setChatLink(technician?.chat_link ?? "");
       setNotes(technician?.notes ?? "");
+      setIsGoodTech(technician?.is_good_tech ?? false);
 
       // Load the list of OPR codes for the picker (admins / opr_admins choose).
       if (canChooseOprCode) {
@@ -157,11 +160,12 @@ export function TechnicianDialog({ open, onOpenChange, technician, onSaved }: Pr
         chat_link: chatLink.trim() || null,
         notes: notes.trim() || null,
         opr_code: cleanOprCode || null,
+        is_good_tech: isGoodTech,
         latitude,
         longitude,
       };
 
-      const SELECT = "id, name, area, service, notes, chat_link, phone_number, latitude, longitude, code, opr_code, is_active, created_by, created_at, updated_at";
+      const SELECT = "id, name, area, service, notes, chat_link, phone_number, latitude, longitude, code, opr_code, is_active, created_by, created_at, updated_at, is_good_tech";
       let saved: TechnicianRecord | null = null;
       let error: { message: string; code?: string } | null = null;
       if (technician) {
@@ -213,7 +217,22 @@ export function TechnicianDialog({ open, onOpenChange, technician, onSaved }: Pr
         </DialogHeader>
         <div className="space-y-3 py-2">
           <div className="space-y-1.5">
-            <Label htmlFor="tech-name">Technician Name <span className="text-destructive">*</span></Label>
+            <div className="flex items-center justify-between">
+              <Label htmlFor="tech-name">Technician Name <span className="text-destructive">*</span></Label>
+              <button
+                type="button"
+                onClick={() => setIsGoodTech(!isGoodTech)}
+                className={`flex items-center gap-1.5 text-[11px] font-semibold transition-colors ${
+                  isGoodTech ? "text-amber-500 hover:text-amber-600" : "text-muted-foreground hover:text-foreground"
+                }`}
+                title="Mark as Good Tech"
+              >
+                <Star
+                  className={`h-4 w-4 ${isGoodTech ? "fill-amber-500 text-amber-500" : ""}`}
+                />
+                Good Tech
+              </button>
+            </div>
             <Input id="tech-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. John Smith" />
           </div>
 

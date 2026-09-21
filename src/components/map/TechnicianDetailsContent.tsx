@@ -1,4 +1,4 @@
-import { Phone, Copy, MessageCircle } from "lucide-react";
+import { Phone, Copy, MessageCircle, Star } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toTelHref, copyToClipboard } from "@/lib/phone";
 import { toast } from "sonner";
@@ -10,6 +10,7 @@ export interface TechnicianLike {
   service?: string | null;
   chat_link?: string | null;
   notes?: string | null;
+  is_good_tech?: boolean | null;
 }
 
 interface Props {
@@ -44,7 +45,12 @@ export function TechnicianDetailsContent({ technician, compact = false }: Props)
   return (
     <div className={compact ? "space-y-2" : "space-y-3"}>
       <div>
-        <div className="text-base font-semibold text-foreground break-words">{technician.name}</div>
+        <div className="flex items-center gap-1.5">
+          <div className="text-base font-semibold text-foreground break-words">{technician.name}</div>
+          {technician.is_good_tech && (
+            <Star className="h-4 w-4 fill-amber-500 text-amber-500" title="Good Tech" />
+          )}
+        </div>
       </div>
 
       <div className="space-y-1">

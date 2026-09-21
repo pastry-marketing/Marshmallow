@@ -1622,6 +1622,7 @@ export type Database = {
           created_by: string | null
           id: string
           is_active: boolean
+          is_good_tech: boolean | null
           latitude: number | null
           longitude: number | null
           name: string
@@ -1639,6 +1640,7 @@ export type Database = {
           created_by?: string | null
           id?: string
           is_active?: boolean
+          is_good_tech?: boolean | null
           latitude?: number | null
           longitude?: number | null
           name: string
@@ -1656,6 +1658,7 @@ export type Database = {
           created_by?: string | null
           id?: string
           is_active?: boolean
+          is_good_tech?: boolean | null
           latitude?: number | null
           longitude?: number | null
           name?: string

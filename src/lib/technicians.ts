@@ -2,9 +2,9 @@ import { supabase } from "@/integrations/supabase/client";
 import type { TechnicianRecord } from "@/components/technicians/TechnicianDialog";
 
 export const TECHNICIAN_SELECT =
-  "id, name, area, service, notes, chat_link, phone_number, latitude, longitude, code, opr_code, is_active, created_by, created_at, updated_at";
+  "id, name, area, service, notes, chat_link, phone_number, latitude, longitude, code, opr_code, is_active, created_by, created_at, updated_at, is_good_tech";
 export const TECHNICIAN_FALLBACK_SELECT =
-  "id, name, area, service, notes, chat_link, phone_number, latitude, longitude, is_active, created_by, created_at, updated_at";
+  "id, name, area, service, notes, chat_link, phone_number, latitude, longitude, is_active, created_by, created_at, updated_at, is_good_tech";
 
 /** How the technician list is scoped for the requesting user. */
 export interface TechnicianVisibility {

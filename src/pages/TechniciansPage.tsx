@@ -56,6 +56,7 @@ import {
   Filter,
   ArrowUp,
   ArrowDown,
+  Star,
 } from "lucide-react";
 
 const PAGE_SIZE_OPTIONS = [100, 200, 500, 1000] as const;
@@ -1043,7 +1044,14 @@ export default function TechniciansPage() {
                         aria-label={isSelected ? `Deselect ${t.name}` : `Select ${t.name}`}
                       />
                     </TableCell>
-                    <TableCell className="font-medium">{t.name}</TableCell>
+                    <TableCell className="font-medium">
+                      <div className="flex items-center gap-1.5">
+                        {t.name}
+                        {t.is_good_tech && (
+                          <Star className="h-4 w-4 fill-amber-500 text-amber-500" title="Good Tech" />
+                        )}
+                      </div>
+                    </TableCell>
                     <TableCell>
                       {t.opr_code ? (
                         <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-primary/10 text-primary border border-primary/20 tracking-wider">
