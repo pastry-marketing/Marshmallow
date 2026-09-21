@@ -786,21 +786,21 @@ export default function LeadsPage() {
   }, [fetchLeads, fetchSharedLeads, role]);
 
   return (
-    <div className="mx-auto max-w-[1600px] space-y-6">
+    <div className="mx-auto max-w-[1600px] space-y-3">
       <motion.section
         initial={{ opacity: 0, y: 18 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5, ease: premiumEase }}
-        className="glass-panel-strong relative overflow-visible rounded-[32px] px-5 py-5 shadow-[0_38px_82px_-42px_rgba(59,130,246,0.28),0_18px_32px_-24px_rgba(125,211,252,0.18)] sm:px-6 sm:py-6 dark:bg-[radial-gradient(circle_at_top_left,hsl(var(--primary)/0.16),transparent_28%),radial-gradient(circle_at_top_right,hsl(198_100%_62%/0.10),transparent_24%),linear-gradient(180deg,hsl(var(--card)/0.84),hsl(var(--muted)/0.30))] dark:shadow-none"
+        className="glass-panel-strong relative overflow-visible rounded-[26px] px-4 py-3 shadow-[0_38px_82px_-42px_rgba(59,130,246,0.28),0_18px_32px_-24px_rgba(125,211,252,0.18)] sm:px-5 sm:py-3.5 dark:bg-[radial-gradient(circle_at_top_left,hsl(var(--primary)/0.16),transparent_28%),radial-gradient(circle_at_top_right,hsl(198_100%_62%/0.10),transparent_24%),linear-gradient(180deg,hsl(var(--card)/0.84),hsl(var(--muted)/0.30))] dark:shadow-none"
       >
         <div className="pointer-events-none absolute inset-0 rounded-[32px] overflow-hidden bg-[radial-gradient(circle_at_top_left,hsl(194_100%_86%/0.22),transparent_30%),radial-gradient(circle_at_top_right,hsl(211_100%_88%/0.24),transparent_30%),radial-gradient(circle_at_bottom_left,hsl(188_100%_90%/0.16),transparent_26%)]" />
-        <div className="relative flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+        <div className="relative flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <motion.div variants={heroTitle} initial="initial" animate="animate">
-          <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-primary/10 bg-primary/[0.06] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">
-            <span className="h-2 w-2 rounded-full bg-primary shadow-[0_0_12px_hsl(var(--primary)/0.6)]" />
+          <div className="mb-1.5 inline-flex items-center gap-1.5 rounded-full border border-primary/10 bg-primary/[0.06] px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">
+            <span className="h-1.5 w-1.5 rounded-full bg-primary shadow-[0_0_12px_hsl(var(--primary)/0.6)]" />
             Lead Workspace
           </div>
-          <h1 className="text-2xl sm:text-3xl font-semibold tracking-[-0.04em] text-foreground">
+          <h1 className="text-xl sm:text-2xl font-semibold tracking-[-0.04em] text-foreground">
             {attentionView ? (
               <span className="flex items-center gap-2.5">
                 <span className="relative flex h-2.5 w-2.5">
@@ -820,7 +820,7 @@ export default function LeadsPage() {
               "All Leads"
             )}
           </h1>
-          <p className="mt-2 max-w-2xl text-[15px] leading-6 text-muted-foreground/90">
+          <p className="mt-1 max-w-2xl text-[12px] leading-5 text-muted-foreground/90">
             {filtered.length} lead{filtered.length !== 1 ? "s" : ""}
             {totalPages > 1 && ` · Page ${page + 1} of ${totalPages}`}
             {" · "}Search fast, change status quickly, and keep work moving without clutter.
@@ -1039,12 +1039,11 @@ export default function LeadsPage() {
         initial={{ opacity: 0, y: 6 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.2 }}
-        className="glass-panel-strong rounded-[30px] p-3 shadow-[0_34px_74px_-40px_rgba(59,130,246,0.24)] dark:bg-[radial-gradient(circle_at_top_left,hsl(var(--primary)/0.10),transparent_24%),linear-gradient(180deg,hsl(var(--card)/0.84),hsl(var(--muted)/0.30))] dark:shadow-none"
+        className="glass-panel-strong rounded-[22px] p-2.5 shadow-[0_34px_74px_-40px_rgba(59,130,246,0.24)] dark:bg-[radial-gradient(circle_at_top_left,hsl(var(--primary)/0.10),transparent_24%),linear-gradient(180deg,hsl(var(--card)/0.84),hsl(var(--muted)/0.30))] dark:shadow-none"
       >
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-3 border-b border-border/50 px-1 pb-3">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2 px-1">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Refine Results</p>
-            <p className="mt-1 text-[13px] text-muted-foreground">Search, filter, and resize the workspace without losing context.</p>
           </div>
           {hasActiveFilters && (
             <Button
