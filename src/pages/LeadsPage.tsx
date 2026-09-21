@@ -999,9 +999,9 @@ export default function LeadsPage() {
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.1 }}
-        className="glass-panel overflow-hidden rounded-[26px] shadow-[0_28px_54px_-34px_rgba(59,130,246,0.22)] dark:bg-[linear-gradient(180deg,hsl(var(--card)/0.86),hsl(var(--muted)/0.28))] dark:shadow-none"
+        className="glass-panel overflow-hidden rounded-[26px] shadow-[0_28px_54px_-34px_rgba(59,130,246,0.22)] dark:bg-[linear-gradient(180deg,hsl(var(--card)/0.86),hsl(var(--muted)/0.28))] dark:shadow-none w-full 2xl:w-fit"
       >
-        <div className="flex items-center justify-between gap-3 border-b border-border/50 px-4 py-2.5">
+        <div className="flex items-center justify-between gap-8 border-b border-border/50 px-4 py-2.5">
           <div className="flex items-center gap-2">
             <span className="h-2 w-2 rounded-full bg-destructive status-pulse" />
             <h3 className="text-sm font-semibold text-foreground">Urgent leads</h3>
@@ -1019,7 +1019,7 @@ export default function LeadsPage() {
           <div className="px-4 py-6 text-center text-xs text-muted-foreground">No urgent leads right now.</div>
         ) : (
           <div className="max-h-[240px] overflow-auto">
-            <table className="w-full border-collapse text-left text-xs">
+            <table className="border-collapse text-left text-xs">
               <thead className="sticky top-0 z-10 bg-card/95 backdrop-blur">
                 <tr className="text-[10px] uppercase tracking-wide text-muted-foreground">
                   <th className="px-4 py-1.5 font-semibold">Customer</th>
