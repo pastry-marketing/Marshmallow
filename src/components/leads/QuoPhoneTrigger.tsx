@@ -65,6 +65,12 @@ let quickChatUnreadRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 // whole quo_conversations table, which used to fan every chat message out to
 // every connected user and dominated realtime message usage.
 const QUICK_CHAT_UNREAD_POLL_MS = 60000;
+// While a chat drawer is actually open, visible and expanded, refresh the thread
+// on this interval so new inbound messages appear without reopening. Realtime on
+// quo_messages isn't relied upon (the table isn't fanned out for cost reasons),
+// and the fetch is a few indexed reads — kept light by only running while the
+// user is actively looking at an open chat.
+const QUICK_CHAT_THREAD_POLL_MS = 10000;
 let quickChatUnreadPollTimer: ReturnType<typeof setInterval> | null = null;
 let nextQuickChatUnreadWatcherId = 0;
 
@@ -196,6 +202,12 @@ export default function QuoPhoneTrigger({
   } | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  // Kept in refs so the live-refresh interval can read the latest minimize state
+  // and re-trigger a load without tearing down and rebuilding the subscription.
+  const isMinimizedRef = useRef(isMinimized);
+  useEffect(() => { isMinimizedRef.current = isMinimized; }, [isMinimized]);
+  const loadThreadRef = useRef<((showLoading: boolean) => void) | null>(null);
+  const prevMinimizedRef = useRef(isMinimized);
   const isAdmin = role === "admin";
   const requiredAccessKey = chatType === "tech" ? "tech_quick_chat" : "quick_chat";
   // Quick Chat is available to admins and to any user an admin granted access to.
@@ -249,7 +261,13 @@ export default function QuoPhoneTrigger({
       try {
         const response = await fetchQuoChatThread(normalizedPhone, chatType);
         if (!active) return;
-        setMessages(mergeQuoMessages(response.messages ?? []));
+        setMessages((prev) => {
+          const next = mergeQuoMessages(response.messages ?? []);
+          // Keep the same array reference when nothing changed, so a silent poll
+          // refresh doesn't re-render or force-scroll a user reading history.
+          if (prev.length === next.length && prev.every((m, i) => m.id === next[i].id)) return prev;
+          return next;
+        });
 
         const numObj = response.phoneNumber;
         const numName = getQuoNumberName(numObj, numObj?.formattedNumber);
@@ -354,9 +372,23 @@ export default function QuoPhoneTrigger({
 
     setMessages([]);
     void loadThread(true);
+    // Expose the loader so expanding a minimized chat can refresh instantly.
+    loadThreadRef.current = (showLoading: boolean) => { if (active) void loadThread(showLoading); };
+
+    // Light live refresh: only while the chat is open, expanded, and the tab is
+    // visible. A minimized or backgrounded chat doesn't poll (the 60s unread
+    // check still flags new messages), so this never runs when nobody's looking.
+    const shouldPoll = () =>
+      active && !isMinimizedRef.current && (typeof document === "undefined" || document.visibilityState === "visible");
+    const pollId = setInterval(() => { if (shouldPoll()) void loadThread(false); }, QUICK_CHAT_THREAD_POLL_MS);
+    const onVisible = () => { if (document.visibilityState === "visible" && shouldPoll()) void loadThread(false); };
+    document.addEventListener("visibilitychange", onVisible);
 
     return () => {
       active = false;
+      loadThreadRef.current = null;
+      clearInterval(pollId);
+      document.removeEventListener("visibilitychange", onVisible);
       if (refreshTimer) clearTimeout(refreshTimer);
       if (currentRealtimeChannel) {
         void supabase.removeChannel(currentRealtimeChannel);
@@ -365,6 +397,15 @@ export default function QuoPhoneTrigger({
       subscribedConversationId = null;
     };
   }, [canUseQuickChat, normalizedPhone, open, chatType]);
+
+  // Expanding a minimized chat refreshes the thread immediately, so the user
+  // doesn't wait up to a poll interval to see messages that arrived while it was
+  // collapsed. (Opening from closed is handled by the load effect above.)
+  useEffect(() => {
+    const wasMinimized = prevMinimizedRef.current;
+    prevMinimizedRef.current = isMinimized;
+    if (open && wasMinimized && !isMinimized) loadThreadRef.current?.(false);
+  }, [isMinimized, open]);
 
   useEffect(() => {
     if (!open) return;
