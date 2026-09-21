@@ -6,6 +6,7 @@ import { useCallback } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { Lead, LeadStatus, STATUS_LABELS, STATUS_DOT_COLORS, ALL_LEAD_STATUSES, compareLeadDisplayPriority } from "@/lib/constants";
 import { countTechs } from "@/lib/lead-techs";
+import { extractCity, extractState } from "@/lib/address-utils";
 import { buildNearbyUrgentMap, isUrgentLead } from "@/lib/lead-proximity";
 import { preloadZipDataset } from "@/lib/zipCentroids";
 import { useAllowedStatuses } from "@/hooks/useAllowedStatuses";
@@ -955,12 +956,21 @@ export default function LeadsPage() {
                 <tr className="text-[10px] uppercase tracking-wide text-muted-foreground">
                   <th className="px-4 py-1.5 font-semibold">Customer</th>
                   <th className="px-2 py-1.5 font-semibold">Service</th>
-                  <th className="px-4 py-1.5 font-semibold">Area</th>
+                  <th className="px-4 py-1.5 font-semibold">Address</th>
+                  <th className="px-2 py-1.5 font-semibold">Area</th>
+                  <th className="px-4 py-1.5 font-semibold">Urgent in area</th>
                 </tr>
               </thead>
               <tbody>
                 {urgentLeadsForTable.map((l) => {
-                  const area = [l.city, l.state].filter(Boolean).join(", ") || l.address || "—";
+                  const address = l.address || "—";
+                  const c = l.city || extractCity(l.address);
+                  const s = l.state || extractState(l.address);
+                  const areaText = [c, s].filter((x) => x && x !== "Unknown").join(", ") || "—";
+                  
+                  const nearby = nearbyUrgentMap.get(l.id);
+                  const nearbyCount = nearby?.length || 0;
+
                   return (
                     <tr
                       key={l.id}
@@ -970,7 +980,17 @@ export default function LeadsPage() {
                     >
                       <td className="max-w-[160px] truncate px-4 py-2 font-medium text-foreground">{l.customer_name || "—"}</td>
                       <td className="max-w-[180px] truncate px-2 py-2 text-muted-foreground">{l.service_type || "—"}</td>
-                      <td className="max-w-[220px] truncate px-4 py-2 text-muted-foreground" title={area}>{area}</td>
+                      <td className="max-w-[240px] truncate px-4 py-2 text-muted-foreground" title={address}>{address}</td>
+                      <td className="max-w-[140px] truncate px-2 py-2 text-muted-foreground" title={areaText}>{areaText}</td>
+                      <td className="px-4 py-2 text-muted-foreground">
+                        {nearbyCount > 0 ? (
+                          <span className="inline-flex items-center gap-1 rounded-md bg-red-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-red-600 dark:text-red-400">
+                            {nearbyCount} more
+                          </span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
