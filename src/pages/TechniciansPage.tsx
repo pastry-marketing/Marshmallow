@@ -454,6 +454,23 @@ export default function TechniciansPage() {
     }
   };
 
+  const handleGoodTechToggle = async (tech: TechnicianRecord, goodTech: boolean) => {
+    try {
+      const { error } = await supabase
+        .from("technicians")
+        .update({ is_good_tech: goodTech } as any) // suppress TS type issue if types.ts is out of sync
+        .eq("id", tech.id);
+      
+      if (error) {
+        toast({ title: "Could not update status", description: error.message, variant: "destructive" });
+        return;
+      }
+      await invalidateAll();
+    } catch (err: any) {
+      toast({ title: "Update failed", description: err.message, variant: "destructive" });
+    }
+  };
+
   // Keep the selection map in sync with the currently-visible page rows so
   // edits from other places (or refetches) are reflected in copy output.
   useEffect(() => {
@@ -1047,9 +1064,16 @@ export default function TechniciansPage() {
                     <TableCell className="font-medium">
                       <div className="flex items-center gap-1.5">
                         {t.name}
-                        {t.is_good_tech && (
-                          <Star className="h-4 w-4 fill-amber-500 text-amber-500" title="Good Tech" />
-                        )}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleGoodTechToggle(t, !t.is_good_tech);
+                          }}
+                          className="hover:scale-110 transition-transform"
+                          title={t.is_good_tech ? "Mark as normal tech" : "Mark as Good Tech"}
+                        >
+                          <Star className={`h-4 w-4 transition-colors ${t.is_good_tech ? "fill-amber-500 text-amber-500" : "text-muted-foreground/30 hover:text-muted-foreground"}`} />
+                        </button>
                       </div>
                     </TableCell>
                     <TableCell>

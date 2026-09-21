@@ -1809,6 +1809,19 @@ export default function MapViewPage() {
     // forcing an immediate heavy refetch of the full map technician list.
     void queryClient.invalidateQueries({ queryKey: ["technicians"], refetchType: "none" });
   };
+  const handleToggleGoodTech = async (tech: SearchableTech, next: boolean) => {
+    const prev = queryClient.getQueryData<TechnicianRecord[]>(TECHNICIANS_QUERY_KEY);
+    queryClient.setQueryData<TechnicianRecord[]>(TECHNICIANS_QUERY_KEY, (old) =>
+      old ? old.map((t) => (t.id === tech.id ? { ...t, is_good_tech: next } : t)) : old,
+    );
+    const { error } = await supabase.from("technicians").update({ is_good_tech: next } as any).eq("id", tech.id);
+    if (error) {
+      queryClient.setQueryData<TechnicianRecord[]>(TECHNICIANS_QUERY_KEY, prev);
+      toast.error("Could not update status");
+      return;
+    }
+    void queryClient.invalidateQueries({ queryKey: ["technicians"], refetchType: "none" });
+  };
 
   const SidePanel = (
     <div className="space-y-3">
@@ -1893,7 +1906,10 @@ export default function MapViewPage() {
         <>
           <div className="flex items-start justify-between gap-2">
             <div className="flex-1 min-w-0">
-              <TechnicianDetailsContent technician={selectedTech} />
+              <TechnicianDetailsContent
+                technician={selectedTech}
+                onToggleGoodTech={(next) => void handleToggleGoodTech(selectedTech, next)}
+              />
               {selectedTech.locationUnavailable && (
                 <Badge variant="outline" className="mt-2 text-[11px] text-amber-700 border-amber-300 bg-amber-50">
                   Location unavailable

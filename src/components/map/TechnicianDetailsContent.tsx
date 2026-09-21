@@ -16,6 +16,7 @@ export interface TechnicianLike {
 interface Props {
   technician: TechnicianLike;
   compact?: boolean;
+  onToggleGoodTech?: (isGood: boolean) => void;
 }
 
 function isValidUrl(v: string): boolean {
@@ -27,7 +28,7 @@ function isValidUrl(v: string): boolean {
   }
 }
 
-export function TechnicianDetailsContent({ technician, compact = false }: Props) {
+export function TechnicianDetailsContent({ technician, compact = false, onToggleGoodTech }: Props) {
   const phone = (technician.phone_number ?? "").trim();
   const tel = toTelHref(phone);
   const chatOk = technician.chat_link && isValidUrl(technician.chat_link.trim());
@@ -47,9 +48,17 @@ export function TechnicianDetailsContent({ technician, compact = false }: Props)
       <div>
         <div className="flex items-center gap-1.5">
           <div className="text-base font-semibold text-foreground break-words">{technician.name}</div>
-          {technician.is_good_tech && (
+          {onToggleGoodTech ? (
+            <button
+              onClick={() => onToggleGoodTech(!technician.is_good_tech)}
+              className="hover:scale-110 transition-transform focus:outline-none"
+              title={technician.is_good_tech ? "Mark as normal tech" : "Mark as Good Tech"}
+            >
+              <Star className={`h-4 w-4 transition-colors ${technician.is_good_tech ? "fill-amber-500 text-amber-500" : "text-muted-foreground/30 hover:text-muted-foreground"}`} />
+            </button>
+          ) : technician.is_good_tech ? (
             <Star className="h-4 w-4 fill-amber-500 text-amber-500" title="Good Tech" />
-          )}
+          ) : null}
         </div>
       </div>
 
