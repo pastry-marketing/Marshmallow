@@ -1066,58 +1066,60 @@ export default function LeadsPage() {
       {/* Urgent leads overview and CX Needs Reply panels side-by-side */}
       <div className="flex flex-col 2xl:flex-row gap-4 w-full justify-between">
         
-        <motion.div
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-          className="glass-panel overflow-hidden rounded-[26px] shadow-[0_28px_54px_-34px_rgba(59,130,246,0.22)] dark:bg-[linear-gradient(180deg,hsl(var(--card)/0.86),hsl(var(--muted)/0.28))] dark:shadow-none w-full 2xl:w-fit flex-1"
-        >
-          <div className="flex items-center justify-between gap-8 border-b border-border/50 px-4 py-2.5">
-            <div className="flex items-center gap-2">
-              <span className="h-2 w-2 rounded-full bg-amber-500 status-pulse" />
-              <h3 className="text-sm font-semibold text-foreground">Cx Awaiting Response</h3>
-              <span className="rounded-full bg-amber-500/12 px-1.5 py-0.5 text-[11px] font-bold tabular-nums text-amber-600 dark:text-amber-500">
-                {urgentNeedsCxReply.length}
-              </span>
+        {["admin", "cs_admin", "customer_service"].includes(role || "") && (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.1 }}
+            className="glass-panel overflow-hidden rounded-[26px] shadow-[0_28px_54px_-34px_rgba(59,130,246,0.22)] dark:bg-[linear-gradient(180deg,hsl(var(--card)/0.86),hsl(var(--muted)/0.28))] dark:shadow-none w-full 2xl:w-fit flex-1"
+          >
+            <div className="flex items-center justify-between gap-8 border-b border-border/50 px-4 py-2.5">
+              <div className="flex items-center gap-2">
+                <span className="h-2 w-2 rounded-full bg-amber-500 status-pulse" />
+                <h3 className="text-sm font-semibold text-foreground">Cx Awaiting Response</h3>
+                <span className="rounded-full bg-amber-500/12 px-1.5 py-0.5 text-[11px] font-bold tabular-nums text-amber-600 dark:text-amber-500">
+                  {urgentNeedsCxReply.length}
+                </span>
+              </div>
             </div>
-          </div>
 
-          {urgentNeedsCxReply.length === 0 ? (
-            <div className="px-4 py-6 text-center text-xs text-muted-foreground">All caught up!</div>
-          ) : (
-            <div className="max-h-[240px] overflow-auto">
-              <table className="w-full border-collapse text-left text-xs">
-                <thead className="sticky top-0 z-10 bg-card/95 backdrop-blur">
-                  <tr className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                    <th className="px-4 py-1.5 font-semibold">Customer name</th>
-                    <th className="px-2 py-1.5 font-semibold">Service</th>
-                    <th className="px-4 py-1.5 font-semibold">Address</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {urgentNeedsCxReply.map((l) => (
-                    <tr
-                      key={l.id}
-                      onClick={() => navigate(`/leads/${l.id}`)}
-                      className="cursor-pointer border-t border-border/40 transition-colors hover:bg-muted/40"
-                      title="Open lead"
-                    >
-                      <td className="max-w-[160px] truncate px-4 py-2 font-medium text-foreground">{l.customer_name || "—"}</td>
-                      <td className="max-w-[180px] truncate px-2 py-2 text-muted-foreground">{l.service_type || "—"}</td>
-                      <td className="max-w-[240px] truncate px-4 py-2 text-muted-foreground" title={l.address || "—"}>{l.address || "—"}</td>
+            {urgentNeedsCxReply.length === 0 ? (
+              <div className="px-4 py-6 text-center text-xs text-muted-foreground">All caught up!</div>
+            ) : (
+              <div className="max-h-[240px] overflow-auto">
+                <table className="w-full border-collapse text-left text-xs">
+                  <thead className="sticky top-0 z-10 bg-card/95 backdrop-blur">
+                    <tr className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                      <th className="px-4 py-1.5 font-semibold">Customer name</th>
+                      <th className="px-2 py-1.5 font-semibold">Service</th>
+                      <th className="px-4 py-1.5 font-semibold">Address</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </motion.div>
+                  </thead>
+                  <tbody>
+                    {urgentNeedsCxReply.map((l) => (
+                      <tr
+                        key={l.id}
+                        onClick={() => navigate(`/leads/${l.id}`)}
+                        className="cursor-pointer border-t border-border/40 transition-colors hover:bg-muted/40"
+                        title="Open lead"
+                      >
+                        <td className="max-w-[160px] truncate px-4 py-2 font-medium text-foreground">{l.customer_name || "—"}</td>
+                        <td className="max-w-[180px] truncate px-2 py-2 text-muted-foreground">{l.service_type || "—"}</td>
+                        <td className="max-w-[240px] truncate px-4 py-2 text-muted-foreground" title={l.address || "—"}>{l.address || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </motion.div>
+        )}
 
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1 }}
-          className="glass-panel overflow-hidden rounded-[26px] shadow-[0_28px_54px_-34px_rgba(59,130,246,0.22)] dark:bg-[linear-gradient(180deg,hsl(var(--card)/0.86),hsl(var(--muted)/0.28))] dark:shadow-none w-full 2xl:w-fit"
+          className="glass-panel overflow-hidden rounded-[26px] shadow-[0_28px_54px_-34px_rgba(59,130,246,0.22)] dark:bg-[linear-gradient(180deg,hsl(var(--card)/0.86),hsl(var(--muted)/0.28))] dark:shadow-none w-full 2xl:w-fit ml-auto"
         >
         <div className="flex items-center justify-between gap-8 border-b border-border/50 px-4 py-2.5">
           <div className="flex items-center gap-2">
