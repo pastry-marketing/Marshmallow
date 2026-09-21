@@ -70,7 +70,7 @@ const QUICK_CHAT_UNREAD_POLL_MS = 60000;
 // quo_messages isn't relied upon (the table isn't fanned out for cost reasons),
 // and the fetch is a few indexed reads — kept light by only running while the
 // user is actively looking at an open chat.
-const QUICK_CHAT_THREAD_POLL_MS = 10000;
+const QUICK_CHAT_THREAD_POLL_MS = 5000;
 let quickChatUnreadPollTimer: ReturnType<typeof setInterval> | null = null;
 let nextQuickChatUnreadWatcherId = 0;
 
