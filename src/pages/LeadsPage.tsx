@@ -959,6 +959,7 @@ export default function LeadsPage() {
                   <th className="px-4 py-1.5 font-semibold">Address</th>
                   <th className="px-2 py-1.5 font-semibold">Area</th>
                   <th className="px-4 py-1.5 font-semibold">Urgent in area</th>
+                  <th className="px-4 py-1.5 font-semibold text-right">Date created</th>
                 </tr>
               </thead>
               <tbody>
@@ -970,6 +971,7 @@ export default function LeadsPage() {
                   
                   const nearby = nearbyUrgentMap.get(l.id);
                   const nearbyCount = nearby?.length || 0;
+                  const dateStr = l.created_at ? new Date(l.created_at).toLocaleDateString() : "—";
 
                   return (
                     <tr
@@ -990,6 +992,9 @@ export default function LeadsPage() {
                         ) : (
                           "—"
                         )}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-2 text-right text-muted-foreground">
+                        {dateStr}
                       </td>
                     </tr>
                   );
