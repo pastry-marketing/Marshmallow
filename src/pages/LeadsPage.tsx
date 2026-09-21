@@ -1075,7 +1075,7 @@ export default function LeadsPage() {
           <div className="flex items-center justify-between gap-8 border-b border-border/50 px-4 py-2.5">
             <div className="flex items-center gap-2">
               <span className="h-2 w-2 rounded-full bg-amber-500 status-pulse" />
-              <h3 className="text-sm font-semibold text-foreground">Needs CX Reply</h3>
+              <h3 className="text-sm font-semibold text-foreground">Cx Awaiting Response</h3>
               <span className="rounded-full bg-amber-500/12 px-1.5 py-0.5 text-[11px] font-bold tabular-nums text-amber-600 dark:text-amber-500">
                 {urgentNeedsCxReply.length}
               </span>
