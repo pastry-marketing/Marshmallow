@@ -800,6 +800,7 @@ export default function LeadsPage() {
             <span className="h-1.5 w-1.5 rounded-full bg-primary shadow-[0_0_12px_hsl(var(--primary)/0.6)]" />
             Lead Workspace
           </div>
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
           <h1 className="text-xl sm:text-2xl font-semibold tracking-[-0.04em] text-foreground">
             {attentionView ? (
               <span className="flex items-center gap-2.5">
@@ -820,19 +821,25 @@ export default function LeadsPage() {
               "All Leads"
             )}
           </h1>
-          <p className="mt-1 max-w-2xl text-[12px] leading-5 text-muted-foreground/90">
-            {filtered.length} lead{filtered.length !== 1 ? "s" : ""}
-            {totalPages > 1 && ` · Page ${page + 1} of ${totalPages}`}
-            {" · "}Search fast, change status quickly, and keep work moving without clutter.
-          </p>
+            <p className="whitespace-nowrap text-[12px] text-muted-foreground/90 tabular-nums">
+              {filtered.length} lead{filtered.length !== 1 ? "s" : ""}
+              {totalPages > 1 && ` · Page ${page + 1} of ${totalPages}`}
+            </p>
+          </div>
         </motion.div>
 
         <motion.div
           initial={{ opacity: 0, x: 16 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ delay: 0.15, duration: 0.35 }}
-          className="flex items-center gap-2 flex-wrap"
+          className="flex items-center gap-2 flex-wrap sm:justify-end"
         >
+          {canCreateLead && (
+            <Button onClick={() => setShowAddDialog(true)} size="sm" className="gap-1.5 h-9 order-first">
+              <Plus className="h-4 w-4" />
+              New Lead
+            </Button>
+          )}
           {isAdmin && (
             <Button
               variant="outline"
@@ -887,13 +894,6 @@ export default function LeadsPage() {
             }}
             leads={leads}
           />
-
-          {canCreateLead && (
-            <Button onClick={() => setShowAddDialog(true)} className="gap-2">
-              <Plus className="h-4 w-4" />
-              New Lead
-            </Button>
-          )}
 
           <AddLeadDialog
             open={showAddDialog}
@@ -1041,25 +1041,6 @@ export default function LeadsPage() {
         transition={{ delay: 0.2 }}
         className="glass-panel-strong rounded-[22px] p-2.5 shadow-[0_34px_74px_-40px_rgba(59,130,246,0.24)] dark:bg-[radial-gradient(circle_at_top_left,hsl(var(--primary)/0.10),transparent_24%),linear-gradient(180deg,hsl(var(--card)/0.84),hsl(var(--muted)/0.30))] dark:shadow-none"
       >
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2 px-1">
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Refine Results</p>
-          </div>
-          {hasActiveFilters && (
-            <Button
-              type="button"
-              variant="ghost"
-              className="h-10 rounded-xl px-4"
-              onClick={() => {
-                setSearch("");
-                setStatusFilter("all");
-                setScheduleDateRange(undefined);
-              }}
-            >
-              Clear Filters
-            </Button>
-          )}
-        </div>
         <div className="crm-lead-card-soft flex flex-col gap-3 rounded-[26px] p-3.5 shadow-[0_20px_34px_-26px_rgba(59,130,246,0.18)] lg:flex-row lg:items-center dark:shadow-none">
           <div className="relative flex-1 group">
             <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/40 transition-colors group-focus-within:text-primary" />
@@ -1147,6 +1128,21 @@ export default function LeadsPage() {
                 <List className="h-4 w-4" />
               </Button>
             </div>
+
+            {hasActiveFilters && (
+              <Button
+                type="button"
+                variant="ghost"
+                className="h-11 rounded-[18px] px-4 text-muted-foreground hover:text-foreground"
+                onClick={() => {
+                  setSearch("");
+                  setStatusFilter("all");
+                  setScheduleDateRange(undefined);
+                }}
+              >
+                <X className="mr-1.5 h-3.5 w-3.5" /> Clear
+              </Button>
+            )}
           </div>
         </div>
       </motion.div>
