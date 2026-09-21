@@ -72,6 +72,16 @@ interface LeadNoteExportRow {
 const LEAD_LIST_COLUMNS =
   "address, amount, assigned_cs, booked_at, cancellation_reason, city, created_at, created_by, created_by_name, cs_notes, cs_tag, customer_email, customer_landline, customer_name, customer_phone, customer_schedule_requirements, direction, expected_completion_date, for_us_amount, for_you_amount, general_notes, half_address, id, job_id, labor_amount, last_edited_at, last_edited_by, last_edited_by_name, latitude, longitude, material_amount, number_name, payment_amount, payment_screenshot_url, processor_notes, quote, quote_requested_by, reference_name, scheduled_date, scheduled_time_end, scheduled_time_start, service_details, service_type, show_quote_to_opr, source_url, state, status, tech_name, tech_number, terms, updated_at, urgent_at, zip_code";
 
+// Only the few columns the Urgent-leads overview table shows (plus zip/city for
+// the "Urgent in area" proximity count) — kept tiny so its frequent live refresh
+// stays a featherweight, filtered (status=urgent_job) indexed read.
+const URGENT_TABLE_COLUMNS = "id, customer_name, service_type, city, state, address, zip_code, urgent_at, created_at";
+// How often to refresh the urgent overview while the page is visible. Small,
+// because it only reads the tiny urgent subset, not the whole leads table.
+const URGENT_TABLE_POLL_MS = 5000;
+
+type UrgentRow = Pick<Lead, "id" | "customer_name" | "service_type" | "city" | "state" | "address" | "zip_code" | "urgent_at" | "created_at">;
+
 export default function LeadsPage() {
   const { user, role } = useAuth();
   const { toggleNotepad, isNotepadOpen, activeUserIds } = useNotepad();
@@ -326,6 +336,10 @@ export default function LeadsPage() {
 
 
 
+  // Bridge so a realtime urgent change refreshes the overview table instantly.
+  // A ref keeps the channel subscription stable (no re-subscribe on identity change).
+  const refreshUrgentRef = useRef<(() => void) | null>(null);
+
   // Realtime subscription for leads table updates & Activate Customer chime
   useEffect(() => {
     if (!user || !role) return;
@@ -367,6 +381,12 @@ export default function LeadsPage() {
             if (role === "customer_service") {
               setSharedLeads((prev) => prev.filter((l) => l.id !== oldRow.id));
             }
+          }
+
+          // A lead becoming (or changing while) urgent refreshes the overview
+          // table right away, so it never waits for the next poll tick.
+          if ((payload.eventType === "INSERT" || payload.eventType === "UPDATE") && newRow?.status === "urgent_job") {
+            refreshUrgentRef.current?.();
           }
         }
       )
@@ -619,19 +639,67 @@ export default function LeadsPage() {
     (l) => l.status !== "cancelled" && l.status !== "paid" && l.status !== "job_done",
   ).length;
 
-  // Urgent leads for the workspace overview table, built entirely from the
-  // already-loaded in-memory leads (no extra queries). Newest-urgent first.
-  const urgentLeadsForTable = useMemo(
-    () =>
-      countSource
-        .filter((l) => l.status === "urgent_job")
-        .sort((a, b) => {
-          const at = new Date(a.urgent_at ?? a.created_at).getTime();
-          const bt = new Date(b.urgent_at ?? b.created_at).getTime();
-          return (Number.isNaN(bt) ? 0 : bt) - (Number.isNaN(at) ? 0 : at);
-        }),
-    [countSource],
+  // Urgent-leads overview kept live by a light, visibility-gated poll of just
+  // the urgent subset — a tiny filtered indexed read, independent of the heavy
+  // main list. So new urgent leads land on top within a few seconds even if the
+  // broad leads realtime hiccups, without polling the whole table. Server-
+  // ordered newest-urgent first.
+  const [urgentTableLeads, setUrgentTableLeads] = useState<UrgentRow[]>([]);
+
+  const refreshUrgentTable = useCallback(async () => {
+    if (!user || !role) return;
+    let q = supabase
+      .from("leads")
+      .select(URGENT_TABLE_COLUMNS)
+      .eq("status", "urgent_job")
+      .order("urgent_at", { ascending: false, nullsFirst: false })
+      .order("created_at", { ascending: false })
+      .limit(1000);
+    if (role === "customer_service") q = q.eq("created_by", user.id);
+    const { data, error } = await q;
+    if (error) return; // keep the last good list on a transient error
+    const next = (data ?? []) as unknown as UrgentRow[];
+    setUrgentTableLeads((prev) => {
+      // Keep the same array reference when nothing changed, so a quiet poll
+      // doesn't re-render the table or recompute the proximity map.
+      if (
+        prev.length === next.length &&
+        prev.every((p, i) => p.id === next[i].id && p.urgent_at === next[i].urgent_at)
+      ) {
+        return prev;
+      }
+      return next;
+    });
+  }, [user, role]);
+  refreshUrgentRef.current = refreshUrgentTable;
+
+  useEffect(() => {
+    if (!user || !role) return;
+    void refreshUrgentTable();
+    const tick = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      void refreshUrgentTable();
+    };
+    const id = setInterval(tick, URGENT_TABLE_POLL_MS);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void refreshUrgentTable();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [user, role, refreshUrgentTable]);
+
+  // "Urgent in area" counts, computed from the fresh urgent subset (all rows are
+  // urgent, so tag them for the proximity helper). Recomputes once ZIP centroids
+  // are in memory.
+  const urgentTableNearbyMap = useMemo(
+    () => buildNearbyUrgentMap(urgentTableLeads.map((l) => ({ ...l, status: "urgent_job" as LeadStatus }))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [urgentTableLeads, zipDataReady],
   );
+
   const hasActiveFilters = Boolean(search) || safeStatusFilter !== "all" || Boolean(scheduleDateRange?.from);
 
   const handleExportData = async (options: ExportOptions) => {
@@ -938,7 +1006,7 @@ export default function LeadsPage() {
             <span className="h-2 w-2 rounded-full bg-destructive status-pulse" />
             <h3 className="text-sm font-semibold text-foreground">Urgent leads</h3>
             <span className="rounded-full bg-destructive/12 px-1.5 py-0.5 text-[11px] font-bold tabular-nums text-destructive">
-              {urgentLeadsForTable.length}
+              {urgentTableLeads.length}
             </span>
           </div>
           <div className="hidden items-center gap-3 text-[11px] text-muted-foreground sm:flex">
@@ -947,7 +1015,7 @@ export default function LeadsPage() {
           </div>
         </div>
 
-        {urgentLeadsForTable.length === 0 ? (
+        {urgentTableLeads.length === 0 ? (
           <div className="px-4 py-6 text-center text-xs text-muted-foreground">No urgent leads right now.</div>
         ) : (
           <div className="max-h-[240px] overflow-auto">
@@ -963,13 +1031,13 @@ export default function LeadsPage() {
                 </tr>
               </thead>
               <tbody>
-                {urgentLeadsForTable.map((l) => {
+                {urgentTableLeads.map((l) => {
                   const address = l.address || "—";
                   const c = l.city || extractCity(l.address);
                   const s = l.state || extractState(l.address);
                   const areaText = [c, s].filter((x) => x && x !== "Unknown").join(", ") || "—";
                   
-                  const nearby = nearbyUrgentMap.get(l.id);
+                  const nearby = urgentTableNearbyMap.get(l.id);
                   const nearbyCount = nearby?.length || 0;
                   const dateStr = l.created_at ? new Date(l.created_at).toLocaleDateString() : "—";
 
