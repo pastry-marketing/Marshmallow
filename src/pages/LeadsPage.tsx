@@ -10,6 +10,7 @@ import { extractCity, extractState } from "@/lib/address-utils";
 import { buildNearbyUrgentMap, isUrgentLead } from "@/lib/lead-proximity";
 import { preloadZipDataset } from "@/lib/zipCentroids";
 import { useAllowedStatuses } from "@/hooks/useAllowedStatuses";
+import { normalizePhoneE164 } from "@/lib/phone";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
@@ -75,12 +76,12 @@ const LEAD_LIST_COLUMNS =
 // Only the few columns the Urgent-leads overview table shows (plus zip/city for
 // the "Urgent in area" proximity count) — kept tiny so its frequent live refresh
 // stays a featherweight, filtered (status=urgent_job) indexed read.
-const URGENT_TABLE_COLUMNS = "id, customer_name, service_type, city, state, address, zip_code, urgent_at, created_at";
+const URGENT_TABLE_COLUMNS = "id, customer_name, customer_phone, service_type, city, state, address, zip_code, urgent_at, created_at";
 // How often to refresh the urgent overview while the page is visible. Small,
 // because it only reads the tiny urgent subset, not the whole leads table.
 const URGENT_TABLE_POLL_MS = 5000;
 
-type UrgentRow = Pick<Lead, "id" | "customer_name" | "service_type" | "city" | "state" | "address" | "zip_code" | "urgent_at" | "created_at">;
+type UrgentRow = Pick<Lead, "id" | "customer_name" | "customer_phone" | "service_type" | "city" | "state" | "address" | "zip_code" | "urgent_at" | "created_at">;
 
 export default function LeadsPage() {
   const { user, role } = useAuth();
@@ -700,6 +701,75 @@ export default function LeadsPage() {
     [urgentTableLeads, zipDataReady],
   );
 
+  const [urgentNeedsCxReply, setUrgentNeedsCxReply] = useState<UrgentRow[]>([]);
+
+  useEffect(() => {
+    if (urgentTableLeads.length === 0) {
+      setUrgentNeedsCxReply([]);
+      return;
+    }
+
+    let isMounted = true;
+
+    async function checkCxReplies() {
+      // Extract phone numbers and keep a mapping back to the lead IDs
+      const phoneToLeads = new Map<string, UrgentRow[]>();
+      for (const lead of urgentTableLeads) {
+        if (!lead.customer_phone) continue;
+        const normalized = normalizePhoneE164(lead.customer_phone) || lead.customer_phone.replace(/\D/g, "").slice(-10);
+        if (!normalized) continue;
+        const arr = phoneToLeads.get(normalized) || [];
+        arr.push(lead);
+        phoneToLeads.set(normalized, arr);
+      }
+
+      const phones = Array.from(phoneToLeads.keys());
+      if (phones.length === 0) {
+        if (isMounted) setUrgentNeedsCxReply([]);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("quo_conversations")
+        .select("customer_number,last_customer_message_at,last_agent_message_at")
+        .in("customer_number", phones);
+
+      if (error) {
+        console.error("Failed to check CX replies", error);
+        return;
+      }
+
+      const needsReplyIds = new Set<string>();
+
+      for (const row of data || []) {
+        const cTime = row.last_customer_message_at ? new Date(row.last_customer_message_at).getTime() : 0;
+        const aTime = row.last_agent_message_at ? new Date(row.last_agent_message_at).getTime() : 0;
+
+        if (cTime > 0 && cTime > aTime) {
+          // Needs reply!
+          const normalized = normalizePhoneE164(row.customer_number) || row.customer_number.replace(/\D/g, "").slice(-10);
+          if (normalized) {
+            const matches = phoneToLeads.get(normalized);
+            if (matches) {
+              matches.forEach(m => needsReplyIds.add(m.id));
+            }
+          }
+        }
+      }
+
+      if (isMounted) {
+        setUrgentNeedsCxReply(urgentTableLeads.filter(l => needsReplyIds.has(l.id)));
+      }
+    }
+
+    void checkCxReplies();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [urgentTableLeads]);
+
+
   const hasActiveFilters = Boolean(search) || safeStatusFilter !== "all" || Boolean(scheduleDateRange?.from);
 
   const handleExportData = async (options: ExportOptions) => {
@@ -993,14 +1063,62 @@ export default function LeadsPage() {
         </div>
       </motion.section>
 
-      {/* Urgent leads overview — a compact, scrollable table built from the
-          already-loaded leads (no extra queries), replacing the stat tiles. */}
-      <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.1 }}
-        className="glass-panel overflow-hidden rounded-[26px] shadow-[0_28px_54px_-34px_rgba(59,130,246,0.22)] dark:bg-[linear-gradient(180deg,hsl(var(--card)/0.86),hsl(var(--muted)/0.28))] dark:shadow-none w-full 2xl:w-fit ml-auto"
-      >
+      {/* Urgent leads overview and CX Needs Reply panels side-by-side */}
+      <div className="flex flex-col 2xl:flex-row gap-4 w-full justify-between">
+        
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="glass-panel overflow-hidden rounded-[26px] shadow-[0_28px_54px_-34px_rgba(59,130,246,0.22)] dark:bg-[linear-gradient(180deg,hsl(var(--card)/0.86),hsl(var(--muted)/0.28))] dark:shadow-none w-full 2xl:w-fit flex-1"
+        >
+          <div className="flex items-center justify-between gap-8 border-b border-border/50 px-4 py-2.5">
+            <div className="flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full bg-amber-500 status-pulse" />
+              <h3 className="text-sm font-semibold text-foreground">Needs CX Reply</h3>
+              <span className="rounded-full bg-amber-500/12 px-1.5 py-0.5 text-[11px] font-bold tabular-nums text-amber-600 dark:text-amber-500">
+                {urgentNeedsCxReply.length}
+              </span>
+            </div>
+          </div>
+
+          {urgentNeedsCxReply.length === 0 ? (
+            <div className="px-4 py-6 text-center text-xs text-muted-foreground">All caught up!</div>
+          ) : (
+            <div className="max-h-[240px] overflow-auto">
+              <table className="w-full border-collapse text-left text-xs">
+                <thead className="sticky top-0 z-10 bg-card/95 backdrop-blur">
+                  <tr className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                    <th className="px-4 py-1.5 font-semibold">Customer name</th>
+                    <th className="px-2 py-1.5 font-semibold">Service</th>
+                    <th className="px-4 py-1.5 font-semibold">Address</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {urgentNeedsCxReply.map((l) => (
+                    <tr
+                      key={l.id}
+                      onClick={() => navigate(`/leads/${l.id}`)}
+                      className="cursor-pointer border-t border-border/40 transition-colors hover:bg-muted/40"
+                      title="Open lead"
+                    >
+                      <td className="max-w-[160px] truncate px-4 py-2 font-medium text-foreground">{l.customer_name || "—"}</td>
+                      <td className="max-w-[180px] truncate px-2 py-2 text-muted-foreground">{l.service_type || "—"}</td>
+                      <td className="max-w-[240px] truncate px-4 py-2 text-muted-foreground" title={l.address || "—"}>{l.address || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="glass-panel overflow-hidden rounded-[26px] shadow-[0_28px_54px_-34px_rgba(59,130,246,0.22)] dark:bg-[linear-gradient(180deg,hsl(var(--card)/0.86),hsl(var(--muted)/0.28))] dark:shadow-none w-full 2xl:w-fit"
+        >
         <div className="flex items-center justify-between gap-8 border-b border-border/50 px-4 py-2.5">
           <div className="flex items-center gap-2">
             <span className="h-2 w-2 rounded-full bg-destructive status-pulse" />
@@ -1072,6 +1190,7 @@ export default function LeadsPage() {
           </div>
         )}
       </motion.div>
+      </div>
 
       {isCS && (
         <motion.div
