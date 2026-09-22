@@ -533,20 +533,19 @@ export function ImportTechniciansDialog({ open, onOpenChange, onImported }: Prop
                 <table className="w-full text-xs">
                   <thead className="bg-muted/40 text-left">
                     <tr>
-                      <th className="px-3 py-1.5">Name</th>
-                      <th className="px-3 py-1.5">OPR Code</th>
-                      <th className="px-3 py-1.5">Phone</th>
+                      <th className="px-3 py-1.5">Tech (Name)</th>
+                      <th className="px-3 py-1.5">Number</th>
                       <th className="px-3 py-1.5">Service</th>
                       <th className="px-3 py-1.5">Area</th>
                       <th className="px-3 py-1.5">Chat Link</th>
                       <th className="px-3 py-1.5">Notes</th>
+                      <th className="px-3 py-1.5">OPR Code</th>
                     </tr>
                   </thead>
                   <tbody>
                     {rows.slice(0, 100).map((r, i) => (
                       <tr key={i} className="border-t">
                         <td className="px-3 py-1.5">{r.name || <span className="text-muted-foreground">—</span>}</td>
-                        <td className="px-3 py-1.5">{r.opr_code || <span className="text-muted-foreground">—</span>}</td>
                         <td className="px-3 py-1.5">
                           {r.phone_number ? (
                             <span className={r.phoneInvalid ? "text-destructive" : ""} title={r.phoneInvalid ? "Invalid — row will not be imported" : undefined}>
@@ -560,6 +559,7 @@ export function ImportTechniciansDialog({ open, onOpenChange, onImported }: Prop
                         <td className="px-3 py-1.5">{r.area || <span className="text-muted-foreground">—</span>}</td>
                         <td className="px-3 py-1.5 max-w-[160px] truncate" title={r.chat_link}>{r.chat_link || <span className="text-muted-foreground">—</span>}</td>
                         <td className="px-3 py-1.5 max-w-[160px] truncate" title={r.notes}>{r.notes || <span className="text-muted-foreground">—</span>}</td>
+                        <td className="px-3 py-1.5">{r.opr_code || <span className="text-muted-foreground">—</span>}</td>
                       </tr>
                     ))}
                   </tbody>

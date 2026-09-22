@@ -97,7 +97,7 @@ function buildPageWindow(current: number, total: number): Array<number | "ellips
   return out;
 }
 
-const COPY_COLUMNS = ["Name", "OPR Code", "Phone Number", "Service", "Area", "Quo Chat Link", "Notes"] as const;
+const COPY_COLUMNS = ["Tech (Name)", "Number", "Service", "Area", "Chat Link", "Good Tech", "Notes", "OPR Code"] as const;
 
 /** Format a technician's created_at as a plain date for tables and exports. */
 function formatAddedDate(value?: string | null): string {
@@ -116,12 +116,13 @@ function sanitizeClipboardCell(value: string | null | undefined): string {
 function technicianToClipboardCells(t: TechnicianRecord): string[] {
   return [
     sanitizeClipboardCell(t.name),
-    sanitizeClipboardCell(t.opr_code),
     sanitizeClipboardCell(t.phone_number),
     sanitizeClipboardCell(t.service),
     sanitizeClipboardCell(t.area),
     sanitizeClipboardCell(t.chat_link),
+    t.is_good_tech ? "Yes" : "No",
     sanitizeClipboardCell(t.notes),
+    sanitizeClipboardCell(t.opr_code),
   ];
 }
 
@@ -513,23 +514,41 @@ export default function TechniciansPage() {
     setDeleteTech(null);
   };
 
-  const EXPORT_HEADERS = ["Technician ID", "Technician Name", "Status", "OPR Code", "Legacy Code", "Phone Number", "Service", "Area", "Quo Chat Link", "Notes", "Latitude", "Longitude", "Created By User ID", "Added Date", "Last Updated"];
+  const EXPORT_HEADERS = [
+    "Technician ID",
+    "Tech (Name)",
+    "Number",
+    "Service",
+    "Area",
+    "Chat Link",
+    "Good Tech",
+    "Notes",
+    "OPR Code",
+    "Status",
+    "Added Date",
+    "Last Updated",
+    "Legacy Code",
+    "Latitude",
+    "Longitude",
+    "Created By User ID",
+  ];
   const toExportRow = (t: TechnicianRecord) => ({
     "Technician ID": t.id ?? "",
-    "Technician Name": t.name ?? "",
-    Status: t.is_active === false ? "Inactive" : "Active",
+    "Tech (Name)": t.name ?? "",
+    "Number": t.phone_number ?? "",
+    "Service": t.service ?? "",
+    "Area": t.area ?? "",
+    "Chat Link": t.chat_link ?? "",
+    "Good Tech": t.is_good_tech ? "Yes" : "No",
+    "Notes": t.notes ?? "",
     "OPR Code": t.opr_code ?? "",
-    "Legacy Code": t.code ?? "",
-    "Phone Number": t.phone_number ?? "",
-    Service: t.service ?? "",
-    Area: t.area ?? "",
-    "Quo Chat Link": t.chat_link ?? "",
-    Notes: t.notes ?? "",
-    Latitude: t.latitude ?? "",
-    Longitude: t.longitude ?? "",
-    "Created By User ID": t.created_by ?? "",
+    "Status": t.is_active === false ? "Inactive" : "Active",
     "Added Date": formatAddedDate(t.created_at),
     "Last Updated": formatAddedDate(t.updated_at),
+    "Legacy Code": t.code ?? "",
+    "Latitude": t.latitude ?? "",
+    "Longitude": t.longitude ?? "",
+    "Created By User ID": t.created_by ?? "",
   });
   const [exporting, setExporting] = useState(false);
 
