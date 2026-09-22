@@ -4,7 +4,7 @@
  * ==============================================================================
  * SPREADSHEET URL:
  * https://docs.google.com/spreadsheets/d/1zGnzG0ovA2ICiUNoOVgVjleVt0CDeN1yCfHEx83ucxs/edit?gid=0#gid=0
- * 
+ *
  * DEPLOYMENT INSTRUCTIONS:
  * 1. Open your Google Sheet.
  * 2. In the top menu, click Extensions > Apps Script.
@@ -80,7 +80,7 @@ function doPost(e) {
     var action = payload.action || "sync_all";
     var ss = SpreadsheetApp.getActiveSpreadsheet();
 
-    // Health check ping
+    // ── Health check ping ──────────────────────────────────────────────────────
     if (action === "ping") {
       return jsonResponse({
         success: true,
@@ -90,7 +90,13 @@ function doPost(e) {
       });
     }
 
-    // Full bulk sync
+    // ── Clear all sheets (called before a batched sync starts) ─────────────────
+    if (action === "clear_all") {
+      handleClearAll(ss);
+      return jsonResponse({ success: true, action: "clear_all" });
+    }
+
+    // ── Full bulk sync (legacy single-shot – kept for backwards compatibility) ──
     if (action === "sync_all") {
       var leads = payload.leads || [];
       var result = handleSyncAll(ss, leads);
@@ -102,7 +108,26 @@ function doPost(e) {
       });
     }
 
-    // Upsert (new lead or edit/update existing lead)
+    // ── Batched sync (new – called once per 200-lead chunk) ────────────────────
+    if (action === "sync_batch") {
+      var batchLeads    = payload.leads        || [];
+      var batchNumber   = payload.batchNumber  || 1;
+      var totalBatches  = payload.totalBatches || 1;
+      var isLastBatch   = payload.isLastBatch  === true;
+
+      var batchResult = handleSyncBatch(ss, batchLeads, batchNumber, totalBatches, isLastBatch);
+      return jsonResponse({
+        success: true,
+        action: "sync_batch",
+        batchNumber: batchNumber,
+        totalBatches: totalBatches,
+        leadsInBatch: batchLeads.length,
+        isLastBatch: isLastBatch,
+        sheetsWritten: batchResult.sheetsWritten
+      });
+    }
+
+    // ── Upsert (new lead or edit/update existing lead) ─────────────────────────
     if (action === "upsert") {
       var lead = payload.lead;
       if (!lead) {
@@ -117,11 +142,11 @@ function doPost(e) {
       });
     }
 
-    // Delete lead (removes row and moves lower rows up)
+    // ── Delete lead ────────────────────────────────────────────────────────────
     if (action === "delete") {
       var delLeadId = payload.lead_id || (payload.lead && (payload.lead["Lead ID"] || payload.lead["Lead Id"]));
-      var delJobId = payload.job_id || (payload.lead && (payload.lead._job_id || payload.lead.job_id));
-      var delDbId = payload.db_id || (payload.lead && (payload.lead._id || payload.lead.id));
+      var delJobId  = payload.job_id  || (payload.lead && (payload.lead._job_id || payload.lead.job_id));
+      var delDbId   = payload.db_id   || (payload.lead && (payload.lead._id    || payload.lead.id));
 
       if (!delLeadId && !delJobId && !delDbId) {
         return jsonResponse({ success: false, error: "Missing lead_id or job_id to delete" });
@@ -139,6 +164,7 @@ function doPost(e) {
     }
 
     return jsonResponse({ success: false, error: "Unknown action: " + action });
+
   } catch (err) {
     return jsonResponse({
       success: false,
@@ -150,36 +176,146 @@ function doPost(e) {
   }
 }
 
+// ==============================================================================
+// CLEAR ALL  –  wipe every sheet's data rows, keep headers
+// ==============================================================================
+function handleClearAll(ss) {
+  var sheets = ss.getSheets();
+  sheets.forEach(function(sheet) {
+    var lastRow = sheet.getLastRow();
+    if (lastRow > 1) {
+      sheet.deleteRows(2, lastRow - 1);
+    }
+    // Re-stamp headers & formatting on each sheet
+    setupSheetHeaders(sheet);
+  });
+}
+
+// ==============================================================================
+// SYNC BATCH  –  append one 200-lead chunk to all relevant sheets
+// ==============================================================================
+function handleSyncBatch(ss, leads, batchNumber, totalBatches, isLastBatch) {
+  var sheetsWritten = [];
+
+  // On the very first batch, ensure "All Leads" and "Tagged Leads" exist with
+  // clean headers.  Status sheets will be created on-demand below.
+  if (batchNumber === 1) {
+    var allLeadsInit = getOrCreateSheet(ss, "All Leads");
+    setupSheetHeaders(allLeadsInit);
+
+    var taggedInit = getOrCreateSheet(ss, "Tagged Leads");
+    setupSheetHeaders(taggedInit);
+  }
+
+  // 1. Append ALL leads in this batch → "All Leads"
+  var allLeadsSheet = getOrCreateSheet(ss, "All Leads");
+  appendRowsToSheet(allLeadsSheet, leads);
+  sheetsWritten.push("All Leads");
+
+  // 2. Bucket by Status → append to each status sub-sheet
+  var leadsByStatus = {};
+  leads.forEach(function(l) {
+    var status = sanitizeSheetName((l["Status"] || "No Status").trim());
+    if (!leadsByStatus[status]) leadsByStatus[status] = [];
+    leadsByStatus[status].push(l);
+  });
+
+  Object.keys(leadsByStatus).forEach(function(statusName) {
+    var statusSheet = getOrCreateSheet(ss, statusName);
+    // Ensure headers exist (first write to this sheet this batch run)
+    if (statusSheet.getLastRow() === 0) setupSheetHeaders(statusSheet);
+    appendRowsToSheet(statusSheet, leadsByStatus[statusName]);
+    sheetsWritten.push(statusName);
+  });
+
+  // 3. Tagged leads → "Tagged Leads"
+  var taggedLeads = leads.filter(function(l) {
+    return (l["Tag"] || "").trim() !== "";
+  });
+  if (taggedLeads.length > 0) {
+    var taggedSheet = getOrCreateSheet(ss, "Tagged Leads");
+    appendRowsToSheet(taggedSheet, taggedLeads);
+    if (sheetsWritten.indexOf("Tagged Leads") === -1) sheetsWritten.push("Tagged Leads");
+  }
+
+  // 4. On the last batch, auto-fit columns on all written sheets
+  if (isLastBatch) {
+    sheetsWritten.forEach(function(name) {
+      var s = ss.getSheetByName(name);
+      if (s) autoFitColumns(s);
+    });
+  }
+
+  return { sheetsWritten: sheetsWritten };
+}
+
 /**
- * Sync all leads in bulk
+ * Append an array of lead objects as rows to a sheet (no clearing)
  */
+function appendRowsToSheet(sheet, leads) {
+  if (!leads || leads.length === 0) return;
+
+  var rows = leads.map(leadToRow);
+  var startRow = sheet.getLastRow() + 1;
+
+  // Expand sheet if needed
+  var requiredRows = startRow + rows.length - 1;
+  if (sheet.getMaxRows() < requiredRows) {
+    sheet.insertRowsAfter(sheet.getMaxRows(), requiredRows - sheet.getMaxRows());
+  }
+  if (sheet.getMaxColumns() < HEADERS.length) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), HEADERS.length - sheet.getMaxColumns());
+  }
+
+  var dataRange = sheet.getRange(startRow, 1, rows.length, HEADERS.length);
+  dataRange.setValues(rows)
+    .setFontFamily("Arial")
+    .setFontSize(10)
+    .setVerticalAlignment("middle");
+}
+
+/**
+ * Write header row with formatting. Safe to call on a fresh or existing sheet.
+ */
+function setupSheetHeaders(sheet) {
+  sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
+  var headerRange = sheet.getRange(1, 1, 1, HEADERS.length);
+  headerRange
+    .setBackground(HEADER_BG_COLOR)
+    .setFontColor(HEADER_FONT_COLOR)
+    .setFontWeight("bold")
+    .setFontSize(11)
+    .setFontFamily("Arial")
+    .setHorizontalAlignment("center")
+    .setVerticalAlignment("middle");
+  sheet.setRowHeight(1, 36);
+  sheet.setFrozenRows(1);
+}
+
+// ==============================================================================
+// LEGACY sync_all  (still fully working for manual / small syncs)
+// ==============================================================================
 function handleSyncAll(ss, leads) {
-  // Sort leads newest first (recent leads on top)
+  // Sort leads newest first
   var sortedLeads = leads.slice().sort(function(a, b) {
     var dateA = a._created_at || a.created_at || a["Lead Creation Date"] || 0;
     var dateB = b._created_at || b.created_at || b["Lead Creation Date"] || 0;
     return new Date(dateB).getTime() - new Date(dateA).getTime();
   });
 
-  // Clean up any legacy individual tag sub-sheets
-  var allExistingSheets = ss.getSheets();
-  allExistingSheets.forEach(function(sheet) {
-    var name = sheet.getName();
-    if (name.indexOf("Tag - ") === 0) {
-      try {
-        ss.deleteSheet(sheet);
-      } catch (e) {}
+  // Remove legacy tag sub-sheets
+  ss.getSheets().forEach(function(sheet) {
+    if (sheet.getName().indexOf("Tag - ") === 0) {
+      try { ss.deleteSheet(sheet); } catch (e) {}
     }
   });
 
   var sheetsCreated = [];
 
-  // 1. Master sheet: "All Leads"
   var allLeadsSheet = getOrCreateSheet(ss, "All Leads");
   populateSheet(allLeadsSheet, sortedLeads);
   sheetsCreated.push("All Leads");
 
-  // 2. Sub-sheets for each Status
   var leadsByStatus = {};
   sortedLeads.forEach(function(l) {
     var status = (l["Status"] || "No Status").trim();
@@ -194,8 +330,7 @@ function handleSyncAll(ss, leads) {
     sheetsCreated.push(sanitizedStatusSheetName);
   });
 
-  // Clear any existing status sheets that now have 0 leads
-  allExistingSheets.forEach(function(sheet) {
+  ss.getSheets().forEach(function(sheet) {
     var name = sheet.getName();
     if (name !== "All Leads" && name !== "Tagged Leads" && name.indexOf("Tag - ") !== 0) {
       if (!leadsByStatus[name]) {
@@ -204,15 +339,9 @@ function handleSyncAll(ss, leads) {
     }
   });
 
-  // 3. ONLY ONE sheet for tags: "Tagged Leads"
-  var allTaggedLeads = [];
-  sortedLeads.forEach(function(l) {
-    var tag = (l["Tag"] || "").trim();
-    if (tag) {
-      allTaggedLeads.push(l);
-    }
+  var allTaggedLeads = sortedLeads.filter(function(l) {
+    return (l["Tag"] || "").trim() !== "";
   });
-
   var taggedSheet = getOrCreateSheet(ss, "Tagged Leads");
   populateSheet(taggedSheet, allTaggedLeads);
   sheetsCreated.push("Tagged Leads");
@@ -220,42 +349,35 @@ function handleSyncAll(ss, leads) {
   return { sheetsCreated: sheetsCreated };
 }
 
-/**
- * Handle upsert (insert or update) for a single lead
- */
+// ==============================================================================
+// UPSERT (single lead, live auto-sync)
+// ==============================================================================
 function handleUpsert(ss, lead, previousStatus, previousTag) {
   var leadId = String(lead["Lead ID"] || lead["Lead Id"] || lead["_job_id"] || lead["job_id"] || "").trim();
-  var dbId = String(lead["_id"] || lead["id"] || "").trim();
-  var jobId = String(lead["_job_id"] || lead["job_id"] || "").trim();
+  var dbId   = String(lead["_id"]     || lead["id"]     || "").trim();
+  var jobId  = String(lead["_job_id"] || lead["job_id"] || "").trim();
   var rowData = leadToRow(lead);
 
-  // 1. Upsert in "All Leads"
   var allLeadsSheet = getOrCreateSheet(ss, "All Leads");
   var updatedRow = upsertRowInSheet(allLeadsSheet, leadId, rowData, dbId, jobId);
 
-  // 2. Manage Status Sub-sheets
-  var currentStatus = (lead["Status"] || "").trim();
-  var sanitizedCurrentStatus = sanitizeSheetName(currentStatus);
+  var currentStatus           = (lead["Status"] || "").trim();
+  var sanitizedCurrentStatus  = sanitizeSheetName(currentStatus);
 
-  // Remove lead from ANY other status sheet where it currently exists
-  var allSheets = ss.getSheets();
-  allSheets.forEach(function(s) {
+  ss.getSheets().forEach(function(s) {
     var sName = s.getName();
     if (sName !== "All Leads" && sName !== "Tagged Leads" && sName !== sanitizedCurrentStatus) {
       deleteRowById(s, leadId, dbId, jobId);
     }
   });
 
-  // Upsert into current status sheet
   if (currentStatus) {
     var newStatusSheet = getOrCreateSheet(ss, sanitizedCurrentStatus);
     upsertRowInSheet(newStatusSheet, leadId, rowData, dbId, jobId);
   }
 
-  // 3. Manage ONLY ONE Tag Sub-sheet: "Tagged Leads"
-  var currentTag = (lead["Tag"] || "").trim();
-  var taggedSheet = getOrCreateSheet(ss, "Tagged Leads");
-
+  var currentTag   = (lead["Tag"] || "").trim();
+  var taggedSheet  = getOrCreateSheet(ss, "Tagged Leads");
   if (currentTag) {
     upsertRowInSheet(taggedSheet, leadId, rowData, dbId, jobId);
   } else {
@@ -265,96 +387,66 @@ function handleUpsert(ss, lead, previousStatus, previousTag) {
   return { leadId: leadId || dbId || jobId, updatedRow: updatedRow };
 }
 
-/**
- * Handle lead deletion across All Leads and all sub-sheets
- * Automatically shifts rows below up!
- */
+// ==============================================================================
+// DELETE
+// ==============================================================================
 function handleDelete(ss, id1, id2, id3) {
   var sheets = ss.getSheets();
   var deletedFrom = [];
-
   sheets.forEach(function(sheet) {
     var wasDeleted = deleteRowById(sheet, id1, id2, id3);
-    if (wasDeleted) {
-      deletedFrom.push(sheet.getName());
-    }
+    if (wasDeleted) deletedFrom.push(sheet.getName());
   });
-
   return deletedFrom;
 }
 
-/**
- * Normalizes an identifier string for robust comparison
- */
+// ==============================================================================
+// UTILITY HELPERS
+// ==============================================================================
+
 function normalizeId(id) {
   if (id === null || id === undefined) return "";
-  var s = String(id).trim().toLowerCase();
-  // Strip trailing decimals like .0 or .00
-  s = s.replace(/\.0+$/, "");
-  return s;
+  return String(id).trim().toLowerCase().replace(/\.0+$/, "");
 }
 
-/**
- * Strips common prefixes and formatting (e.g. "JOB-", "Lead-", commas, hashes, spaces)
- */
 function stripId(id) {
-  var s = normalizeId(id);
-  return s.replace(/^(job|lead)[-\s#:]*/i, "").replace(/[,\s#\-]/g, "");
+  return normalizeId(id).replace(/^(job|lead)[-\s#:]*/i, "").replace(/[,\s#\-]/g, "");
 }
 
-/**
- * Check if cell value matches any target ID
- */
 function matchesAnyId(cellVal, dispVal, targetIds) {
-  var normCell = normalizeId(cellVal);
-  var normDisp = normalizeId(dispVal);
+  var normCell    = normalizeId(cellVal);
+  var normDisp    = normalizeId(dispVal);
   var strippedCell = stripId(cellVal);
   var strippedDisp = stripId(dispVal);
 
   for (var i = 0; i < targetIds.length; i++) {
     var target = targetIds[i];
     if (!target) continue;
-    var normTarget = normalizeId(target);
+    var normTarget    = normalizeId(target);
     var strippedTarget = stripId(target);
-
-    // Exact string match (raw or display)
-    if (normCell && normCell === normTarget) return true;
-    if (normDisp && normDisp === normTarget) return true;
-
-    // Stripped match (e.g. "JOB-1024" == "1024", "1,024" == "1024")
+    if (normCell     && normCell     === normTarget)    return true;
+    if (normDisp     && normDisp     === normTarget)    return true;
     if (strippedCell && strippedTarget && strippedCell === strippedTarget) return true;
     if (strippedDisp && strippedTarget && strippedDisp === strippedTarget) return true;
   }
-
   return false;
 }
 
-/**
- * Find row by Lead ID, Job ID, or Database UUID (Column A) and delete it.
- * sheet.deleteRow() automatically moves rows below it UP to fill the empty space!
- */
 function deleteRowById(sheet, id1, id2, id3) {
   var lastRow = sheet.getLastRow();
   if (lastRow <= 1) return false;
 
-  var targetIds = [];
-  if (id1) targetIds.push(id1);
-  if (id2) targetIds.push(id2);
-  if (id3) targetIds.push(id3);
+  var targetIds = [id1, id2, id3].filter(Boolean);
   if (targetIds.length === 0) return false;
 
-  var range = sheet.getRange(2, 1, lastRow - 1, 1);
-  var values = range.getValues();
+  var range        = sheet.getRange(2, 1, lastRow - 1, 1);
+  var values       = range.getValues();
   var displayValues = range.getDisplayValues();
-  var deleted = false;
+  var deleted      = false;
 
-  // Loop in reverse so deleting a row does not alter preceding row indices
   for (var i = values.length - 1; i >= 0; i--) {
-    var rawVal = values[i][0];
-    var dispVal = displayValues[i][0];
-    if (rawVal === "" && dispVal === "") continue;
-
-    if (matchesAnyId(rawVal, dispVal, targetIds)) {
+    if (values[i][0] === "" && displayValues[i][0] === "") continue;
+    if (matchesAnyId(values[i][0], displayValues[i][0], targetIds)) {
       sheet.deleteRow(i + 2);
       deleted = true;
     }
@@ -362,29 +454,18 @@ function deleteRowById(sheet, id1, id2, id3) {
   return deleted;
 }
 
-/**
- * Upsert row in a sheet:
- * - If row exists (matched by Lead ID, Job ID, or DB UUID), updates it in place with all edited data.
- * - If new, inserts at Row 2 so recent leads stay on top!
- */
 function upsertRowInSheet(sheet, leadId, rowData, dbId, jobId) {
-  var lastRow = sheet.getLastRow();
-  var foundRow = -1;
-
-  var targetIds = [];
-  if (leadId) targetIds.push(leadId);
-  if (dbId) targetIds.push(dbId);
-  if (jobId) targetIds.push(jobId);
+  var lastRow   = sheet.getLastRow();
+  var foundRow  = -1;
+  var targetIds = [leadId, dbId, jobId].filter(Boolean);
 
   if (lastRow > 1) {
-    var range = sheet.getRange(2, 1, lastRow - 1, 1);
-    var values = range.getValues();
+    var range        = sheet.getRange(2, 1, lastRow - 1, 1);
+    var values       = range.getValues();
     var displayValues = range.getDisplayValues();
     for (var i = 0; i < values.length; i++) {
-      var rawVal = values[i][0];
-      var dispVal = displayValues[i][0];
-      if (rawVal === "" && dispVal === "") continue;
-      if (matchesAnyId(rawVal, dispVal, targetIds)) {
+      if (values[i][0] === "" && displayValues[i][0] === "") continue;
+      if (matchesAnyId(values[i][0], displayValues[i][0], targetIds)) {
         foundRow = i + 2;
         break;
       }
@@ -392,11 +473,9 @@ function upsertRowInSheet(sheet, leadId, rowData, dbId, jobId) {
   }
 
   if (foundRow > 0) {
-    // Lead edited -> Update existing row in place with new edited values!
     sheet.getRange(foundRow, 1, 1, rowData.length).setValues([rowData]);
     return foundRow;
   } else {
-    // New lead -> Insert at row 2 so recent leads stay on top!
     sheet.insertRowBefore(2);
     sheet.getRange(2, 1, 1, rowData.length).setValues([rowData]);
     sheet.getRange(2, 1, 1, rowData.length)
@@ -407,62 +486,33 @@ function upsertRowInSheet(sheet, leadId, rowData, dbId, jobId) {
   }
 }
 
-/**
- * Fully populate a sheet with headers and data
- */
 function populateSheet(sheet, leads) {
   sheet.clear();
-
-  // 1. Set headers
-  sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
-
-  // Format header row
-  var headerRange = sheet.getRange(1, 1, 1, HEADERS.length);
-  headerRange.setBackground(HEADER_BG_COLOR)
-    .setFontColor(HEADER_FONT_COLOR)
-    .setFontWeight("bold")
-    .setFontSize(11)
-    .setFontFamily("Arial")
-    .setHorizontalAlignment("center")
-    .setVerticalAlignment("middle");
-
-  sheet.setRowHeight(1, 36);
-  sheet.setFrozenRows(1); // Freeze row 1
+  setupSheetHeaders(sheet);
 
   if (leads.length === 0) {
     autoFitColumns(sheet);
     return;
   }
 
-  // 2. Convert leads to 2D array
   var rows = leads.map(leadToRow);
-
-  // Ensure sheet has enough rows and columns for ALL leads
   var requiredRows = Math.max(rows.length + 1, 2);
-  var currentMaxRows = sheet.getMaxRows();
-  if (currentMaxRows < requiredRows) {
-    sheet.insertRowsAfter(currentMaxRows, requiredRows - currentMaxRows);
+  if (sheet.getMaxRows() < requiredRows) {
+    sheet.insertRowsAfter(sheet.getMaxRows(), requiredRows - sheet.getMaxRows());
   }
   if (sheet.getMaxColumns() < HEADERS.length) {
     sheet.insertColumnsAfter(sheet.getMaxColumns(), HEADERS.length - sheet.getMaxColumns());
   }
 
-  // 3. Write rows in batch
   var dataRange = sheet.getRange(2, 1, rows.length, HEADERS.length);
-  dataRange.setValues(rows);
-
-  // Style data rows
-  dataRange.setFontFamily("Arial")
+  dataRange.setValues(rows)
+    .setFontFamily("Arial")
     .setFontSize(10)
     .setVerticalAlignment("middle");
 
-  // Auto-fit column widths
   autoFitColumns(sheet);
 }
 
-/**
- * Convert lead object to array matching HEADERS order (17 columns)
- */
 function leadToRow(lead) {
   return [
     lead["Lead ID"] || lead["Lead Id"] || lead["_job_id"] || lead["job_id"] || lead["_id"] || lead["id"] || "",
@@ -485,9 +535,6 @@ function leadToRow(lead) {
   ];
 }
 
-/**
- * Auto-fit column widths
- */
 function autoFitColumns(sheet) {
   for (var col = 1; col <= HEADERS.length; col++) {
     sheet.autoResizeColumn(col);
@@ -497,32 +544,19 @@ function autoFitColumns(sheet) {
   }
 }
 
-/**
- * Get sheet by name or create if it doesn't exist
- */
 function getOrCreateSheet(ss, sheetName) {
   var sheet = ss.getSheetByName(sheetName);
-  if (!sheet) {
-    sheet = ss.insertSheet(sheetName);
-  }
+  if (!sheet) sheet = ss.insertSheet(sheetName);
   return sheet;
 }
 
-/**
- * Sanitize sheet name
- */
 function sanitizeSheetName(name) {
   if (!name) return "Sheet";
   var cleaned = name.replace(/[\\/?*\[\]:]/g, " ").trim();
-  if (cleaned.length > 90) {
-    cleaned = cleaned.substring(0, 90).trim();
-  }
+  if (cleaned.length > 90) cleaned = cleaned.substring(0, 90).trim();
   return cleaned || "Sheet";
 }
 
-/**
- * JSON response helper
- */
 function jsonResponse(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
