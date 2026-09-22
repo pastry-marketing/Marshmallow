@@ -160,6 +160,8 @@ export default function QuoDashboardPage() {
   const [customerFilter, setCustomerFilter] = useState("");
   const [timeSort, setTimeSort] = useState<"desc" | "asc">("desc");
 
+  const [currentPage, setCurrentPage] = useState(1);
+
   // Custom number display names / emojis (stored in quo_ai_settings)
   const { data: numberDisplayMap = {} } = useQuery<QuoNumberDisplayMap>({
     queryKey: ["quo-number-display-map"],
@@ -528,6 +530,26 @@ export default function QuoDashboardPage() {
     numberDisplayMap,
   ]);
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [
+    search,
+    selectedNumberIds,
+    selectedStatus,
+    datePreset,
+    startDate,
+    endDate,
+    numberNameFilter,
+    customerFilter,
+    timeSort,
+  ]);
+
+  const PAGE_SIZE = 100;
+  const totalPages = Math.ceil(filteredConversations.length / PAGE_SIZE) || 1;
+  const paginatedConversations = useMemo(() => {
+    const start = (currentPage - 1) * PAGE_SIZE;
+    return filteredConversations.slice(start, start + PAGE_SIZE);
+  }, [filteredConversations, currentPage]);
 
   // Analytics Computation
   const analyticsData = useMemo(() => {
@@ -1091,7 +1113,7 @@ export default function QuoDashboardPage() {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  filteredConversations.map((row, index) => {
+                  paginatedConversations.map((row, index) => {
                     const numberDisp = resolveQuoNumberDisplay(row.quo_phone_numbers, numberDisplayMap);
 
                     const normStatusKey = normalizeQuoLeadStatus(row.status || row.current_status);
@@ -1111,7 +1133,7 @@ export default function QuoDashboardPage() {
                       >
                         {/* Column 1: # / Chat # */}
                         <TableCell className="text-center font-mono text-xs text-muted-foreground font-semibold">
-                          {index + 1}
+                          {(currentPage - 1) * PAGE_SIZE + index + 1}
                         </TableCell>
 
                         {/* Column 2: Number Name */}
@@ -1234,12 +1256,41 @@ export default function QuoDashboardPage() {
             </Table>
 
             {/* Footer Summary */}
-            <div className="p-3 border-t border-border/40 bg-muted/20 flex items-center justify-between text-xs text-muted-foreground">
-              <span>
-                Showing <strong className="text-foreground">{filteredConversations.length}</strong> of{" "}
-                <strong className="text-foreground">{conversations.length}</strong> conversations
-              </span>
-              <span className="text-[11px] font-mono">Timezone: Eastern Time Zone (US/Eastern)</span>
+            <div className="p-3 border-t border-border/40 bg-muted/20 flex flex-col sm:flex-row gap-3 items-center justify-between text-xs text-muted-foreground">
+              <div className="flex items-center gap-2">
+                <span>
+                  Showing <strong className="text-foreground">{filteredConversations.length > 0 ? (currentPage - 1) * PAGE_SIZE + 1 : 0}</strong>-
+                  <strong className="text-foreground">{Math.min(currentPage * PAGE_SIZE, filteredConversations.length)}</strong> of{" "}
+                  <strong className="text-foreground">{filteredConversations.length}</strong> matching (Total: {conversations.length})
+                </span>
+              </div>
+
+              {totalPages > 1 && (
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2"
+                    disabled={currentPage === 1}
+                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  >
+                    Prev
+                  </Button>
+                  <span className="px-2 font-medium">
+                    {currentPage} / {totalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2"
+                    disabled={currentPage === totalPages}
+                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                  >
+                    Next
+                  </Button>
+                </div>
+              )}
+              <span className="text-[11px] font-mono hidden sm:inline-block">Timezone: Eastern Time Zone (US/Eastern)</span>
             </div>
           </div>
         </TabsContent>
