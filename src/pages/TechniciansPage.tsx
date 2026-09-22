@@ -992,6 +992,7 @@ export default function TechniciansPage() {
                 <TableHead className="w-[100px]">Chat Link</TableHead>
                 <TableHead className="w-[100px] text-center">Good Tech</TableHead>
                 <TableHead className="min-w-[150px]">Notes</TableHead>
+                <TableHead className="w-[110px]">OPR Code</TableHead>
                 <TableHead className="w-[100px]">Status</TableHead>
                 <TableHead className="w-[100px]">Added Date</TableHead>
                 <TableHead className="w-[120px] text-right pr-4">Actions</TableHead>
@@ -1000,14 +1001,14 @@ export default function TechniciansPage() {
             <TableBody>
               {paginatedQuery.isPending && rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={11} className="text-center text-sm text-muted-foreground py-8">
+                  <TableCell colSpan={12} className="text-center text-sm text-muted-foreground py-8">
                     Loading…
                   </TableCell>
                 </TableRow>
               )}
               {paginatedQuery.isError && rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={11} className="text-center text-sm py-10">
+                  <TableCell colSpan={12} className="text-center text-sm py-10">
                     <div className="flex flex-col items-center gap-2">
                       <span className="text-destructive">
                         {(paginatedQuery.error as Error)?.message ?? "Failed to load technicians."}
@@ -1021,7 +1022,7 @@ export default function TechniciansPage() {
               )}
               {!paginatedQuery.isPending && !paginatedQuery.isError && rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={11} className="text-center text-sm text-muted-foreground py-10">
+                  <TableCell colSpan={12} className="text-center text-sm text-muted-foreground py-10">
                     {isSearching || codeFilter !== "all" || hasColumnFilters
                       ? "No technicians match your filters."
                       : "No technicians yet. Add one manually or import from CSV/XLSX."}
@@ -1107,6 +1108,17 @@ export default function TechniciansPage() {
                     {/* Notes */}
                     <TableCell className="max-w-[150px] sm:max-w-[200px] truncate text-muted-foreground" title={t.notes ?? ""}>
                       {t.notes || <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+
+                    {/* OPR Code */}
+                    <TableCell className="w-[110px]">
+                      {t.opr_code ? (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-primary/10 text-primary border border-primary/20 tracking-wider">
+                          {t.opr_code}
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground text-xs">—</span>
+                      )}
                     </TableCell>
 
                     {/* Status */}
