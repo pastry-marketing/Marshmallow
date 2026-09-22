@@ -937,8 +937,8 @@ export default function TechniciansPage() {
         <div ref={tableScrollRef} className="overflow-x-auto">
           <Table>
             <TableHeader>
-              <TableRow>
-                <TableHead className="w-[36px]">
+              <TableRow className="whitespace-nowrap text-xs">
+                <TableHead className="w-[36px] pl-4">
                   <Checkbox
                     checked={headerCheckboxState}
                     onCheckedChange={(v) => toggleAllVisible(v === true)}
@@ -946,11 +946,11 @@ export default function TechniciansPage() {
                     aria-label="Select all technicians on this page"
                   />
                 </TableHead>
-                <TableHead>
+                <TableHead className="w-[160px]">
                   <span className="inline-flex items-center">
-                    Name
+                    Tech
                     <HeaderColumnFilter
-                      label="Name"
+                      label="Tech"
                       value={columnFilters.name}
                       onChange={(v) => setColumnFilters((f) => ({ ...f, name: v }))}
                       sortKey="name"
@@ -959,30 +959,8 @@ export default function TechniciansPage() {
                     />
                   </span>
                 </TableHead>
-                <TableHead className="w-[125px]">
-                  <span className="inline-flex items-center">
-                    <button
-                      type="button"
-                      onClick={() => setSortBy(sortBy === "code_asc" ? "code_desc" : "code_asc")}
-                      className="inline-flex items-center gap-1 hover:text-foreground transition-colors font-medium text-xs text-muted-foreground"
-                      title="Click to sort by OPR Code"
-                    >
-                      OPR Code
-                      {sortBy === "code_asc" ? " ↑" : sortBy === "code_desc" ? " ↓" : ""}
-                    </button>
-                    <HeaderColumnFilter
-                      label="OPR Code"
-                      value={columnFilters.code}
-                      onChange={(v) => setColumnFilters((f) => ({ ...f, code: v }))}
-                      sortKey="code"
-                      sortBy={sortBy}
-                      onSort={setSortBy}
-                    />
-                  </span>
-                </TableHead>
-                <TableHead>Phone Number</TableHead>
-                <TableHead>Active</TableHead>
-                <TableHead>
+                <TableHead className="w-[130px]">Number</TableHead>
+                <TableHead className="w-[140px]">
                   <span className="inline-flex items-center">
                     Service
                     <HeaderColumnFilter
@@ -995,7 +973,7 @@ export default function TechniciansPage() {
                     />
                   </span>
                 </TableHead>
-                <TableHead>
+                <TableHead className="w-[160px]">
                   <span className="inline-flex items-center">
                     Area
                     <HeaderColumnFilter
@@ -1008,10 +986,12 @@ export default function TechniciansPage() {
                     />
                   </span>
                 </TableHead>
-                <TableHead>Chat Link</TableHead>
-                <TableHead>Notes</TableHead>
-                <TableHead className="w-[120px]">Added</TableHead>
-                <TableHead className="w-[130px] text-right">Actions</TableHead>
+                <TableHead className="w-[100px]">Chat Link</TableHead>
+                <TableHead className="w-[100px] text-center">Good Tech</TableHead>
+                <TableHead className="min-w-[150px]">Notes</TableHead>
+                <TableHead className="w-[100px]">Status</TableHead>
+                <TableHead className="w-[100px]">Added Date</TableHead>
+                <TableHead className="w-[120px] text-right pr-4">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -1052,66 +1032,52 @@ export default function TechniciansPage() {
                   <TableRow
                     key={t.id}
                     data-state={isSelected ? "selected" : undefined}
-                    className={isSelected ? "bg-primary/5 border-l-2 border-l-primary" : t.is_active === false ? "opacity-60" : undefined}
+                    className={cn(
+                      "group whitespace-nowrap text-sm",
+                      isSelected && "bg-primary/5 border-l-2 border-l-primary",
+                      t.is_active === false && "opacity-60"
+                    )}
                   >
-                    <TableCell className="align-middle">
+                    <TableCell className="align-middle pl-4 w-[36px]">
                       <Checkbox
                         checked={isSelected}
                         onCheckedChange={(v) => toggleRow(t, v === true)}
                         aria-label={isSelected ? `Deselect ${t.name}` : `Select ${t.name}`}
                       />
                     </TableCell>
-                    <TableCell className="font-medium">
-                      <div className="flex items-center gap-1.5">
-                        {t.name}
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            void handleGoodTechToggle(t, !t.is_good_tech);
-                          }}
-                          className="hover:scale-110 transition-transform"
-                          title={t.is_good_tech ? "Mark as normal tech" : "Mark as Good Tech"}
-                        >
-                          <Star className={`h-4 w-4 transition-colors ${t.is_good_tech ? "fill-amber-500 text-amber-500" : "text-muted-foreground/30 hover:text-muted-foreground"}`} />
-                        </button>
-                      </div>
+                    
+                    {/* Tech (Name) */}
+                    <TableCell className="font-medium max-w-[160px] truncate" title={t.name}>
+                      {t.name}
                     </TableCell>
-                    <TableCell>
-                      {t.opr_code ? (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-primary/10 text-primary border border-primary/20 tracking-wider">
-                          {t.opr_code}
-                        </span>
+                    
+                    {/* Number */}
+                    <TableCell className="w-[130px]">
+                      {t.phone_number ? (
+                        <span className="text-foreground font-mono text-xs">{t.phone_number}</span>
                       ) : (
                         <span className="text-muted-foreground text-xs">—</span>
                       )}
                     </TableCell>
-                    <TableCell>
-                      {t.phone_number && tel ? (
-                        <a href={tel} className="text-primary hover:underline">{t.phone_number}</a>
-                      ) : (
-                        <span className="text-muted-foreground text-xs">No phone number</span>
-                      )}
+                    
+                    {/* Service */}
+                    <TableCell className="max-w-[140px] truncate" title={t.service ?? ""}>
+                      {t.service || <span className="text-muted-foreground">—</span>}
                     </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <Switch
-                          checked={t.is_active !== false}
-                          onCheckedChange={(active) => void handleActiveChange(t, active)}
-                          disabled={togglingTechId !== null}
-                          aria-label={`${t.is_active === false ? "Activate" : "Deactivate"} ${t.name}`}
-                        />
-                        <span className="text-xs text-muted-foreground">{t.is_active === false ? "Off" : "On"}</span>
-                      </div>
+                    
+                    {/* Area */}
+                    <TableCell className="max-w-[160px] truncate" title={t.area}>
+                      {t.area || <span className="text-muted-foreground">—</span>}
                     </TableCell>
-                    <TableCell>{t.service || <span className="text-muted-foreground">—</span>}</TableCell>
-                    <TableCell className="max-w-[280px] truncate" title={t.area}>{t.area}</TableCell>
-                    <TableCell className="max-w-[220px] truncate">
+                    
+                    {/* Chat Link */}
+                    <TableCell className="w-[100px]">
                       {t.chat_link ? (
                         <a
                           href={t.chat_link}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-primary hover:underline"
+                          className="text-primary hover:underline text-xs inline-flex items-center"
                           title={t.chat_link}
                         >
                           Open chat
@@ -1120,29 +1086,78 @@ export default function TechniciansPage() {
                         <span className="text-muted-foreground">—</span>
                       )}
                     </TableCell>
-                    <TableCell className="max-w-[320px] truncate text-muted-foreground" title={t.notes ?? ""}>
+
+                    {/* Good Tech */}
+                    <TableCell className="w-[100px] text-center">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void handleGoodTechToggle(t, !t.is_good_tech);
+                        }}
+                        className="hover:scale-110 transition-transform p-1"
+                        title={t.is_good_tech ? "Mark as normal tech" : "Mark as Good Tech"}
+                      >
+                        <Star className={`h-4 w-4 transition-colors ${t.is_good_tech ? "fill-amber-500 text-amber-500" : "text-muted-foreground/30 hover:text-muted-foreground"}`} />
+                      </button>
+                    </TableCell>
+
+                    {/* Notes */}
+                    <TableCell className="max-w-[150px] sm:max-w-[200px] truncate text-muted-foreground" title={t.notes ?? ""}>
                       {t.notes || <span className="text-muted-foreground">—</span>}
                     </TableCell>
-                    <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+
+                    {/* Status */}
+                    <TableCell className="w-[100px]">
+                      <div className="flex items-center gap-2">
+                        <Switch
+                          checked={t.is_active !== false}
+                          onCheckedChange={(active) => void handleActiveChange(t, active)}
+                          disabled={togglingTechId !== null}
+                          aria-label={`${t.is_active === false ? "Activate" : "Deactivate"} ${t.name}`}
+                          className="scale-75 origin-left"
+                        />
+                        <span className="text-[11px] text-muted-foreground font-medium uppercase tracking-wider">{t.is_active === false ? "Inactive" : "Active"}</span>
+                      </div>
+                    </TableCell>
+
+                    {/* Added Date */}
+                    <TableCell className="w-[100px] text-xs text-muted-foreground font-mono">
                       {formatAddedDate(t.created_at) || <span className="text-muted-foreground">—</span>}
                     </TableCell>
-                    <TableCell className="text-right">
-                      <div className="inline-flex gap-1">
+                    
+                    {/* Actions */}
+                    <TableCell className="text-right pr-4 w-[120px]">
+                      <div className="inline-flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                         <Button
                           size="icon"
                           variant="ghost"
+                          className="h-8 w-8 text-muted-foreground hover:text-foreground"
                           onClick={() => handleCopyOne(t)}
                           title="Copy technician details"
                           aria-label={`Copy ${t.name} details`}
                         >
-                          <Copy className="h-4 w-4" />
+                          <Copy className="h-3.5 w-3.5" />
                         </Button>
-                        <Button size="icon" variant="ghost" onClick={() => setEditTech(t)} title="Edit" aria-label={`Edit ${t.name}`}>
-                          <Pencil className="h-4 w-4" />
+                        <Button 
+                          size="icon" 
+                          variant="ghost" 
+                          className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                          onClick={() => setEditTech(t)} 
+                          title="Edit" 
+                          aria-label={`Edit ${t.name}`}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
                         </Button>
                         {canDelete && (
-                          <Button size="icon" variant="ghost" onClick={() => setDeleteTech(t)} title="Delete" aria-label={`Delete ${t.name}`}>
-                            <Trash2 className="h-4 w-4 text-destructive" />
+                          <Button 
+                            size="icon" 
+                            variant="ghost" 
+                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                            onClick={() => setDeleteTech(t)} 
+                            title="Delete" 
+                            aria-label={`Delete ${t.name}`}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
                           </Button>
                         )}
                       </div>
