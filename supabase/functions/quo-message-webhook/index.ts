@@ -217,6 +217,31 @@ Deno.serve(async (req) => {
       });
     }
 
+    let conversationRowId = null;
+    let existingLead: { id: string | null } = { id: null };
+
+    if (!conversation.id && message.id) {
+      // For transcript/summary events, we might not have the conversation ID in the payload.
+      // We can look it up from the original call message.
+      const originalMessageId = message.id.split(':')[0] + ':call.completed';
+      const { data: existingMsg } = await supabase
+        .from("quo_messages")
+        .select("conversation_id")
+        .eq("quo_message_id", originalMessageId)
+        .single();
+        
+      if (existingMsg?.conversation_id) {
+        conversationRowId = existingMsg.conversation_id;
+        // Also look up the conversation to get the linked lead
+        const { data: convData } = await supabase
+          .from("quo_conversations")
+          .select("linked_lead_id")
+          .eq("id", conversationRowId)
+          .single();
+        if (convData) existingLead.id = convData.linked_lead_id;
+      }
+    }
+
     let phoneNumberRowId: string | null = null;
     if (conversation.phoneNumberId) {
       const { data: phoneRow, error: phoneError } = await supabase
@@ -239,66 +264,78 @@ Deno.serve(async (req) => {
       phoneNumberRowId = phoneRow.id;
     }
 
-    const { data: existingLead } = conversation.customerNumber
-      ? await supabase
-          .from("leads")
-          .select("id")
-          .eq("customer_phone", conversation.customerNumber)
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle()
-      : { data: null };
-
-    // Preserve any previously-set linked_lead_id so re-upserts don't wipe manual/AI links.
-    const { data: existingConversation } = await supabase
-      .from("quo_conversations")
-      .select("linked_lead_id, last_message_at")
-      .eq("quo_conversation_id", conversation.id)
-      .maybeSingle();
-
-    const preservedLinkedLeadId =
-      existingLead?.id ?? existingConversation?.linked_lead_id ?? null;
-
     const messageTime = new Date(message.createdAt).toISOString();
-    const existingLastAt = existingConversation?.last_message_at
-      ? new Date(existingConversation.last_message_at).getTime()
-      : 0;
-    const isNewer = new Date(messageTime).getTime() >= existingLastAt;
 
-    const conversationUpsert: Record<string, unknown> = {
-      quo_conversation_id: conversation.id,
-      customer_name: conversation.customerName,
-      customer_number: conversation.customerNumber,
-      number_id: phoneNumberRowId,
-      linked_lead_id: preservedLinkedLeadId,
-      status: "active",
-      current_status: "open",
-      raw_payload: payload,
-    };
+    if (conversation.id) {
+      const { data: dbLead } = conversation.customerNumber
+        ? await supabase
+            .from("leads")
+            .select("id")
+            .eq("customer_phone", conversation.customerNumber)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle()
+        : { data: null };
 
-    if (isNewer) {
-      conversationUpsert.last_message_preview = getQuoMessagePreview(message.text, message.media);
-      conversationUpsert.last_message_time = messageTime;
-      conversationUpsert.last_message_at = messageTime;
-      conversationUpsert.direction = message.direction === "inbound" ? "incoming" : "outgoing";
-      if (message.sender === "customer") conversationUpsert.last_customer_message_at = messageTime;
-      if (message.sender === "agent") conversationUpsert.last_agent_message_at = messageTime;
+      if (dbLead) existingLead.id = dbLead.id;
+
+      // Preserve any previously-set linked_lead_id so re-upserts don't wipe manual/AI links.
+      const { data: existingConversation } = await supabase
+        .from("quo_conversations")
+        .select("linked_lead_id, last_message_at")
+        .eq("quo_conversation_id", conversation.id)
+        .maybeSingle();
+
+      const preservedLinkedLeadId =
+        existingLead?.id ?? existingConversation?.linked_lead_id ?? null;
+
+      const existingLastAt = existingConversation?.last_message_at
+        ? new Date(existingConversation.last_message_at).getTime()
+        : 0;
+      const isNewer = new Date(messageTime).getTime() >= existingLastAt;
+
+      const conversationUpsert: Record<string, unknown> = {
+        quo_conversation_id: conversation.id,
+        customer_name: conversation.customerName,
+        customer_number: conversation.customerNumber,
+        number_id: phoneNumberRowId,
+        linked_lead_id: preservedLinkedLeadId,
+        status: "active",
+        current_status: "open",
+        raw_payload: payload,
+      };
+
+      if (isNewer) {
+        conversationUpsert.last_message_preview = getQuoMessagePreview(message.text, message.media);
+        conversationUpsert.last_message_time = messageTime;
+        conversationUpsert.last_message_at = messageTime;
+        conversationUpsert.direction = message.direction === "inbound" ? "incoming" : "outgoing";
+        if (message.sender === "customer") conversationUpsert.last_customer_message_at = messageTime;
+        if (message.sender === "agent") conversationUpsert.last_agent_message_at = messageTime;
+      }
+
+      const { data: conversationRow, error: conversationError } = await supabase
+        .from("quo_conversations")
+        .upsert(conversationUpsert, { onConflict: "quo_conversation_id" })
+        .select("id, linked_lead_id")
+        .single();
+
+      if (conversationError) throw new Error(`Failed to upsert conversation: ${conversationError.message}`);
+      
+      conversationRowId = conversationRow.id;
+      existingLead.id = existingLead?.id ?? conversationRow.linked_lead_id ?? null;
     }
 
-    const { data: conversationRow, error: conversationError } = await supabase
-      .from("quo_conversations")
-      .upsert(conversationUpsert, { onConflict: "quo_conversation_id" })
-      .select("id, linked_lead_id")
-      .single();
-
-    if (conversationError) throw new Error(`Failed to upsert conversation: ${conversationError.message}`);
+    if (!conversationRowId) {
+      throw new Error("Could not determine conversation_id for message.");
+    }
 
     const { data: messageRow, error: messageError } = await supabase
       .from("quo_messages")
       .upsert(
         {
           quo_message_id: message.id,
-          conversation_id: conversationRow.id,
+          conversation_id: conversationRowId,
           sender: message.sender,
           direction: message.direction,
           recipients: message.to,
@@ -317,7 +354,7 @@ Deno.serve(async (req) => {
     if (messageError) throw new Error(`Failed to upsert message: ${messageError.message}`);
 
     await supabase.from("quo_conversation_flags").upsert(
-      { conversation_id: conversationRow.id },
+      { conversation_id: conversationRowId },
       { onConflict: "conversation_id", ignoreDuplicates: true },
     );
 
@@ -330,9 +367,9 @@ Deno.serve(async (req) => {
 
     return jsonResponse({
       success: true,
-      conversation_id: conversationRow.id,
+      conversation_id: conversationRowId,
       message_id: messageRow.id,
-      linked_lead_id: existingLead?.id ?? conversationRow.linked_lead_id ?? null,
+      linked_lead_id: existingLead?.id ?? null,
     });
 
   } catch (error) {
