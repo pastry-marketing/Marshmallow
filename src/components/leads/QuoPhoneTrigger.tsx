@@ -9,6 +9,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { normalizePhoneE164, stripPhone } from "@/lib/phone";
 import { fetchQuoChatThread, sendQuoChatMessage, type QuoChatMessage } from "@/lib/quo-chat";
+import { realtimeBus } from "@/lib/realtime";
 import {
   formatEasternTime,
   formatLocalRelativeTime,
@@ -287,70 +288,7 @@ export default function QuoPhoneTrigger({
         const conversationId = response.conversation?.id;
 
         if (conversationId && conversationId !== subscribedConversationId) {
-          if (currentRealtimeChannel) {
-            void supabase.removeChannel(currentRealtimeChannel);
-            currentRealtimeChannel = null;
-          }
-
           subscribedConversationId = conversationId;
-
-          const realtimeChannel = supabase
-            .channel(`quo-lead-chat-${chatType || "cust"}-${contactKey || normalizedPhone}-${conversationId}`)
-            .on(
-              "postgres_changes",
-              { event: "INSERT", schema: "public", table: "quo_conversations", filter: `customer_number=eq.${normalizedPhone}` },
-              () => { /* Skip full refresh, wait for actual messages */ }
-            )
-            .on(
-              "postgres_changes",
-              { event: "UPDATE", schema: "public", table: "quo_conversations", filter: `customer_number=eq.${normalizedPhone}` },
-              () => { /* Skip full refresh, wait for actual messages */ }
-            )
-            .on(
-              "postgres_changes",
-              { event: "*", schema: "public", table: "quo_messages", filter: `conversation_id=eq.${conversationId}` },
-              (payload) => {
-                if (!active) return;
-                const row = payload.new as any;
-                if (!row || !row.id) return;
-                const newMsg: QuoChatMessage = {
-                  id: row.id,
-                  to: Array.isArray(row.recipients) ? (row.recipients as unknown[]).map((entry) => String(entry)) : [],
-                  from: row.sender ?? "",
-                  text: row.text ?? "",
-                  phoneNumberId: response.phoneNumber?.id ?? "",
-                  conversationId: row.conversation_id,
-                  direction: row.direction === "outgoing" ? "outgoing" : "incoming",
-                  status: row.status,
-                  createdAt: row.message_time ?? row.quo_created_at ?? row.created_at,
-                };
-                setMessages((prev) => mergeQuoMessages([...prev, newMsg]));
-              }
-            )
-            .on(
-              "postgres_changes",
-              { event: "*", schema: "public", table: "quo_outbound_messages", filter: `to_number=eq.${normalizedPhone}` },
-              (payload) => {
-                if (!active) return;
-                const row = payload.new as any;
-                if (!row || !row.id) return;
-                const newMsg: QuoChatMessage = {
-                  id: `outbound-${row.id}`,
-                  to: [row.to_number],
-                  from: numName ?? (chatType === "tech" ? "Tech" : ""),
-                  text: row.body,
-                  phoneNumberId: response.phoneNumber?.id ?? "",
-                  conversationId: conversationId ?? null,
-                  direction: "outgoing",
-                  status: row.status,
-                  createdAt: row.created_at,
-                };
-                setMessages((prev) => mergeQuoMessages([...prev, newMsg]));
-              }
-            )
-            .subscribe();
-
-          currentRealtimeChannel = realtimeChannel;
         }
       } catch (fetchError) {
         if (!active) return;
@@ -367,11 +305,69 @@ export default function QuoPhoneTrigger({
       refreshTimer = setTimeout(() => void loadThread(false), 450);
     };
 
-    let currentRealtimeChannel: ReturnType<typeof supabase.channel> | null = null;
     let subscribedConversationId: string | null = null;
+    // local ref to avoid relying on state dependency inside event listeners
+    const phoneNumberIdRef = { current: "" };
+
+    const handleQuoConvos = (e: any) => {
+      const row = e.detail?.new;
+      if (!active || !row) return;
+      if (row.customer_number === normalizedPhone) {
+        // Conversation updated, we don't fetch everything just wait for messages
+      }
+    };
+
+    const handleQuoMessages = (e: any) => {
+      const row = e.detail?.new;
+      if (!active || !row || !row.id || !subscribedConversationId) return;
+      if (row.conversation_id === subscribedConversationId) {
+        const newMsg: QuoChatMessage = {
+          id: row.id,
+          to: Array.isArray(row.recipients) ? (row.recipients as unknown[]).map((entry) => String(entry)) : [],
+          from: row.sender ?? "",
+          text: row.text ?? "",
+          phoneNumberId: phoneNumberIdRef.current,
+          conversationId: row.conversation_id,
+          direction: row.direction === "outgoing" ? "outgoing" : "incoming",
+          status: row.status,
+          createdAt: row.message_time ?? row.quo_created_at ?? row.created_at,
+        };
+        setMessages((prev) => mergeQuoMessages([...prev, newMsg]));
+      }
+    };
+
+    const handleQuoOutboundMessages = (e: any) => {
+      const row = e.detail?.new;
+      if (!active || !row || !row.id) return;
+      if (row.to_number === normalizedPhone) {
+        const newMsg: QuoChatMessage = {
+          id: `outbound-${row.id}`,
+          to: [row.to_number],
+          from: (chatType === "tech" ? "Tech" : "System"),
+          text: row.body,
+          phoneNumberId: phoneNumberIdRef.current,
+          conversationId: subscribedConversationId,
+          direction: "outgoing",
+          status: row.status,
+          createdAt: row.created_at,
+        };
+        setMessages((prev) => mergeQuoMessages([...prev, newMsg]));
+      }
+    };
+
+    realtimeBus.addEventListener("quo_conversations", handleQuoConvos);
+    realtimeBus.addEventListener("quo_messages", handleQuoMessages);
+    realtimeBus.addEventListener("quo_outbound_messages", handleQuoOutboundMessages);
 
     setMessages([]);
-    void loadThread(true);
+    void loadThread(true).then(() => {
+      // after first load, populate the phoneNumberIdRef
+      setConversationMeta((meta) => {
+        if (meta?.quoPhoneNumberId) phoneNumberIdRef.current = meta.quoPhoneNumberId;
+        return meta;
+      });
+    });
+
     // Expose the loader so expanding a minimized chat can refresh instantly.
     loadThreadRef.current = (showLoading: boolean) => { if (active) void loadThread(showLoading); };
 
@@ -390,10 +386,9 @@ export default function QuoPhoneTrigger({
       clearInterval(pollId);
       document.removeEventListener("visibilitychange", onVisible);
       if (refreshTimer) clearTimeout(refreshTimer);
-      if (currentRealtimeChannel) {
-        void supabase.removeChannel(currentRealtimeChannel);
-        currentRealtimeChannel = null;
-      }
+      realtimeBus.removeEventListener("quo_conversations", handleQuoConvos);
+      realtimeBus.removeEventListener("quo_messages", handleQuoMessages);
+      realtimeBus.removeEventListener("quo_outbound_messages", handleQuoOutboundMessages);
       subscribedConversationId = null;
     };
   }, [canUseQuickChat, normalizedPhone, open, chatType]);

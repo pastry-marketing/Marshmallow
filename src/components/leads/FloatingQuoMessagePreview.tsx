@@ -3,6 +3,7 @@ import { MessageSquare, X } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { formatLocalRelativeTime } from "@/lib/quo-dashboard";
+import { realtimeBus } from "@/lib/realtime";
 
 interface FloatingQuoMessagePreviewProps {
   phone?: string | null;
@@ -70,21 +71,15 @@ export default function FloatingQuoMessagePreview({ phone }: FloatingQuoMessageP
 
     void fetchLatestMessages();
 
-    const channelId = Math.random().toString(36).slice(2);
-    const channel = supabase
-      .channel(`floating-quo-msgs-${last10}-${channelId}`)
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "quo_messages" },
-        () => {
-          void fetchLatestMessages();
-        }
-      )
-      .subscribe();
+    const handleNewMessage = () => {
+      void fetchLatestMessages();
+    };
+
+    realtimeBus.addEventListener("quo_messages", handleNewMessage);
 
     return () => {
       active = false;
-      void supabase.removeChannel(channel);
+      realtimeBus.removeEventListener("quo_messages", handleNewMessage);
     };
   }, [hasQuickChatAccess, phone]);
 

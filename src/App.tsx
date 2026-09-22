@@ -49,8 +49,17 @@ function PageFallback() {
   );
 }
 
+import { useEffect } from "react";
+import { setupGlobalRealtime } from "@/lib/realtime";
+
 function ProtectedRoutes() {
   const { fullyAuthenticated, loading } = useAuth();
+
+  useEffect(() => {
+    if (fullyAuthenticated) {
+      setupGlobalRealtime();
+    }
+  }, [fullyAuthenticated]);
 
   if (loading) {
     return (
