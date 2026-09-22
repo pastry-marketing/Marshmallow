@@ -57,7 +57,10 @@ import {
   ArrowUp,
   ArrowDown,
   Star,
+  BarChart,
+  UserCheck,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 const PAGE_SIZE_OPTIONS = [100, 200, 500, 1000] as const;
 type PageSizeOption = (typeof PAGE_SIZE_OPTIONS)[number];
