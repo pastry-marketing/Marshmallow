@@ -48,6 +48,14 @@ export function setupGlobalRealtime() {
         realtimeBus.dispatchEvent(new CustomEvent("lead_notes", { detail: payload }));
       }
     )
+    // Leads (for Google Sheets auto-sync and any other lead-level listeners)
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "leads" },
+      (payload) => {
+        realtimeBus.dispatchEvent(new CustomEvent("leads", { detail: payload }));
+      }
+    )
     .subscribe((status, err) => {
       if (status === 'SUBSCRIBED') {
         console.log("Global Realtime Channel Connected");
