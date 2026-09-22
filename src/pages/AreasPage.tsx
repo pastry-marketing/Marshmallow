@@ -18,6 +18,7 @@ import AreaCrossTab from "@/components/areas/AreaCrossTab";
 import AreaStatusBreakdown from "@/components/areas/AreaStatusBreakdown";
 import { motion } from "framer-motion";
 import { staggerContainer, staggerItem } from "@/lib/motion";
+import { fetchAllRows } from "@/lib/supabase-paginate";
 
 type Granularity = "daily" | "weekly" | "monthly";
 type TabType = "all" | "closed" | "cancelled";
@@ -111,12 +112,21 @@ export default function AreasPage() {
 
   const fetchLeads = async () => {
     setLoading(true);
-    const { data } = await supabase
-      .from("leads")
-      .select("id, address, city, service_type, status, created_at")
-      .gte("created_at", dateRange.from.toISOString())
-      .lte("created_at", dateRange.to.toISOString());
-    if (data) setLeads(data as Lead[]);
+    try {
+      const data = await fetchAllRows<Lead>((from, to) =>
+        supabase
+          .from("leads")
+          .select("id, address, city, service_type, status, created_at")
+          .gte("created_at", dateRange.from.toISOString())
+          .lte("created_at", dateRange.to.toISOString())
+          .order("created_at", { ascending: false })
+          .order("id", { ascending: false })
+          .range(from, to)
+      );
+      setLeads(data);
+    } catch (error) {
+      console.error("Failed to fetch area leads:", error);
+    }
     setLoading(false);
   };
 

@@ -55,6 +55,8 @@ import {
   EyeOff,
 } from "lucide-react";
 import { toast } from "sonner";
+import { format, isSameDay } from "date-fns";
+import { fetchAllRows } from "@/lib/supabase-paginate";
 import { motion } from "framer-motion";
 import { premiumEase } from "@/lib/motion";
 import {
@@ -229,18 +231,21 @@ export default function QuoDashboardPage() {
   } = useQuery<ConversationRow[]>({
     queryKey: ["quo-dashboard-conversations"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("quo_conversations")
-        .select("id, quo_conversation_id, customer_name, customer_number, number_id, last_message_preview, last_message_time, last_message_at, created_at, status, current_status")
-        .order("created_at", { ascending: false });
-
-      if (error) {
+      try {
+        const data = await fetchAllRows<ConversationRow>((from, to) =>
+          supabase
+            .from("quo_conversations")
+            .select("id, quo_conversation_id, customer_name, customer_number, number_id, last_message_preview, last_message_time, last_message_at, created_at, status, current_status")
+            .order("created_at", { ascending: false })
+            .order("id", { ascending: false })
+            .range(from, to)
+        );
+        return data;
+      } catch (error: any) {
         console.error("Conversation fetch failed:", error.message);
         toast.error(`Database error: ${error.message}`);
         return [];
       }
-
-      return (data as ConversationRow[]) ?? [];
     },
     // Realtime below carries the live updates; this is only a slow safety net for a dropped
     // socket, so it no longer re-reads the whole conversation table every 15 seconds.
