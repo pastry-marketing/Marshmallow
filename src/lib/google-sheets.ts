@@ -377,46 +377,71 @@ async function dispatchToWebhook(
 }
 
 /**
- * Bulk Sync all leads to Google Sheets
+ * Bulk Sync all leads to Google Sheets in batches of 200 to avoid
+ * Google Apps Script execution-time and payload-size limits.
  */
-export async function syncAllLeadsToGoogleSheets(): Promise<{
+export async function syncAllLeadsToGoogleSheets(
+  onProgress?: (synced: number, total: number) => void
+): Promise<{
   success: boolean;
   leadsCount: number;
   message?: string;
 }> {
   const rows = await fetchAllLeadsWithDetails();
   const config = await getGoogleSheetsConfig();
+  const BATCH_SIZE = 200;
+  const total = rows.length;
+  let synced = 0;
 
+  // Send a "clear_all" command first so the sheet starts fresh
   try {
-    const result = await dispatchToWebhook({
-      action: "sync_all",
-      leads: rows,
-    });
-
-    const updatedConfig: GoogleSheetsConfig = {
-      ...config,
-      lastSyncedAt: new Date().toISOString(),
-      lastSyncStatus: "success",
-      lastSyncMessage: `Successfully synced ${rows.length} leads across all status and tag tabs.`,
-      lastSyncedCount: rows.length,
-    };
-    await saveGoogleSheetsConfig(updatedConfig);
-
-    return {
-      success: true,
-      leadsCount: rows.length,
-      message: updatedConfig.lastSyncMessage,
-    };
+    await dispatchToWebhook({ action: "clear_all" });
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
-    const updatedConfig: GoogleSheetsConfig = {
-      ...config,
-      lastSyncStatus: "error",
-      lastSyncMessage: errorMsg,
-    };
-    await saveGoogleSheetsConfig(updatedConfig);
-    throw err;
+    console.warn("clear_all failed, proceeding with batched upsert anyway:", err);
   }
+
+  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+    const batch = rows.slice(i, i + BATCH_SIZE);
+    const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
+    const totalBatches = Math.ceil(total / BATCH_SIZE);
+
+    try {
+      await dispatchToWebhook({
+        action: "sync_batch",
+        leads: batch,
+        batchNumber,
+        totalBatches,
+        isLastBatch: i + BATCH_SIZE >= rows.length,
+      });
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      const updatedConfig: GoogleSheetsConfig = {
+        ...config,
+        lastSyncStatus: "error",
+        lastSyncMessage: `Failed at batch ${batchNumber}/${totalBatches}: ${errorMsg}`,
+      };
+      await saveGoogleSheetsConfig(updatedConfig);
+      throw new Error(`Sync failed at batch ${batchNumber}/${totalBatches}: ${errorMsg}`);
+    }
+
+    synced += batch.length;
+    onProgress?.(synced, total);
+  }
+
+  const updatedConfig: GoogleSheetsConfig = {
+    ...config,
+    lastSyncedAt: new Date().toISOString(),
+    lastSyncStatus: "success",
+    lastSyncMessage: `Successfully synced ${total} leads across all status and tag tabs.`,
+    lastSyncedCount: total,
+  };
+  await saveGoogleSheetsConfig(updatedConfig);
+
+  return {
+    success: true,
+    leadsCount: total,
+    message: updatedConfig.lastSyncMessage,
+  };
 }
 
 /**

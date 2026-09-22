@@ -41,6 +41,7 @@ export function GoogleSheetsTab() {
   const [testing, setTesting] = useState(false);
   const [syncingAll, setSyncingAll] = useState(false);
   const [copiedScript, setCopiedScript] = useState(false);
+  const [syncProgress, setSyncProgress] = useState<{ synced: number; total: number } | null>(null);
 
   useEffect(() => {
     void getGoogleSheetsConfig().then((data) => {
@@ -99,8 +100,11 @@ export function GoogleSheetsTab() {
     }
 
     setSyncingAll(true);
+    setSyncProgress(null);
     try {
-      const res = await syncAllLeadsToGoogleSheets();
+      const res = await syncAllLeadsToGoogleSheets((synced, total) => {
+        setSyncProgress({ synced, total });
+      });
       toast.success(res.message || `Successfully synced ${res.leadsCount} leads!`);
       const updated = await getGoogleSheetsConfig();
       setConfig(updated);
@@ -110,6 +114,7 @@ export function GoogleSheetsTab() {
       setConfig(updated);
     } finally {
       setSyncingAll(false);
+      setSyncProgress(null);
     }
   };
 
@@ -307,10 +312,38 @@ export function GoogleSheetsTab() {
                   className="gap-1.5 text-xs h-9 bg-primary hover:bg-primary/90 text-primary-foreground"
                 >
                   <RefreshCw className={`h-3.5 w-3.5 ${syncingAll ? "animate-spin" : ""}`} />
-                  {syncingAll ? "Syncing All Leads..." : "Sync All Leads Now"}
+                  {syncingAll
+                    ? syncProgress
+                      ? `Syncing... ${syncProgress.synced}/${syncProgress.total}`
+                      : "Preparing..."
+                    : "Sync All Leads Now"}
                 </Button>
               </div>
             </div>
+
+            {/* Progress bar shown during batched sync */}
+            {syncingAll && (
+              <div className="mt-3 space-y-1.5">
+                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                  <span>
+                    {syncProgress
+                      ? `Batch syncing ${syncProgress.synced.toLocaleString()} of ${syncProgress.total.toLocaleString()} leads…`
+                      : "Fetching all leads from database…"}
+                  </span>
+                  {syncProgress && (
+                    <span className="font-mono font-semibold text-foreground">
+                      {Math.round((syncProgress.synced / syncProgress.total) * 100)}%
+                    </span>
+                  )}
+                </div>
+                <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-primary transition-all duration-300"
+                    style={{ width: syncProgress ? `${Math.round((syncProgress.synced / syncProgress.total) * 100)}%` : "5%" }}
+                  />
+                </div>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
