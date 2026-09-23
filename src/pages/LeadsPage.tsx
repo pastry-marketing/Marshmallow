@@ -445,9 +445,12 @@ export default function LeadsPage() {
 
           // A lead becoming (or changing while) urgent refreshes the overview
           // table right away, so it never waits for the next poll tick.
-          if ((payload.eventType === "INSERT" || payload.eventType === "UPDATE") && newRow?.status === "urgent_job") {
-            refreshUrgentRef.current?.();
-          }
+          if (
+              newRow?.status === "urgent_job" || 
+              oldRow?.status === "urgent_job"
+            ) {
+              refreshUrgentRef.current?.();
+            }
         }
       )
       .subscribe();
@@ -762,71 +765,71 @@ export default function LeadsPage() {
 
   const [urgentNeedsCxReply, setUrgentNeedsCxReply] = useState<UrgentRow[]>([]);
 
-  useEffect(() => {
+    const checkCxReplies = useCallback(async () => {
     if (urgentTableLeads.length === 0) {
       setUrgentNeedsCxReply([]);
       return;
     }
 
-    let isMounted = true;
+    const phoneToLeads = new Map<string, UrgentRow[]>();
+    for (const lead of urgentTableLeads) {
+      if (!lead.customer_phone) continue;
+      const normalized = normalizePhoneE164(lead.customer_phone) || lead.customer_phone.replace(/\D/g, "").slice(-10);
+      if (!normalized) continue;
+      const arr = phoneToLeads.get(normalized) || [];
+      arr.push(lead);
+      phoneToLeads.set(normalized, arr);
+    }
 
-    async function checkCxReplies() {
-      // Extract phone numbers and keep a mapping back to the lead IDs
-      const phoneToLeads = new Map<string, UrgentRow[]>();
-      for (const lead of urgentTableLeads) {
-        if (!lead.customer_phone) continue;
-        const normalized = normalizePhoneE164(lead.customer_phone) || lead.customer_phone.replace(/\D/g, "").slice(-10);
-        if (!normalized) continue;
-        const arr = phoneToLeads.get(normalized) || [];
-        arr.push(lead);
-        phoneToLeads.set(normalized, arr);
-      }
+    const phones = Array.from(phoneToLeads.keys());
+    if (phones.length === 0) {
+      setUrgentNeedsCxReply([]);
+      return;
+    }
 
-      const phones = Array.from(phoneToLeads.keys());
-      if (phones.length === 0) {
-        if (isMounted) setUrgentNeedsCxReply([]);
-        return;
-      }
+    const { data, error } = await supabase
+      .from("quo_conversations")
+      .select("customer_number,last_customer_message_at,last_agent_message_at")
+      .in("customer_number", phones);
 
-      const { data, error } = await supabase
-        .from("quo_conversations")
-        .select("customer_number,last_customer_message_at,last_agent_message_at")
-        .in("customer_number", phones);
+    if (error) {
+      console.error("Failed to check CX replies", error);
+      return;
+    }
 
-      if (error) {
-        console.error("Failed to check CX replies", error);
-        return;
-      }
+    const needsReplyIds = new Set<string>();
 
-      const needsReplyIds = new Set<string>();
+    for (const row of data || []) {
+      const cTime = row.last_customer_message_at ? new Date(row.last_customer_message_at).getTime() : 0;
+      const aTime = row.last_agent_message_at ? new Date(row.last_agent_message_at).getTime() : 0;
 
-      for (const row of data || []) {
-        const cTime = row.last_customer_message_at ? new Date(row.last_customer_message_at).getTime() : 0;
-        const aTime = row.last_agent_message_at ? new Date(row.last_agent_message_at).getTime() : 0;
-
-        if (cTime > 0 && cTime > aTime) {
-          // Needs reply!
-          const normalized = normalizePhoneE164(row.customer_number) || row.customer_number.replace(/\D/g, "").slice(-10);
-          if (normalized) {
-            const matches = phoneToLeads.get(normalized);
-            if (matches) {
-              matches.forEach(m => needsReplyIds.add(m.id));
-            }
-          }
+      if (cTime > aTime) {
+        const matchingLeads = phoneToLeads.get(row.customer_number || "") || [];
+        for (const ml of matchingLeads) {
+          needsReplyIds.add(ml.id);
         }
-      }
-
-      if (isMounted) {
-        setUrgentNeedsCxReply(urgentTableLeads.filter(l => needsReplyIds.has(l.id)));
       }
     }
 
-    void checkCxReplies();
-
-    return () => {
-      isMounted = false;
-    };
+    setUrgentNeedsCxReply(urgentTableLeads.filter(l => needsReplyIds.has(l.id)));
   }, [urgentTableLeads]);
+
+  useEffect(() => {
+    void checkCxReplies();
+    const tick = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      void checkCxReplies();
+    };
+    const id = setInterval(tick, 5000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void checkCxReplies();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [checkCxReplies]);
 
 
   const hasActiveFilters = Boolean(search) || safeStatusFilter !== "all" || Boolean(scheduleDateRange?.from);
