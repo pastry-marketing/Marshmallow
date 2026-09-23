@@ -1099,7 +1099,7 @@ export default function LeadsPage() {
                     {urgentNeedsCxReply.map((l) => (
                       <tr
                         key={l.id}
-                        onClick={() => navigate(`/leads/${l.id}`)}
+                        onClick={() => window.open(`/leads/${l.id}`, '_blank')}
                         className="cursor-pointer border-t border-border/40 transition-colors hover:bg-muted/40"
                         title="Open lead"
                       >
@@ -1164,7 +1164,7 @@ export default function LeadsPage() {
                   return (
                     <tr
                       key={l.id}
-                      onClick={() => navigate(`/leads/${l.id}`)}
+                      onClick={() => window.open(`/leads/${l.id}`, '_blank')}
                       className="cursor-pointer border-t border-border/40 transition-colors hover:bg-muted/40"
                       title="Open lead"
                     >

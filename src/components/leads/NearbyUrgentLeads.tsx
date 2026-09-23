@@ -15,7 +15,6 @@ interface Props {
  */
 export default function NearbyUrgentLeads({ nearby }: Props) {
   const [open, setOpen] = useState(false);
-  const navigate = useNavigate();
 
   if (nearby.length === 0) return null;
 
@@ -56,7 +55,7 @@ export default function NearbyUrgentLeads({ nearby }: Props) {
               type="button"
               onClick={() => {
                 setOpen(false);
-                navigate(`/leads/${lead.id}`);
+                window.open(`/leads/${lead.id}`, '_blank');
               }}
               className="group flex w-full items-center justify-between gap-2 px-3 py-2 text-left transition-colors hover:bg-muted/50"
             >

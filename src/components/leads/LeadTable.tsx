@@ -1,6 +1,6 @@
 import { Lead } from "@/types";
 import { format } from "date-fns";
-import { useNavigate } from "react-router-dom";
+
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { ChevronRight, MapPin, Phone } from "lucide-react";
@@ -13,7 +13,6 @@ interface LeadTableProps {
 }
 
 export default function LeadTable({ leads }: LeadTableProps) {
-  const navigate = useNavigate();
   const { role } = useAuth();
 
   return (
@@ -35,7 +34,7 @@ export default function LeadTable({ leads }: LeadTableProps) {
               <TableRow 
                 key={lead.id}
                 className="group cursor-pointer hover:bg-muted/50 transition-colors"
-                onClick={() => navigate(`/leads/${lead.id}`)}
+                onClick={() => window.open(`/leads/${lead.id}`, '_blank')}
               >
                 <TableCell className="font-medium text-muted-foreground">{lead.job_id}</TableCell>
                 <TableCell>
