@@ -408,7 +408,7 @@ export default function QuoDashboardPage() {
       }
     > = {};
 
-    filteredConversations.forEach((conv) => {
+    conversations.forEach((conv) => {
       const st = normalizeQuoLeadStatus(conv.status || conv.current_status);
       statusCounts[st] = (statusCounts[st] || 0) + 1;
 
