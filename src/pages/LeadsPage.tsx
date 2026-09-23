@@ -108,12 +108,38 @@ function CopyableCell({ text, title, className, defaultWidth = true, emptyClassN
   );
 }
 
-const MONTH_NAMES = ["Jan", "Feb", "March", "Apr", "May", "Jun", "Jul", "Aug", "Sept", "Oct", "Nov", "Dec"];
-function formatUrgentDate(isoString: string | null | undefined) {
-  if (!isoString) return "—";
-  const d = new Date(isoString);
-  if (isNaN(d.getTime())) return isoString;
-  return `${MONTH_NAMES[d.getMonth()]} ${d.getDate()}`;
+function formatSchedule(text: string | null | undefined) {
+  if (!text) return "—";
+  let result = text;
+  // Remove year 2026
+  result = result.replace(/,? \b2026\b/g, "");
+  result = result.replace(/-\b2026\b/g, "");
+  result = result.replace(/\b2026\b/g, "");
+  
+  // Replace month names to match user's requested half words
+  const map: Record<string, string> = {
+    'january': 'Jan',
+    'february': 'Feb',
+    'march': 'March',
+    'mar': 'March',
+    'april': 'Apr',
+    'may': 'May',
+    'june': 'Jun',
+    'july': 'Jul',
+    'august': 'Aug',
+    'september': 'Sept',
+    'sep': 'Sept',
+    'october': 'Oct',
+    'november': 'Nov',
+    'december': 'Dec'
+  };
+
+  for (const [key, val] of Object.entries(map)) {
+    const regex = new RegExp(`\\b${key}\\b`, 'gi');
+    result = result.replace(regex, val);
+  }
+
+  return result.trim() || "—";
 }
 
 export default function LeadsPage() {
@@ -1126,7 +1152,6 @@ export default function LeadsPage() {
                       <th className="px-2 py-1.5 font-semibold">Customer name</th>
                       <th className="px-2 py-1.5 font-semibold">Service</th>
                       <th className="px-2 py-1.5 font-semibold">Address</th>
-                      <th className="px-2 py-1.5 font-semibold">Schedule</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1140,7 +1165,6 @@ export default function LeadsPage() {
                         <CopyableCell text={l.customer_name || "—"} defaultWidth={false} className="max-w-[120px] font-medium text-foreground" />
                         <CopyableCell text={l.service_type || "—"} defaultWidth={false} className="max-w-[130px] text-muted-foreground" />
                         <CopyableCell text={l.address || "—"} defaultWidth={false} className="max-w-[180px] text-muted-foreground" />
-                        <CopyableCell text={l.customer_schedule_requirements || "—"} defaultWidth={false} className="max-w-[120px] text-muted-foreground" />
                       </tr>
                     ))}
                   </tbody>
@@ -1195,6 +1219,7 @@ export default function LeadsPage() {
                   
                   const nearby = urgentTableNearbyMap.get(l.id);
                   const nearbyCount = nearby?.length || 0;
+                  const dateStr = l.created_at ? new Date(l.created_at).toLocaleDateString() : "—";
 
                   return (
                     <tr
@@ -1216,9 +1241,9 @@ export default function LeadsPage() {
                           "—"
                         )}
                       </td>
-                      <CopyableCell text={l.customer_schedule_requirements || "—"} defaultWidth={false} className="max-w-[110px] text-muted-foreground" />
+                      <CopyableCell text={formatSchedule(l.customer_schedule_requirements)} defaultWidth={false} className="max-w-[110px] text-muted-foreground" />
                       <td className="whitespace-nowrap px-2 py-2 text-right text-muted-foreground">
-                        {formatUrgentDate(l.created_at)}
+                        {dateStr}
                       </td>
                     </tr>
                   );
