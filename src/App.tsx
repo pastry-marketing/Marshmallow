@@ -8,26 +8,21 @@ import { useAuth } from "@/contexts/AuthContext";
 import AppLayout from "@/components/layout/AppLayout";
 import Login from "@/pages/Login";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { lazyWithReload } from "@/lib/lazyWithReload";
-
-// Lazy-load heavy routes so the initial bundle stays small and the CRM feels
-// snappy. lazyWithReload recovers from post-deploy stale-chunk errors by
-// reloading the page once instead of showing an error screen.
-const LeadsPage = lazyWithReload(() => import("@/pages/LeadsPage"));
-const LeadDetailPage = lazyWithReload(() => import("@/pages/LeadDetailPage"));
-const SchedulePage = lazyWithReload(() => import("@/pages/SchedulePage"));
-const Analytics = lazyWithReload(() => import("@/pages/Analytics"));
-const AreasPage = lazyWithReload(() => import("@/pages/AreasPage"));
-const ActivityLogs = lazyWithReload(() => import("@/pages/ActivityLogs"));
-const Settings = lazyWithReload(() => import("@/pages/Settings"));
-const NotFound = lazyWithReload(() => import("@/pages/NotFound"));
-const LeadCancellationRequests = lazyWithReload(() => import("@/pages/LeadCancellationRequests"));
-const LeadPaymentRequests = lazyWithReload(() => import("@/pages/LeadPaymentRequests"));
-const QuotePendingRequests = lazyWithReload(() => import("@/pages/QuotePendingRequests"));
-const QuoMonitorPage = lazyWithReload(() => import("@/pages/quo-monitor/QuoMonitorPage"));
-const CrmUpdates = lazyWithReload(() => import("@/pages/CrmUpdates"));
-const MapViewPage = lazyWithReload(() => import("@/pages/MapViewPage"));
-const TechniciansPage = lazyWithReload(() => import("@/pages/TechniciansPage"));
+import LeadsPage from "@/pages/LeadsPage";
+import LeadDetailPage from "@/pages/LeadDetailPage";
+import SchedulePage from "@/pages/SchedulePage";
+import Analytics from "@/pages/Analytics";
+import AreasPage from "@/pages/AreasPage";
+import ActivityLogs from "@/pages/ActivityLogs";
+import Settings from "@/pages/Settings";
+import NotFound from "@/pages/NotFound";
+import LeadCancellationRequests from "@/pages/LeadCancellationRequests";
+import LeadPaymentRequests from "@/pages/LeadPaymentRequests";
+import QuotePendingRequests from "@/pages/QuotePendingRequests";
+import QuoMonitorPage from "@/pages/quo-monitor/QuoMonitorPage";
+import CrmUpdates from "@/pages/CrmUpdates";
+import MapViewPage from "@/pages/MapViewPage";
+import TechniciansPage from "@/pages/TechniciansPage";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -106,7 +101,7 @@ function PageRoute({ navItem, children }: { navItem: string; children: ReactNode
 
   return (
     <ErrorBoundary>
-      <Suspense fallback={<PageFallback />}>{children}</Suspense>
+      {children}
     </ErrorBoundary>
   );
 }
@@ -138,7 +133,7 @@ const App = () => (
               <Route path="crm-updates" element={<PageRoute navItem="crm_updates"><CrmUpdates /></PageRoute>} />
               <Route path="settings" element={<PageRoute navItem="settings"><Settings /></PageRoute>} />
             </Route>
-            <Route path="*" element={<Suspense fallback={<PageFallback />}><NotFound /></Suspense>} />
+            <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>
     </TooltipProvider>
