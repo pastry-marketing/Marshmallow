@@ -1130,7 +1130,7 @@ export default function LeadsPage() {
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.1 }}
-            className="glass-panel overflow-hidden rounded-[26px] shadow-[0_28px_54px_-34px_rgba(59,130,246,0.22)] dark:bg-[linear-gradient(180deg,hsl(var(--card)/0.86),hsl(var(--muted)/0.28))] dark:shadow-none w-full 2xl:w-fit flex-1"
+            className="glass-panel overflow-hidden rounded-[26px] shadow-[0_28px_54px_-34px_rgba(59,130,246,0.22)] dark:bg-[linear-gradient(180deg,hsl(var(--card)/0.86),hsl(var(--muted)/0.28))] dark:shadow-none w-full 2xl:w-fit flex-1 min-w-[320px]"
           >
             <div className="flex items-center justify-between gap-8 border-b border-border/50 px-4 py-2.5">
               <div className="flex items-center gap-2">
@@ -1143,7 +1143,10 @@ export default function LeadsPage() {
             </div>
 
             {urgentNeedsCxReply.length === 0 ? (
-              <div className="px-4 py-6 text-center text-xs text-muted-foreground">All caught up!</div>
+              <div className="flex flex-col items-center justify-center py-6 gap-1">
+                <span className="text-xs font-medium text-muted-foreground">All caught up!</span>
+                <span className="text-[10px] text-muted-foreground/60">No leads waiting for a response</span>
+              </div>
             ) : (
               <div className="max-h-[240px] overflow-auto">
                 <table className="w-full table-fixed border-collapse text-left text-xs">
