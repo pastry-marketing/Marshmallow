@@ -423,20 +423,6 @@ export default function QuoPhoneTrigger({
     const nowIso = new Date().toISOString();
     const tempId = `temp_${Date.now()}`;
 
-    // Optimistically add message to stream
-    const optimisticMsg: QuoChatMessage = {
-      id: tempId,
-      to: [normalizedPhone],
-      from: "agent",
-      text: content,
-      phoneNumberId: conversationMeta?.quoPhoneNumberId || "",
-      conversationId: conversationMeta?.id,
-      direction: "outgoing",
-      status: "pending",
-      createdAt: nowIso,
-    };
-    setMessages((current) => mergeQuoMessages([...current, optimisticMsg]));
-
     // Construct Chat URL for OpenPhone / my.quo.com
     const chatUrl = getQuoChatUrl(
       conversationMeta?.quoConversationId,
