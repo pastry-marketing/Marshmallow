@@ -1130,7 +1130,7 @@ export default function LeadsPage() {
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.1 }}
-            className="glass-panel overflow-hidden rounded-[26px] shadow-[0_28px_54px_-34px_rgba(59,130,246,0.22)] dark:bg-[linear-gradient(180deg,hsl(var(--card)/0.86),hsl(var(--muted)/0.28))] dark:shadow-none w-full 2xl:w-[380px] shrink-0"
+            className="glass-panel overflow-hidden rounded-[26px] shadow-[0_28px_54px_-34px_rgba(59,130,246,0.22)] dark:bg-[linear-gradient(180deg,hsl(var(--card)/0.86),hsl(var(--muted)/0.28))] dark:shadow-none w-full 2xl:w-[35%] shrink-0"
           >
             <div className="flex items-center justify-between gap-8 border-b border-border/50 px-4 py-2.5">
               <div className="flex items-center gap-2">
@@ -1149,12 +1149,12 @@ export default function LeadsPage() {
               </div>
             ) : (
               <div className="max-h-[240px] overflow-auto">
-                <table className="w-full border-collapse text-left text-xs">
+                <table className="w-full table-fixed border-collapse text-left text-xs">
                   <thead className="sticky top-0 z-10 bg-card/95 backdrop-blur">
                     <tr className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                      <th className="px-2 py-1.5 font-semibold whitespace-nowrap">Customer name</th>
-                      <th className="px-2 py-1.5 font-semibold whitespace-nowrap">Service</th>
-                      <th className="px-2 py-1.5 font-semibold whitespace-nowrap">Address</th>
+                      <th className="px-2 py-1.5 font-semibold w-[25%]">Customer name</th>
+                      <th className="px-2 py-1.5 font-semibold w-[30%]">Service</th>
+                      <th className="px-2 py-1.5 font-semibold w-[45%]">Address</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1181,7 +1181,7 @@ export default function LeadsPage() {
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1 }}
-          className="glass-panel overflow-hidden rounded-[26px] shadow-[0_28px_54px_-34px_rgba(59,130,246,0.22)] dark:bg-[linear-gradient(180deg,hsl(var(--card)/0.86),hsl(var(--muted)/0.28))] dark:shadow-none w-full flex-1 min-w-0"
+          className="glass-panel overflow-hidden rounded-[26px] shadow-[0_28px_54px_-34px_rgba(59,130,246,0.22)] dark:bg-[linear-gradient(180deg,hsl(var(--card)/0.86),hsl(var(--muted)/0.28))] dark:shadow-none w-full 2xl:w-[63%] flex-1 min-w-0"
         >
         <div className="flex items-center justify-between gap-8 border-b border-border/50 px-4 py-2.5">
           <div className="flex items-center gap-2">
@@ -1201,16 +1201,16 @@ export default function LeadsPage() {
           <div className="px-4 py-6 text-center text-xs text-muted-foreground">No urgent leads right now.</div>
         ) : (
           <div className="max-h-[240px] overflow-auto">
-            <table className="w-full border-collapse text-left text-xs">
+            <table className="w-full table-fixed border-collapse text-left text-xs">
               <thead className="sticky top-0 z-10 bg-card/95 backdrop-blur">
                 <tr className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                  <th className="px-2 py-1.5 font-semibold whitespace-nowrap">Customer</th>
-                  <th className="px-2 py-1.5 font-semibold whitespace-nowrap">Service</th>
-                  <th className="px-2 py-1.5 font-semibold whitespace-nowrap">Address</th>
-                  <th className="px-2 py-1.5 font-semibold whitespace-nowrap">Area</th>
-                  <th className="px-2 py-1.5 font-semibold whitespace-nowrap">Same</th>
-                  <th className="px-2 py-1.5 font-semibold whitespace-nowrap">Schedule</th>
-                  <th className="px-2 py-1.5 font-semibold text-right whitespace-nowrap">Date created</th>
+                  <th className="px-2 py-1.5 font-semibold w-[14%]">Customer</th>
+                  <th className="px-2 py-1.5 font-semibold w-[15%]">Service</th>
+                  <th className="px-2 py-1.5 font-semibold w-[22%]">Address</th>
+                  <th className="px-2 py-1.5 font-semibold w-[14%]">Area</th>
+                  <th className="px-2 py-1.5 font-semibold w-[9%] text-center">Same</th>
+                  <th className="px-2 py-1.5 font-semibold w-[14%]">Schedule</th>
+                  <th className="px-2 py-1.5 font-semibold text-right w-[12%]">Date created</th>
                 </tr>
               </thead>
               <tbody>
@@ -1235,7 +1235,7 @@ export default function LeadsPage() {
                       <CopyableCell text={l.service_type || "—"} defaultWidth={false} className="text-muted-foreground" />
                       <CopyableCell text={address} defaultWidth={false} className="text-muted-foreground" />
                       <CopyableCell text={areaText} defaultWidth={false} className="text-muted-foreground" />
-                      <td className="px-2 py-2 text-muted-foreground">
+                      <td className="px-2 py-2 text-center text-muted-foreground">
                         {nearbyCount > 0 ? (
                           <span className="inline-flex items-center gap-1 rounded-md bg-red-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-red-600 dark:text-red-400">
                             {nearbyCount} more
