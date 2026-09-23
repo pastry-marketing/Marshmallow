@@ -27,7 +27,7 @@ import { type DateRange } from "react-day-picker";
 import { ScheduleDateFilter } from "@/components/leads/ScheduleDateFilter";
 import { doesLeadMatchScheduleDateRange, leadNeedsAttention } from "@/lib/schedule-date-filter";
 import { readLeadsCache, writeLeadsCache } from "@/lib/leadsCache";
-import { Plus, Search, Download, Share2, X, SlidersHorizontal, BarChart3, Puzzle, FileText, Calendar as CalendarIcon, LayoutGrid, List, MapPin } from "lucide-react";
+import { Plus, Search, Download, Share2, X, SlidersHorizontal, BarChart3, Puzzle, FileText, Calendar as CalendarIcon, LayoutGrid, List, MapPin, Copy } from "lucide-react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { useNotepad } from "@/contexts/NotepadContext";
 import LeadCard from "@/components/leads/LeadCard";
@@ -76,12 +76,37 @@ const LEAD_LIST_COLUMNS =
 // Only the few columns the Urgent-leads overview table shows (plus zip/city for
 // the "Urgent in area" proximity count) — kept tiny so its frequent live refresh
 // stays a featherweight, filtered (status=urgent_job) indexed read.
-const URGENT_TABLE_COLUMNS = "id, customer_name, customer_phone, service_type, city, state, address, zip_code, urgent_at, created_at";
+const URGENT_TABLE_COLUMNS = "id, customer_name, customer_phone, service_type, city, state, address, zip_code, urgent_at, created_at, customer_schedule_requirements";
 // How often to refresh the urgent overview while the page is visible. Small,
 // because it only reads the tiny urgent subset, not the whole leads table.
 const URGENT_TABLE_POLL_MS = 5000;
 
-type UrgentRow = Pick<Lead, "id" | "customer_name" | "customer_phone" | "service_type" | "city" | "state" | "address" | "zip_code" | "urgent_at" | "created_at">;
+type UrgentRow = Pick<Lead, "id" | "customer_name" | "customer_phone" | "service_type" | "city" | "state" | "address" | "zip_code" | "urgent_at" | "created_at" | "customer_schedule_requirements">;
+
+function CopyableCell({ text, title, className, defaultWidth = true, emptyClassName = "text-muted-foreground", align = "left" }: { text: string; title?: string; className?: string; defaultWidth?: boolean; emptyClassName?: string; align?: "left" | "right" }) {
+  if (!text || text === "—") return <td className={`px-4 py-2 ${className || ""}`}><span className={emptyClassName}>—</span></td>;
+
+  return (
+    <td className={`px-2 py-2 ${defaultWidth ? "max-w-[160px]" : ""} ${className || ""}`}>
+      <div className={`group/copy relative flex items-center gap-1.5 ${align === "right" ? "justify-end" : ""}`} title={title || text}>
+        <span className="truncate">{text}</span>
+        <button
+          type="button"
+          className="opacity-0 group-hover/copy:opacity-100 p-1 rounded-md hover:bg-muted-foreground/20 transition-opacity flex-shrink-0 focus:opacity-100"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            navigator.clipboard.writeText(text);
+            toast.success("Copied!");
+          }}
+          title="Copy"
+        >
+          <Copy className="h-3 w-3 text-muted-foreground" />
+        </button>
+      </div>
+    </td>
+  );
+}
 
 export default function LeadsPage() {
   const { user, role } = useAuth();
@@ -1093,6 +1118,7 @@ export default function LeadsPage() {
                       <th className="px-4 py-1.5 font-semibold">Customer name</th>
                       <th className="px-2 py-1.5 font-semibold">Service</th>
                       <th className="px-4 py-1.5 font-semibold">Address</th>
+                      <th className="px-4 py-1.5 font-semibold">Schedule</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1103,9 +1129,10 @@ export default function LeadsPage() {
                         className="cursor-pointer border-t border-border/40 transition-colors hover:bg-muted/40"
                         title="Open lead"
                       >
-                        <td className="max-w-[160px] truncate px-4 py-2 font-medium text-foreground">{l.customer_name || "—"}</td>
-                        <td className="max-w-[180px] truncate px-2 py-2 text-muted-foreground">{l.service_type || "—"}</td>
-                        <td className="max-w-[240px] truncate px-4 py-2 text-muted-foreground" title={l.address || "—"}>{l.address || "—"}</td>
+                        <CopyableCell text={l.customer_name || "—"} />
+                        <CopyableCell text={l.service_type || "—"} />
+                        <CopyableCell text={l.address || "—"} />
+                        <CopyableCell text={l.customer_schedule_requirements || "—"} />
                       </tr>
                     ))}
                   </tbody>
@@ -1146,7 +1173,8 @@ export default function LeadsPage() {
                   <th className="px-2 py-1.5 font-semibold">Service</th>
                   <th className="px-4 py-1.5 font-semibold">Address</th>
                   <th className="px-2 py-1.5 font-semibold">Area</th>
-                  <th className="px-4 py-1.5 font-semibold">Urgent in area</th>
+                  <th className="px-4 py-1.5 font-semibold">Same</th>
+                  <th className="px-4 py-1.5 font-semibold">Schedule</th>
                   <th className="px-4 py-1.5 font-semibold text-right">Date created</th>
                 </tr>
               </thead>
@@ -1168,10 +1196,10 @@ export default function LeadsPage() {
                       className="cursor-pointer border-t border-border/40 transition-colors hover:bg-muted/40"
                       title="Open lead"
                     >
-                      <td className="max-w-[160px] truncate px-4 py-2 font-medium text-foreground">{l.customer_name || "—"}</td>
-                      <td className="max-w-[180px] truncate px-2 py-2 text-muted-foreground">{l.service_type || "—"}</td>
-                      <td className="max-w-[240px] truncate px-4 py-2 text-muted-foreground" title={address}>{address}</td>
-                      <td className="max-w-[140px] truncate px-2 py-2 text-muted-foreground" title={areaText}>{areaText}</td>
+                      <CopyableCell text={l.customer_name || "—"} />
+                      <CopyableCell text={l.service_type || "—"} />
+                      <CopyableCell text={address} />
+                      <CopyableCell text={areaText} />
                       <td className="px-4 py-2 text-muted-foreground">
                         {nearbyCount > 0 ? (
                           <span className="inline-flex items-center gap-1 rounded-md bg-red-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-red-600 dark:text-red-400">
@@ -1181,6 +1209,7 @@ export default function LeadsPage() {
                           "—"
                         )}
                       </td>
+                      <CopyableCell text={l.customer_schedule_requirements || "—"} />
                       <td className="whitespace-nowrap px-4 py-2 text-right text-muted-foreground">
                         {dateStr}
                       </td>
