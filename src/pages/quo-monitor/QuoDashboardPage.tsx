@@ -56,7 +56,6 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { format, isSameDay } from "date-fns";
-import { fetchAllRows } from "@/lib/supabase-paginate";
 import { motion } from "framer-motion";
 import { premiumEase } from "@/lib/motion";
 import {
@@ -225,69 +224,143 @@ export default function QuoDashboardPage() {
   });
 
   // Fetch Conversations list
-  const {
-    data: rawConversations = [],
+    const {
+    data: queryData = { data: [], count: 0 },
     isLoading,
     isRefetching,
     refetch,
-  } = useQuery<ConversationRow[]>({
-    queryKey: ["quo-dashboard-conversations"],
+  } = useQuery({
+    queryKey: [
+      "quo-dashboard-conversations",
+      currentPage,
+      search,
+      selectedStatus,
+      selectedNumberIds,
+      datePreset,
+      startDate,
+      endDate,
+      numberNameFilter,
+      customerFilter,
+      timeSort,
+      showHiddenNumbers,
+      phoneNumbers.length,
+      hiddenNumberIds.size
+    ],
     queryFn: async () => {
       try {
-        const data = await fetchAllRows<ConversationRow>((from, to) =>
-          supabase
-            .from("quo_conversations")
-            .select("id, quo_conversation_id, customer_name, customer_number, number_id, last_message_preview, last_message_time, last_message_at, created_at, status, current_status")
-            .order("created_at", { ascending: false })
-            .order("id", { ascending: false })
-            .range(from, to)
-        );
-        return data;
-      } catch (error: any) {
-        console.error("Conversation fetch failed:", error.message);
-        toast.error(`Database error: ${error.message}`);
-        return [];
+        let query = supabase
+          .from("quo_conversations")
+          .select("id, quo_conversation_id, customer_name, customer_number, number_id, last_message_preview, last_message_time, last_message_at, created_at, status, current_status", { count: "exact" });
+
+        // 1. Search Filter
+        if (search.trim()) {
+          const q = `%${search.trim()}%`;
+          query = query.or(`customer_name.ilike.${q},customer_number.ilike.${q},last_message_preview.ilike.${q}`);
+        }
+
+        // 1b. Customer Filter
+        if (customerFilter.trim()) {
+          const cq = `%${customerFilter.trim()}%`;
+          const digits = customerFilter.replace(/\D/g, "");
+          if (digits) {
+            query = query.or(`customer_name.ilike.${cq},customer_number.ilike.%${digits}%`);
+          } else {
+             query = query.or(`customer_name.ilike.${cq},customer_number.ilike.${cq}`);
+          }
+        }
+
+        // 2. Status Filter
+        if (selectedStatus !== "all") {
+          if (selectedStatus === "unresponded") {
+            query = query.or("status.eq.needs_reply,current_status.eq.needs_reply");
+          } else {
+            query = query.or(`status.eq.${selectedStatus},current_status.eq.${selectedStatus}`);
+          }
+        }
+
+        // 3. Numbers Filter
+        let filteredPhones = phoneNumbers.filter(p => !isTechLineNumber(p.number || p.display_number || p.name));
+
+        if (!showHiddenNumbers) {
+          filteredPhones = filteredPhones.filter(p => !hiddenNumberIds.has(p.id));
+        }
+        if (selectedNumberIds.length > 0) {
+          const selectedSet = new Set(selectedNumberIds);
+          filteredPhones = filteredPhones.filter(p => selectedSet.has(p.id));
+        }
+        if (numberNameFilter.trim()) {
+          const lowerF = numberNameFilter.toLowerCase().trim();
+          filteredPhones = filteredPhones.filter(p => {
+             const name = resolveQuoNumberDisplay(p, numberDisplayMap).name.toLowerCase();
+             return name.includes(lowerF);
+          });
+        }
+
+        const matchingIds = filteredPhones.map(p => p.id);
+        if (matchingIds.length > 0) {
+          query = query.in("number_id", matchingIds);
+        } else {
+          return { data: [], count: 0 };
+        }
+
+        // 4. Date Filter
+        if (datePreset !== "all") {
+           let s = null;
+           let e = null;
+           
+           if (datePreset === "today") {
+             const todayNYStr = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+             s = getEasternDateBounds(todayNYStr, "start");
+             e = getEasternDateBounds(todayNYStr, "end");
+           } else if (datePreset === "yesterday") {
+             const y = new Date(); y.setDate(y.getDate() - 1);
+             const yNY = y.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+             s = getEasternDateBounds(yNY, "start");
+             e = getEasternDateBounds(yNY, "end");
+           } else if (datePreset === "last7") {
+             const d7 = new Date(); d7.setDate(d7.getDate() - 7);
+             const d7Str = d7.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+             s = getEasternDateBounds(d7Str, "start");
+           } else if (datePreset === "custom") {
+             if (startDate) s = getEasternDateBounds(startDate, "start");
+             if (endDate) e = getEasternDateBounds(endDate, "end");
+           }
+
+           if (s) query = query.gte("created_at", s.toISOString());
+           if (e) query = query.lte("created_at", e.toISOString());
+        }
+
+        const from = (currentPage - 1) * PAGE_SIZE;
+        const to = from + PAGE_SIZE - 1;
+        query = query.range(from, to);
+        
+        query = query.order("created_at", { ascending: timeSort === "asc" });
+        query = query.order("id", { ascending: false });
+
+        const { data, count, error } = await query;
+        if (error) throw error;
+
+        return { data: data, count: count || 0 };
+      } catch (error) {
+        console.error("Conversation fetch failed:", error);
+        return { data: [], count: 0 };
       }
     },
-    // Realtime below carries the live updates; this is only a slow safety net for a dropped
-    // socket, so it no longer re-reads the whole conversation table every 15 seconds.
     refetchInterval: 60000,
-    refetchIntervalInBackground: false,
   });
 
-  // Merge conversation changes straight from the payload instead of refetching the table.
+  const rawConversations = queryData.data;
+  const totalCount = queryData.count;
+
   useEffect(() => {
     const channel = supabase
       .channel("quo-dashboard-conversations-realtime")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "quo_conversations" },
-        (payload) => {
-          const newRow = payload.new as ConversationRow | undefined;
-          const oldRow = payload.old as { id?: string } | undefined;
-
-          queryClient.setQueryData<ConversationRow[]>(
-            ["quo-dashboard-conversations"],
-            (current) => {
-              if (!current) return current;
-
-              if (payload.eventType === "INSERT" && newRow) {
-                if (current.some((c) => c.id === newRow.id)) return current;
-                return [newRow, ...current];
-              }
-
-              if (payload.eventType === "UPDATE" && newRow) {
-                return current.map((c) => (c.id === newRow.id ? { ...c, ...newRow } : c));
-              }
-
-              if (payload.eventType === "DELETE" && oldRow?.id) {
-                return current.filter((c) => c.id !== oldRow.id);
-              }
-
-              return current;
-            },
-          );
-        },
+        () => {
+          queryClient.invalidateQueries({ queryKey: ["quo-dashboard-conversations"] });
+        }
       )
       .subscribe();
 
@@ -296,7 +369,7 @@ export default function QuoDashboardPage() {
     };
   }, [queryClient]);
 
-  const conversations = useMemo<ConversationRow[]>(() => {
+  const conversations = useMemo(() => {
     const numbersById = new Map(phoneNumbers.map((number) => [number.id, number]));
     return rawConversations.map((conversation) => ({
       ...conversation,
@@ -306,254 +379,13 @@ export default function QuoDashboardPage() {
     }));
   }, [phoneNumbers, rawConversations]);
 
-  // Mutation to update conversation Lead Status
-  const updateStatusMutation = useMutation({
-    mutationFn: async ({
-      conversationId,
-      newStatus,
-    }: {
-      conversationId: string;
-      newStatus: QuoLeadStatus;
-    }) => {
-      const { error } = await supabase
-        .from("quo_conversations")
-        .update({
-          status: newStatus,
-          current_status: newStatus,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", conversationId);
-
-      if (error) throw error;
-    },
-    onSuccess: (_, variables) => {
-      queryClient.setQueryData<ConversationRow[]>(
-        ["quo-dashboard-conversations"],
-        (old = []) =>
-          old.map((c) =>
-            c.id === variables.conversationId
-              ? { ...c, status: variables.newStatus, current_status: variables.newStatus }
-              : c
-          )
-      );
-      toast.success(`Lead status updated to ${QUO_LEAD_STATUS_CONFIG[variables.newStatus].label}`);
-    },
-    onError: (err: Error) => {
-      toast.error(`Failed to update status: ${err.message}`);
-    },
-  });
-
-  // Query Webhook Ingestion Paused Setting
-  const { data: isWebhookPaused = false, refetch: refetchWebhookSetting } = useQuery<boolean>({
-    queryKey: ["quo-webhook-paused-setting"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("quo_ai_settings" as any)
-        .select("value")
-        .eq("key", "quo_webhook_ingestion_paused")
-        .maybeSingle();
-
-      if (error) return false;
-      return (data as any)?.value === true;
-    },
-  });
-
-  // Mutation to toggle Webhook Ingestion Paused state
-  const toggleWebhookMutation = useMutation({
-    mutationFn: async (shouldPause: boolean) => {
-      const { error } = await supabase
-        .from("quo_ai_settings" as any)
-        .upsert(
-          {
-            key: "quo_webhook_ingestion_paused",
-            value: shouldPause,
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: "key" }
-        );
-
-      if (error) throw error;
-    },
-    onSuccess: (_, shouldPause) => {
-      refetchWebhookSetting();
-      toast.success(
-        shouldPause
-          ? "QUO Webhook ingestion paused"
-          : "QUO Webhook ingestion activated! Now receiving new messages."
-      );
-    },
-    onError: (err: Error) => {
-      toast.error(`Failed to toggle webhook setting: ${err.message}`);
-    },
-  });
-
-  // Toggle selection for QUO Phone Numbers filter
-  const handleToggleNumber = (id: string) => {
-    setSelectedNumberIds((prev) =>
-      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
-    );
-  };
-
-  const handleSelectAllNumbers = () => {
-    if (selectedNumberIds.length === phoneNumbers.length) {
-      setSelectedNumberIds([]);
-    } else {
-      setSelectedNumberIds(phoneNumbers.map((n) => n.id));
-    }
-  };
-
-  // Helper for Eastern Time Date Filtering
-  const todayNYStr = useMemo(() => {
-    return new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
-  }, []);
-
-  const yesterdayNYStr = useMemo(() => {
-    const y = new Date();
-    y.setDate(y.getDate() - 1);
-    return y.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
-  }, []);
-
-  // Filter conversations by Search, Selected Numbers, Status, and Eastern Time Date Range
-  const filteredConversations = useMemo(() => {
-    const filtered = conversations.filter((c) => {
-      // 0a. Exclude Technicians Communications line from QUO Dashboard
-      const lineNum = c.quo_phone_numbers?.number || c.quo_phone_numbers?.display_number || c.quo_phone_numbers?.name;
-      if (isTechLineNumber(lineNum)) {
-        return false;
-      }
-
-      // 0. Hidden Numbers Filter (unless showHiddenNumbers is toggled on)
-      if (!showHiddenNumbers && c.number_id && hiddenNumberIds.has(c.number_id)) {
-        return false;
-      }
-
-      const numberName = resolveQuoNumberDisplay(c.quo_phone_numbers, numberDisplayMap).name;
-
-      // 1. Search Query Filter
-      if (search.trim()) {
-        const q = search.toLowerCase();
-        const matchesName = c.customer_name?.toLowerCase().includes(q);
-        const matchesPhone = c.customer_number?.toLowerCase().includes(q);
-        const matchesNumName = numberName.toLowerCase().includes(q);
-        const matchesMessage = c.last_message_preview?.toLowerCase().includes(q);
-
-        if (!matchesName && !matchesPhone && !matchesNumName && !matchesMessage) {
-          return false;
-        }
-      }
-
-      // 1b. Column header filters
-      if (numberNameFilter.trim() && !numberName.toLowerCase().includes(numberNameFilter.toLowerCase().trim())) {
-        return false;
-      }
-      if (customerFilter.trim()) {
-        const cq = customerFilter.toLowerCase().trim();
-        const digits = cq.replace(/\D/g, "");
-        const matchesCust =
-          c.customer_name?.toLowerCase().includes(cq) ||
-          (digits && (c.customer_number || "").replace(/\D/g, "").includes(digits));
-        if (!matchesCust) return false;
-      }
-
-
-      // 2. Selected QUO Numbers Filter
-      if (selectedNumberIds.length > 0 && c.number_id) {
-        if (!selectedNumberIds.includes(c.number_id)) {
-          return false;
-        }
-      }
-
-      // 3. Lead Status Filter
-      const currentNormStatus = normalizeQuoLeadStatus(c.status || c.current_status);
-      if (selectedStatus !== "all" && currentNormStatus !== selectedStatus) {
-        return false;
-      }
-
-      // 4. Custom Date Range Filter (evaluated strictly in Eastern Time)
-      if (datePreset !== "all") {
-        const incomingTimeIso = c.created_at || c.last_message_at || c.last_message_time;
-        if (!incomingTimeIso) return false;
-
-        const incomingDate = new Date(incomingTimeIso);
-        if (isNaN(incomingDate.getTime())) return false;
-
-        if (datePreset === "today") {
-          const startBound = getEasternDateBounds(todayNYStr, "start");
-          const endBound = getEasternDateBounds(todayNYStr, "end");
-          if (startBound && incomingDate < startBound) return false;
-          if (endBound && incomingDate > endBound) return false;
-        } else if (datePreset === "yesterday") {
-          const startBound = getEasternDateBounds(yesterdayNYStr, "start");
-          const endBound = getEasternDateBounds(yesterdayNYStr, "end");
-          if (startBound && incomingDate < startBound) return false;
-          if (endBound && incomingDate > endBound) return false;
-        } else if (datePreset === "last7") {
-          const d7 = new Date();
-          d7.setDate(d7.getDate() - 7);
-          const d7NYStr = d7.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
-          const startBound = getEasternDateBounds(d7NYStr, "start");
-          if (startBound && incomingDate < startBound) return false;
-        } else if (datePreset === "custom") {
-          if (startDate) {
-            const startBound = getEasternDateBounds(startDate, "start");
-            if (startBound && incomingDate < startBound) return false;
-          }
-          if (endDate) {
-            const endBound = getEasternDateBounds(endDate, "end");
-            if (endBound && incomingDate > endBound) return false;
-          }
-        }
-      }
-
-      return true;
-    });
-
-    const timeOf = (c: ConversationRow) =>
-      new Date(c.created_at || c.last_message_at || c.last_message_time || 0).getTime();
-
-    return [...filtered].sort((a, b) =>
-      timeSort === "desc" ? timeOf(b) - timeOf(a) : timeOf(a) - timeOf(b)
-    );
-  }, [
-    conversations,
-    search,
-    selectedNumberIds,
-    selectedStatus,
-    datePreset,
-    startDate,
-    endDate,
-    todayNYStr,
-    yesterdayNYStr,
-    numberNameFilter,
-    customerFilter,
-    timeSort,
-    numberDisplayMap,
-  ]);
-
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [
-    search,
-    selectedNumberIds,
-    selectedStatus,
-    datePreset,
-    startDate,
-    endDate,
-    numberNameFilter,
-    customerFilter,
-    timeSort,
-  ]);
-
   const PAGE_SIZE = 100;
-  const totalPages = Math.ceil(filteredConversations.length / PAGE_SIZE) || 1;
-  const paginatedConversations = useMemo(() => {
-    const start = (currentPage - 1) * PAGE_SIZE;
-    return filteredConversations.slice(start, start + PAGE_SIZE);
-  }, [filteredConversations, currentPage]);
+  const totalPages = Math.ceil(totalCount / PAGE_SIZE) || 1;
+  const paginatedConversations = conversations;
 
   // Analytics Computation
   const analyticsData = useMemo(() => {
-    const total = filteredConversations.length;
+    const total = totalCount;
     const statusCounts: Record<QuoLeadStatus, number> = {
       raw: 0,
       spam: 0,
@@ -709,7 +541,7 @@ export default function QuoDashboardPage() {
               <List className="h-4 w-4" />
               <span>Triage Table</span>
               <Badge variant="secondary" className="ml-1 text-[10px] px-1.5 py-0">
-                {filteredConversations.length}
+                {totalCount}
               </Badge>
             </TabsTrigger>
             <TabsTrigger value="analytics" className="gap-2 text-xs px-4 py-1.5 font-medium">
@@ -1103,7 +935,7 @@ export default function QuoDashboardPage() {
                       <TableCell className="text-right"><Skeleton className="h-7 w-24 ml-auto" /></TableCell>
                     </TableRow>
                   ))
-                ) : filteredConversations.length === 0 ? (
+                ) : totalCount === 0 ? (
                   <TableRow>
                     <TableCell colSpan={7} className="h-40 text-center text-muted-foreground text-xs">
                       <div className="flex flex-col items-center justify-center gap-2">
@@ -1259,9 +1091,9 @@ export default function QuoDashboardPage() {
             <div className="p-3 border-t border-border/40 bg-muted/20 flex flex-col sm:flex-row gap-3 items-center justify-between text-xs text-muted-foreground">
               <div className="flex items-center gap-2">
                 <span>
-                  Showing <strong className="text-foreground">{filteredConversations.length > 0 ? (currentPage - 1) * PAGE_SIZE + 1 : 0}</strong>-
-                  <strong className="text-foreground">{Math.min(currentPage * PAGE_SIZE, filteredConversations.length)}</strong> of{" "}
-                  <strong className="text-foreground">{filteredConversations.length}</strong> matching (Total: {conversations.length})
+                  Showing <strong className="text-foreground">{totalCount > 0 ? (currentPage - 1) * PAGE_SIZE + 1 : 0}</strong>-
+                  <strong className="text-foreground">{Math.min(currentPage * PAGE_SIZE, totalCount)}</strong> of{" "}
+                  <strong className="text-foreground">{totalCount}</strong> matching (Total: {totalCount})
                 </span>
               </div>
 
