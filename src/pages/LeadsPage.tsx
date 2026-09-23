@@ -84,7 +84,7 @@ const URGENT_TABLE_POLL_MS = 5000;
 type UrgentRow = Pick<Lead, "id" | "customer_name" | "customer_phone" | "service_type" | "city" | "state" | "address" | "zip_code" | "urgent_at" | "created_at" | "customer_schedule_requirements">;
 
 function CopyableCell({ text, title, className, defaultWidth = true, emptyClassName = "text-muted-foreground", align = "left" }: { text: string; title?: string; className?: string; defaultWidth?: boolean; emptyClassName?: string; align?: "left" | "right" }) {
-  if (!text || text === "—") return <td className={`px-4 py-2 ${className || ""}`}><span className={emptyClassName}>—</span></td>;
+  if (!text || text === "—") return <td className={`px-2 py-2 ${className || ""}`}><span className={emptyClassName}>—</span></td>;
 
   return (
     <td className={`px-2 py-2 ${defaultWidth ? "max-w-[160px]" : ""} ${className || ""}`}>
@@ -106,6 +106,14 @@ function CopyableCell({ text, title, className, defaultWidth = true, emptyClassN
       </div>
     </td>
   );
+}
+
+const MONTH_NAMES = ["Jan", "Feb", "March", "Apr", "May", "Jun", "Jul", "Aug", "Sept", "Oct", "Nov", "Dec"];
+function formatUrgentDate(isoString: string | null | undefined) {
+  if (!isoString) return "—";
+  const d = new Date(isoString);
+  if (isNaN(d.getTime())) return isoString;
+  return `${MONTH_NAMES[d.getMonth()]} ${d.getDate()}`;
 }
 
 export default function LeadsPage() {
@@ -1115,10 +1123,10 @@ export default function LeadsPage() {
                 <table className="w-full border-collapse text-left text-xs">
                   <thead className="sticky top-0 z-10 bg-card/95 backdrop-blur">
                     <tr className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                      <th className="px-4 py-1.5 font-semibold">Customer name</th>
+                      <th className="px-2 py-1.5 font-semibold">Customer name</th>
                       <th className="px-2 py-1.5 font-semibold">Service</th>
-                      <th className="px-4 py-1.5 font-semibold">Address</th>
-                      <th className="px-4 py-1.5 font-semibold">Schedule</th>
+                      <th className="px-2 py-1.5 font-semibold">Address</th>
+                      <th className="px-2 py-1.5 font-semibold">Schedule</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1129,10 +1137,10 @@ export default function LeadsPage() {
                         className="cursor-pointer border-t border-border/40 transition-colors hover:bg-muted/40"
                         title="Open lead"
                       >
-                        <CopyableCell text={l.customer_name || "—"} />
-                        <CopyableCell text={l.service_type || "—"} />
-                        <CopyableCell text={l.address || "—"} />
-                        <CopyableCell text={l.customer_schedule_requirements || "—"} />
+                        <CopyableCell text={l.customer_name || "—"} defaultWidth={false} className="max-w-[120px] font-medium text-foreground" />
+                        <CopyableCell text={l.service_type || "—"} defaultWidth={false} className="max-w-[130px] text-muted-foreground" />
+                        <CopyableCell text={l.address || "—"} defaultWidth={false} className="max-w-[180px] text-muted-foreground" />
+                        <CopyableCell text={l.customer_schedule_requirements || "—"} defaultWidth={false} className="max-w-[120px] text-muted-foreground" />
                       </tr>
                     ))}
                   </tbody>
@@ -1169,13 +1177,13 @@ export default function LeadsPage() {
             <table className="border-collapse text-left text-xs">
               <thead className="sticky top-0 z-10 bg-card/95 backdrop-blur">
                 <tr className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                  <th className="px-4 py-1.5 font-semibold">Customer</th>
+                  <th className="px-2 py-1.5 font-semibold">Customer</th>
                   <th className="px-2 py-1.5 font-semibold">Service</th>
-                  <th className="px-4 py-1.5 font-semibold">Address</th>
+                  <th className="px-2 py-1.5 font-semibold">Address</th>
                   <th className="px-2 py-1.5 font-semibold">Area</th>
-                  <th className="px-4 py-1.5 font-semibold">Same</th>
-                  <th className="px-4 py-1.5 font-semibold">Schedule</th>
-                  <th className="px-4 py-1.5 font-semibold text-right">Date created</th>
+                  <th className="px-2 py-1.5 font-semibold">Same</th>
+                  <th className="px-2 py-1.5 font-semibold">Schedule</th>
+                  <th className="px-2 py-1.5 font-semibold text-right">Date created</th>
                 </tr>
               </thead>
               <tbody>
@@ -1187,7 +1195,6 @@ export default function LeadsPage() {
                   
                   const nearby = urgentTableNearbyMap.get(l.id);
                   const nearbyCount = nearby?.length || 0;
-                  const dateStr = l.created_at ? new Date(l.created_at).toLocaleDateString() : "—";
 
                   return (
                     <tr
@@ -1196,11 +1203,11 @@ export default function LeadsPage() {
                       className="cursor-pointer border-t border-border/40 transition-colors hover:bg-muted/40"
                       title="Open lead"
                     >
-                      <CopyableCell text={l.customer_name || "—"} />
-                      <CopyableCell text={l.service_type || "—"} />
-                      <CopyableCell text={address} />
-                      <CopyableCell text={areaText} />
-                      <td className="px-4 py-2 text-muted-foreground">
+                      <CopyableCell text={l.customer_name || "—"} defaultWidth={false} className="max-w-[100px] font-medium text-foreground" />
+                      <CopyableCell text={l.service_type || "—"} defaultWidth={false} className="max-w-[120px] text-muted-foreground" />
+                      <CopyableCell text={address} defaultWidth={false} className="max-w-[160px] text-muted-foreground" />
+                      <CopyableCell text={areaText} defaultWidth={false} className="max-w-[100px] text-muted-foreground" />
+                      <td className="px-2 py-2 text-muted-foreground">
                         {nearbyCount > 0 ? (
                           <span className="inline-flex items-center gap-1 rounded-md bg-red-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-red-600 dark:text-red-400">
                             {nearbyCount} more
@@ -1209,9 +1216,9 @@ export default function LeadsPage() {
                           "—"
                         )}
                       </td>
-                      <CopyableCell text={l.customer_schedule_requirements || "—"} />
-                      <td className="whitespace-nowrap px-4 py-2 text-right text-muted-foreground">
-                        {dateStr}
+                      <CopyableCell text={l.customer_schedule_requirements || "—"} defaultWidth={false} className="max-w-[110px] text-muted-foreground" />
+                      <td className="whitespace-nowrap px-2 py-2 text-right text-muted-foreground">
+                        {formatUrgentDate(l.created_at)}
                       </td>
                     </tr>
                   );
