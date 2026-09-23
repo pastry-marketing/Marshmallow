@@ -61,7 +61,6 @@ import {
 import CopyValueButton from "./CopyValueButton";
 import CancellationRequestSheet from "./CancellationRequestSheet";
 import QuoPhoneTrigger from "./QuoPhoneTrigger";
-import FloatingQuoMessagePreview from "./FloatingQuoMessagePreview";
 import { adminApi } from "@/lib/admin-api";
 import { syncLeadDeleteToGoogleSheets } from "@/lib/google-sheets";
 import { logActivity } from "@/lib/activity";
@@ -1497,7 +1496,6 @@ function LeadCard({
       whileTap={reduceMotion ? undefined : { scale: 0.985 }}
       transition={{ type: "spring", stiffness: 200, damping: 24, mass: 0.6 }}
     >
-      {hasQuickChatAccess && <FloatingQuoMessagePreview phone={lead.customer_phone} leadId={lead.id} />}
       <Card
         className={`crm-lead-card group relative flex h-full flex-col overflow-hidden rounded-[30px] transition-shadow duration-500 hover:border-primary/28 hover:shadow-[0_42px_92px_-46px_rgba(59,130,246,0.34),0_20px_36px_-26px_rgba(125,211,252,0.2)] ${
           shouldBlinkCard 
