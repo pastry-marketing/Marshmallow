@@ -446,7 +446,7 @@ export default function QuoDashboardPage() {
       statusCounts,
       perNumberList,
     };
-  }, [filteredConversations, numberDisplayMap]);
+  }, [conversations, numberDisplayMap]);
 
   // Chat counts per QUO number (for the manage-numbers dialog)
   const chatCountsByNumberId = useMemo(() => {
