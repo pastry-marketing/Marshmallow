@@ -1146,12 +1146,12 @@ export default function LeadsPage() {
               <div className="px-4 py-6 text-center text-xs text-muted-foreground">All caught up!</div>
             ) : (
               <div className="max-h-[240px] overflow-auto">
-                <table className="w-full border-collapse text-left text-xs">
+                <table className="w-full table-fixed border-collapse text-left text-xs">
                   <thead className="sticky top-0 z-10 bg-card/95 backdrop-blur">
                     <tr className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                      <th className="px-2 py-1.5 font-semibold">Customer name</th>
-                      <th className="px-2 py-1.5 font-semibold">Service</th>
-                      <th className="px-2 py-1.5 font-semibold">Address</th>
+                      <th className="px-2 py-1.5 font-semibold w-[25%]">Customer name</th>
+                      <th className="px-2 py-1.5 font-semibold w-[30%]">Service</th>
+                      <th className="px-2 py-1.5 font-semibold w-[45%]">Address</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1162,9 +1162,9 @@ export default function LeadsPage() {
                         className="cursor-pointer border-t border-border/40 transition-colors hover:bg-muted/40"
                         title="Open lead"
                       >
-                        <CopyableCell text={l.customer_name || "—"} defaultWidth={false} className="max-w-[120px] font-medium text-foreground" />
-                        <CopyableCell text={l.service_type || "—"} defaultWidth={false} className="max-w-[130px] text-muted-foreground" />
-                        <CopyableCell text={l.address || "—"} defaultWidth={false} className="max-w-[180px] text-muted-foreground" />
+                        <CopyableCell text={l.customer_name || "—"} defaultWidth={false} className="font-medium text-foreground" />
+                        <CopyableCell text={l.service_type || "—"} defaultWidth={false} className="text-muted-foreground" />
+                        <CopyableCell text={l.address || "—"} defaultWidth={false} className="text-muted-foreground" />
                       </tr>
                     ))}
                   </tbody>
@@ -1198,16 +1198,16 @@ export default function LeadsPage() {
           <div className="px-4 py-6 text-center text-xs text-muted-foreground">No urgent leads right now.</div>
         ) : (
           <div className="max-h-[240px] overflow-auto">
-            <table className="border-collapse text-left text-xs">
+            <table className="w-full table-fixed border-collapse text-left text-xs">
               <thead className="sticky top-0 z-10 bg-card/95 backdrop-blur">
                 <tr className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                  <th className="px-2 py-1.5 font-semibold">Customer</th>
-                  <th className="px-2 py-1.5 font-semibold">Service</th>
-                  <th className="px-2 py-1.5 font-semibold">Address</th>
-                  <th className="px-2 py-1.5 font-semibold">Area</th>
-                  <th className="px-2 py-1.5 font-semibold">Same</th>
-                  <th className="px-2 py-1.5 font-semibold">Schedule</th>
-                  <th className="px-2 py-1.5 font-semibold text-right">Date created</th>
+                  <th className="px-2 py-1.5 font-semibold w-[15%]">Customer</th>
+                  <th className="px-2 py-1.5 font-semibold w-[18%]">Service</th>
+                  <th className="px-2 py-1.5 font-semibold w-[22%]">Address</th>
+                  <th className="px-2 py-1.5 font-semibold w-[15%]">Area</th>
+                  <th className="px-2 py-1.5 font-semibold w-[8%]">Same</th>
+                  <th className="px-2 py-1.5 font-semibold w-[12%]">Schedule</th>
+                  <th className="px-2 py-1.5 font-semibold text-right w-[10%]">Date created</th>
                 </tr>
               </thead>
               <tbody>
@@ -1228,10 +1228,10 @@ export default function LeadsPage() {
                       className="cursor-pointer border-t border-border/40 transition-colors hover:bg-muted/40"
                       title="Open lead"
                     >
-                      <CopyableCell text={l.customer_name || "—"} defaultWidth={false} className="max-w-[100px] font-medium text-foreground" />
-                      <CopyableCell text={l.service_type || "—"} defaultWidth={false} className="max-w-[120px] text-muted-foreground" />
-                      <CopyableCell text={address} defaultWidth={false} className="max-w-[160px] text-muted-foreground" />
-                      <CopyableCell text={areaText} defaultWidth={false} className="max-w-[100px] text-muted-foreground" />
+                      <CopyableCell text={l.customer_name || "—"} defaultWidth={false} className="font-medium text-foreground" />
+                      <CopyableCell text={l.service_type || "—"} defaultWidth={false} className="text-muted-foreground" />
+                      <CopyableCell text={address} defaultWidth={false} className="text-muted-foreground" />
+                      <CopyableCell text={areaText} defaultWidth={false} className="text-muted-foreground" />
                       <td className="px-2 py-2 text-muted-foreground">
                         {nearbyCount > 0 ? (
                           <span className="inline-flex items-center gap-1 rounded-md bg-red-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-red-600 dark:text-red-400">
@@ -1241,7 +1241,7 @@ export default function LeadsPage() {
                           "—"
                         )}
                       </td>
-                      <CopyableCell text={formatSchedule(l.customer_schedule_requirements)} defaultWidth={false} className="max-w-[110px] text-muted-foreground" />
+                      <CopyableCell text={formatSchedule(l.customer_schedule_requirements)} defaultWidth={false} className="text-muted-foreground" />
                       <td className="whitespace-nowrap px-2 py-2 text-right text-muted-foreground">
                         {dateStr}
                       </td>
