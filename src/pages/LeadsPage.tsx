@@ -83,13 +83,13 @@ const URGENT_TABLE_POLL_MS = 5000;
 
 type UrgentRow = Pick<Lead, "id" | "customer_name" | "customer_phone" | "service_type" | "city" | "state" | "address" | "zip_code" | "urgent_at" | "created_at" | "customer_schedule_requirements">;
 
-function CopyableCell({ text, title, className, defaultWidth = true, emptyClassName = "text-muted-foreground", align = "left" }: { text: string; title?: string; className?: string; defaultWidth?: boolean; emptyClassName?: string; align?: "left" | "right" }) {
+function CopyableCell({ text, title, className, defaultWidth = true, emptyClassName = "text-muted-foreground", align = "left", truncate = true }: { text: string; title?: string; className?: string; defaultWidth?: boolean; emptyClassName?: string; align?: "left" | "right"; truncate?: boolean }) {
   if (!text || text === "—") return <td className={`px-2 py-2 ${className || ""}`}><span className={emptyClassName}>—</span></td>;
 
   return (
     <td className={`px-2 py-2 ${defaultWidth ? "max-w-[160px]" : ""} ${className || ""}`}>
       <div className={`group/copy relative flex items-center gap-1.5 ${align === "right" ? "justify-end" : ""}`} title={title || text}>
-        <span className="truncate">{text}</span>
+        <span className={truncate ? "truncate" : "whitespace-normal break-words leading-tight"}>{text}</span>
         <button
           type="button"
           className="opacity-0 group-hover/copy:opacity-100 p-1 rounded-md hover:bg-muted-foreground/20 transition-opacity flex-shrink-0 focus:opacity-100"
@@ -1206,11 +1206,11 @@ export default function LeadsPage() {
                 <tr className="text-[10px] uppercase tracking-wide text-muted-foreground">
                   <th className="px-2 py-1.5 font-semibold w-[14%]">Customer</th>
                   <th className="px-2 py-1.5 font-semibold w-[15%]">Service</th>
-                  <th className="px-2 py-1.5 font-semibold w-[22%]">Address</th>
-                  <th className="px-2 py-1.5 font-semibold w-[14%]">Area</th>
-                  <th className="px-2 py-1.5 font-semibold w-[9%] text-center">Same</th>
-                  <th className="px-2 py-1.5 font-semibold w-[14%]">Schedule</th>
-                  <th className="px-2 py-1.5 font-semibold text-right w-[12%]">Date created</th>
+                  <th className="px-2 py-1.5 font-semibold w-[20%]">Address</th>
+                  <th className="px-2 py-1.5 font-semibold w-[12%]">Area</th>
+                  <th className="px-2 py-1.5 font-semibold w-[7%] text-center">Same</th>
+                  <th className="px-2 py-1.5 font-semibold w-[22%]">Schedule</th>
+                  <th className="px-2 py-1.5 font-semibold text-right w-[10%]">Date created</th>
                 </tr>
               </thead>
               <tbody>
@@ -1244,7 +1244,7 @@ export default function LeadsPage() {
                           "—"
                         )}
                       </td>
-                      <CopyableCell text={formatSchedule(l.customer_schedule_requirements)} defaultWidth={false} className="text-muted-foreground" />
+                      <CopyableCell text={formatSchedule(l.customer_schedule_requirements)} defaultWidth={false} className="text-muted-foreground" truncate={false} />
                       <td className="whitespace-nowrap px-2 py-2 text-right text-muted-foreground">
                         {dateStr}
                       </td>
