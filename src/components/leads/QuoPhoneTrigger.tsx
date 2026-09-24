@@ -357,7 +357,7 @@ export default function QuoPhoneTrigger({
 
     realtimeBus.addEventListener("quo_conversations", handleQuoConvos);
     realtimeBus.addEventListener("quo_messages", handleQuoMessages);
-    realtimeBus.addEventListener("quo_outbound_messages", handleQuoOutboundMessages);
+    
 
     setMessages([]);
     void loadThread(true).then(() => {
@@ -388,7 +388,7 @@ export default function QuoPhoneTrigger({
       if (refreshTimer) clearTimeout(refreshTimer);
       realtimeBus.removeEventListener("quo_conversations", handleQuoConvos);
       realtimeBus.removeEventListener("quo_messages", handleQuoMessages);
-      realtimeBus.removeEventListener("quo_outbound_messages", handleQuoOutboundMessages);
+      
       subscribedConversationId = null;
     };
   }, [canUseQuickChat, normalizedPhone, open, chatType]);

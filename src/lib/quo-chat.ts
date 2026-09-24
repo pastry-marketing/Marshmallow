@@ -162,26 +162,7 @@ export async function fetchQuoChatThread(participant: string, chatType?: "custom
     }));
   }
 
-  // Include messages queued for the extension that haven't been echoed back by the webhook yet.
-  const { data: outbound } = await supabase
-    .from("quo_outbound_messages")
-    .select("id, to_number, body, status, created_at, sent_at, quo_message_id")
-    .ilike("to_number", `%${digits}`)
-    .in("status", ["pending", "sending", "failed"])
-    .order("created_at", { ascending: true })
-    .limit(50);
-
-  const queued: QuoChatMessage[] = (outbound ?? []).map((row) => ({
-    id: `outbound-${row.id}`,
-    to: [row.to_number],
-    from: numberRow?.number ?? (chatType === "tech" ? TECH_COMMUNICATIONS_NUMBER : ""),
-    text: row.body,
-    phoneNumberId: numberRow?.quo_phone_number_id ?? "",
-    conversationId: conversation?.id ?? null,
-    direction: "outgoing" as const,
-    status: row.status,
-    createdAt: row.created_at,
-  }));
+  const queued: QuoChatMessage[] = [];
 
   return {
     contact: { participant },
