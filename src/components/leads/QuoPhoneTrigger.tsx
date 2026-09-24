@@ -448,7 +448,7 @@ export default function QuoPhoneTrigger({
         let errorMsg = extRes.error || "Failed to complete send";
         if (errorMsg.includes("Could not find message input editor")) {
           const numName = conversationMeta?.numberName || "this number";
-          errorMsg = `You don't have access to ${numName}.`;
+          errorMsg = `Couldn't open the chat box in Quo for ${numName}. Make sure a Quo tab is open and try again.`;
         }
         toast.error(`Extension notice: ${errorMsg}`, { id: toastId });
       }
@@ -493,7 +493,7 @@ export default function QuoPhoneTrigger({
         let errorMsg = extRes.error || "Cancelled";
         if (errorMsg.includes("Could not find message input editor")) {
           const numName = conversationMeta?.numberName || "this number";
-          errorMsg = `You don't have access to ${numName}.`;
+          errorMsg = `Couldn't open the chat box in Quo for ${numName}. Make sure a Quo tab is open and try again.`;
         }
         toast.error(`Failed to schedule: ${errorMsg}`, { id: toastId });
       }
