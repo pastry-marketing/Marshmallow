@@ -277,8 +277,11 @@ export default function QuoPhoneTrigger({
 
         setConversationMeta({
           id: response.conversation?.id,
-          quoConversationId: (response.conversation as any)?.quo_conversation_id,
-          quoPhoneNumberId: response.phoneNumber?.id,
+          // fetchQuoChatThread already maps the external Quo IDs onto these
+          // response fields. Reading quo_conversation_id here made every lead
+          // fall back to an inbox-only ?phone= URL instead of its saved chat.
+          quoConversationId: response.conversation?.id,
+          quoPhoneNumberId: response.conversation?.phoneNumberId || response.phoneNumber?.id,
           phoneNumberObj: numObj,
           numberName: numName,
           numberEmoji: numEmoji,
