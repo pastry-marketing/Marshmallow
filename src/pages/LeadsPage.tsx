@@ -1209,10 +1209,9 @@ export default function LeadsPage() {
                 <tr className="text-[10px] uppercase tracking-wide text-muted-foreground">
                   <th className="px-2 py-1.5 font-semibold w-[14%]">Customer</th>
                   <th className="px-2 py-1.5 font-semibold w-[15%]">Service</th>
-                  <th className="px-2 py-1.5 font-semibold w-[20%]">Address</th>
-                  <th className="px-2 py-1.5 font-semibold w-[12%]">Area</th>
-                  <th className="px-2 py-1.5 font-semibold w-[7%] text-center">Same</th>
-                  <th className="px-2 py-1.5 font-semibold w-[22%]">Schedule</th>
+                  <th className="px-2 py-1.5 font-semibold w-[24%]">Address</th>
+                    <th className="px-2 py-1.5 font-semibold w-[14%]">Area</th>
+                    <th className="px-2 py-1.5 font-semibold w-[23%]">Schedule</th>
                   <th className="px-2 py-1.5 font-semibold text-right w-[10%]">Date created</th>
                 </tr>
               </thead>
