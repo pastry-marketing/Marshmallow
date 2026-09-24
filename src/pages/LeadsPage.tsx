@@ -142,30 +142,6 @@ function formatSchedule(text: string | null | undefined) {
   return result.trim() || "—";
 }
 
-function isTodayOrTomorrow(scheduleText: string | null | undefined): boolean {
-  if (!scheduleText) return false;
-  const lower = scheduleText.toLowerCase();
-  
-  if (lower.includes("today") || lower.includes("tomorrow") || lower.includes("tonight") || lower.includes("tmrw")) return true;
-  
-  const today = new Date();
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  
-  const months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
-  
-  const checkDate = (d: Date) => {
-    const m = d.getMonth();
-    const dt = d.getDate();
-    const p1 = new RegExp(`\\b${months[m]}[a-z]*\\s*${dt}\\b`, 'i');
-    const p2 = new RegExp(`\\b${dt}(?:st|nd|rd|th)?\\s*${months[m]}[a-z]*\\b`, 'i');
-    const p3 = new RegExp(`\\b${m + 1}/${dt}\\b`, 'i');
-    return p1.test(lower) || p2.test(lower) || p3.test(lower);
-  };
-  
-  return checkDate(today) || checkDate(tomorrow);
-}
-
 export default function LeadsPage() {
   const { user, role } = useAuth();
   const { toggleNotepad, isNotepadOpen, activeUserIds } = useNotepad();
@@ -1262,12 +1238,16 @@ export default function LeadsPage() {
                       <CopyableCell text={l.service_type || "—"} defaultWidth={false} className="text-muted-foreground" />
                       <CopyableCell text={address} defaultWidth={false} className="text-muted-foreground" />
                       <CopyableCell text={areaText} defaultWidth={false} className="text-muted-foreground" />
-                      <CopyableCell 
-                          text={formatSchedule(l.customer_schedule_requirements)} 
-                          defaultWidth={false} 
-                          className={isTodayOrTomorrow(l.customer_schedule_requirements) ? "text-red-500 font-bold animate-pulse" : "text-muted-foreground"} 
-                          truncate={false} 
-                        />
+                      <td className="px-2 py-2 text-center text-muted-foreground">
+                        {nearbyCount > 0 ? (
+                          <span className="inline-flex items-center gap-1 rounded-md bg-red-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-red-600 dark:text-red-400">
+                            {nearbyCount} more
+                          </span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <CopyableCell text={formatSchedule(l.customer_schedule_requirements)} defaultWidth={false} className="text-muted-foreground" truncate={false} />
                       <td className="whitespace-nowrap px-2 py-2 text-right text-muted-foreground">
                         {dateStr}
                       </td>
