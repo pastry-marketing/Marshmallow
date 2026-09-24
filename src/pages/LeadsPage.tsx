@@ -11,6 +11,7 @@ import { buildNearbyUrgentMap, isUrgentLead } from "@/lib/lead-proximity";
 import { preloadZipDataset } from "@/lib/zipCentroids";
 import { useAllowedStatuses } from "@/hooks/useAllowedStatuses";
 import { normalizePhoneE164 } from "@/lib/phone";
+import { openLeadFromClick } from "@/lib/lead-navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
@@ -1188,7 +1189,7 @@ export default function LeadsPage() {
                     {urgentNeedsCxReply.map((l) => (
                       <tr
                         key={l.id}
-                        onClick={() => window.open(`/leads/${l.id}`, '_blank')}
+                        onClick={(event) => openLeadFromClick(event, l.id, navigate)}
                         className="cursor-pointer border-t border-border/40 transition-colors hover:bg-muted/40"
                         title="Open lead"
                       >
@@ -1253,7 +1254,7 @@ export default function LeadsPage() {
                   return (
                     <tr
                       key={l.id}
-                      onClick={() => window.open(`/leads/${l.id}`, '_blank')}
+                      onClick={(event) => openLeadFromClick(event, l.id, navigate)}
                       className="cursor-pointer border-t border-border/40 transition-colors hover:bg-muted/40"
                       title="Open lead"
                     >

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { MapPin, ArrowUpRight } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { NEARBY_RADIUS_MILES, type ProximityLead } from "@/lib/lead-proximity";
+import { openLeadFromClick } from "@/lib/lead-navigation";
 
 interface Props {
   /** The other urgent leads near this one. Never rendered when empty. */
@@ -15,6 +16,7 @@ interface Props {
  */
 export default function NearbyUrgentLeads({ nearby }: Props) {
   const [open, setOpen] = useState(false);
+  const navigate = useNavigate();
 
   if (nearby.length === 0) return null;
 
@@ -53,9 +55,9 @@ export default function NearbyUrgentLeads({ nearby }: Props) {
             <button
               key={lead.id}
               type="button"
-              onClick={() => {
+              onClick={(event) => {
                 setOpen(false);
-                window.open(`/leads/${lead.id}`, '_blank');
+                openLeadFromClick(event, lead.id, navigate);
               }}
               className="group flex w-full items-center justify-between gap-2 px-3 py-2 text-left transition-colors hover:bg-muted/50"
             >

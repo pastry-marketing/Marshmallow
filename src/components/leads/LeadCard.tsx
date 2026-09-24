@@ -6,6 +6,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { useIsLastMessageFromCustomer } from "@/hooks/useIsLastMessageFromCustomer";
 import { expandStateAbbreviation } from "@/lib/utils";
+import { openLeadFromClick } from "@/lib/lead-navigation";
 import { Lead, LeadStatus, STATUS_LABELS, getChangeableStatuses, canChangeStatus } from "@/lib/constants";
 import { CS_TAG_LABELS, type CsTag } from "@/types";
 import { Card } from "@/components/ui/card";
@@ -688,6 +689,7 @@ function LeadCard({
   initialPendingCancellationRequest,
 }: LeadCardProps) {
   const { user, role, profile, canAccess } = useAuth();
+  const navigate = useNavigate();
   const [changingStatus, setChangingStatus] = useState(false);
   const [csOpen, setCsOpen] = useState(false);
   const [processorOpen, setProcessorOpen] = useState(false);
@@ -2029,7 +2031,7 @@ function LeadCard({
                   variant="outline"
                   size="sm"
                   className="crm-lead-card-inner h-11 min-w-0 w-full overflow-hidden rounded-[14px] px-1.5 text-[10px] font-semibold transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/28 hover:bg-primary/[0.05] hover:shadow-[0_18px_28px_-20px_rgba(59,130,246,0.2)] dark:hover:bg-primary/[0.10] dark:hover:shadow-none"
-                  onClick={() => window.open(`/leads/${lead.id}`, '_blank')}
+                  onClick={(event) => openLeadFromClick(event, lead.id, navigate)}
                 >
                   <Pencil className="h-3 w-3 shrink-0" />
                   <span className="truncate">Edit Lead</span>

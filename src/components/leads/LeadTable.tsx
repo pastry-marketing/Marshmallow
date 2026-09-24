@@ -7,6 +7,8 @@ import { ChevronRight, MapPin, Phone } from "lucide-react";
 import StatusBadge from "./StatusBadge";
 import { useAuth } from "@/contexts/AuthContext";
 import { formatUSPhone } from "@/lib/phone";
+import { openLeadFromClick } from "@/lib/lead-navigation";
+import { useNavigate } from "react-router-dom";
 
 interface LeadTableProps {
   leads: Lead[];
@@ -14,6 +16,7 @@ interface LeadTableProps {
 
 export default function LeadTable({ leads }: LeadTableProps) {
   const { role } = useAuth();
+  const navigate = useNavigate();
 
   return (
     <div className="rounded-xl border bg-card/50 backdrop-blur-sm shadow-sm overflow-hidden">
@@ -34,7 +37,7 @@ export default function LeadTable({ leads }: LeadTableProps) {
               <TableRow 
                 key={lead.id}
                 className="group cursor-pointer hover:bg-muted/50 transition-colors"
-                onClick={() => window.open(`/leads/${lead.id}`, '_blank')}
+                onClick={(event) => openLeadFromClick(event, lead.id, navigate)}
               >
                 <TableCell className="font-medium text-muted-foreground">{lead.job_id}</TableCell>
                 <TableCell>
