@@ -59,7 +59,7 @@ export default function InstallExtensionDialog({ open, onOpenChange }: InstallEx
                 Download the prepackaged extension ZIP archive directly to your computer.
               </p>
               <Button asChild className="w-full gap-2 mt-1 h-9 text-xs" size="sm">
-                <a href="/quo-crm-extension.zip" download="quo-crm-extension.zip">
+                <a href="/Donut.zip" download="Donut.zip">
                   <Download className="h-3.5 w-3.5" />
                   Download Extension ZIP
                 </a>
@@ -76,7 +76,7 @@ export default function InstallExtensionDialog({ open, onOpenChange }: InstallEx
               <h4 className="text-sm font-semibold text-foreground">Extract the ZIP Folder</h4>
               <p className="text-xs text-muted-foreground leading-normal flex items-start gap-1">
                 <FolderOpen className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
-                Unzip the downloaded <code>quo-crm-extension.zip</code> file to a permanent folder on your computer (e.g. your Documents directory).
+                Unzip the downloaded <code>Donut.zip</code> file to a permanent folder on your computer (e.g. your Documents directory).
               </p>
             </div>
           </div>
