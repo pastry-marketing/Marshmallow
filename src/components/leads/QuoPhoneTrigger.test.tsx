@@ -1,10 +1,11 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import QuoPhoneTrigger from "@/components/leads/QuoPhoneTrigger";
 import { useAuth } from "@/contexts/AuthContext";
 import { fetchQuoChatThread } from "@/lib/quo-chat";
 import { prepareQuoChatViaExtension, sendQuoMessageViaExtension } from "@/lib/quo-dashboard";
+import { supabase } from "@/integrations/supabase/client";
 
 vi.mock("@/contexts/AuthContext", () => ({
   useAuth: vi.fn(),
@@ -36,6 +37,7 @@ vi.mock("@/lib/quo-dashboard", async (importOriginal) => {
 
 describe("QuoPhoneTrigger", () => {
   afterEach(() => {
+    cleanup();
     vi.clearAllMocks();
   });
 
@@ -58,7 +60,7 @@ describe("QuoPhoneTrigger", () => {
     expect(fetchQuoChatThread).toHaveBeenCalledWith("+15551234567", undefined);
   });
 
-  it("passes chat type when reloading the thread after sending", async () => {
+  it("passes chat type when loading the thread", async () => {
     vi.mocked(useAuth).mockReturnValue({
       role: "admin",
       canAccess: vi.fn(() => true),
@@ -72,12 +74,8 @@ describe("QuoPhoneTrigger", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /\(555\) 123-4567/i }));
 
-    const textarea = await screen.findByRole("textbox");
-    fireEvent.change(textarea, { target: { value: "Hello there" } });
-    fireEvent.click(screen.getByRole("button", { name: /send/i }));
-
     await waitFor(() => {
-      expect(vi.mocked(fetchQuoChatThread).mock.calls.at(-1)).toEqual(["+15551234567", "customer"]);
+      expect(fetchQuoChatThread).toHaveBeenCalledWith("+15551234567", "customer");
     });
   });
 
@@ -95,12 +93,24 @@ describe("QuoPhoneTrigger", () => {
         name: "Main Line",
       },
       conversation: {
+        databaseId: "00000000-0000-4000-8000-000000000123",
         id: "CN_saved_conversation",
         phoneNumberId: "PN123",
         participants: ["+15551234567"],
       },
       messages: [],
     });
+    const subscribe = vi.fn().mockImplementation((onStatus?: (status: string) => void) => {
+      onStatus?.("SUBSCRIBED");
+      return realtimeChannel;
+    });
+    const realtimeChannel = {
+      on: vi.fn().mockReturnThis(),
+      subscribe,
+      unsubscribe: vi.fn(),
+    };
+    vi.spyOn(supabase, "channel").mockReturnValue(realtimeChannel as any);
+    vi.spyOn(supabase, "removeChannel").mockResolvedValue("ok");
 
     render(
       <QuoPhoneTrigger contactName="Jane Doe" phone="(555) 123-4567">
@@ -118,6 +128,16 @@ describe("QuoPhoneTrigger", () => {
       );
     });
     expect(fetchQuoChatThread).toHaveBeenCalledTimes(1);
+    expect(realtimeChannel.on).toHaveBeenCalledWith(
+      "postgres_changes",
+      {
+        event: "INSERT",
+        schema: "public",
+        table: "quo_messages",
+        filter: "conversation_id=eq.00000000-0000-4000-8000-000000000123",
+      },
+      expect.any(Function),
+    );
 
     fireEvent.click(screen.getByRole("button", { name: /send/i }));
 

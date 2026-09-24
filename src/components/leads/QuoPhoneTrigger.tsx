@@ -9,7 +9,6 @@ import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { normalizePhoneE164, stripPhone } from "@/lib/phone";
 import { fetchQuoChatThread, sendQuoChatMessage, type QuoChatMessage } from "@/lib/quo-chat";
-import { realtimeBus } from "@/lib/realtime";
 import {
   formatEasternTime,
   formatLocalRelativeTime,
@@ -67,14 +66,12 @@ let quickChatUnreadRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 // whole quo_conversations table, which used to fan every chat message out to
 // every connected user and dominated realtime message usage.
 const QUICK_CHAT_UNREAD_POLL_MS = 60000;
-// While a chat drawer is actually open, visible and expanded, refresh the thread
-// on this interval so new inbound messages appear without reopening. Realtime on
-// quo_messages isn't relied upon (the table isn't fanned out for cost reasons),
-// and the fetch is a few indexed reads — kept light by only running while the
-// user is actively looking at an open chat.
+// A filtered Realtime channel handles the open conversation. This interval is
+// used only as a fallback while that channel is disconnected.
 const QUICK_CHAT_THREAD_POLL_MS = 5000;
 let quickChatUnreadPollTimer: ReturnType<typeof setInterval> | null = null;
 let nextQuickChatUnreadWatcherId = 0;
+let nextQuickChatRealtimeChannelId = 0;
 
 function scheduleQuickChatUnreadRefresh() {
   if (quickChatUnreadRefreshTimer) clearTimeout(quickChatUnreadRefreshTimer);
@@ -194,6 +191,7 @@ export default function QuoPhoneTrigger({
 
   // Conversation metadata for header details
   const [conversationMeta, setConversationMeta] = useState<{
+    databaseId?: string;
     id?: string;
     quoConversationId?: string;
     quoPhoneNumberId?: string;
@@ -205,6 +203,8 @@ export default function QuoPhoneTrigger({
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const preparedChatUrlRef = useRef("");
+  const threadRealtimeHealthyRef = useRef(false);
+  const realtimeChannelIdRef = useRef(++nextQuickChatRealtimeChannelId);
   // Kept in refs so the live-refresh interval can read the latest minimize state
   // and re-trigger a load without tearing down and rebuilding the subscription.
   const isMinimizedRef = useRef(isMinimized);
@@ -254,8 +254,6 @@ export default function QuoPhoneTrigger({
     if (!canUseQuickChat || !open || !normalizedPhone) return;
 
     let active = true;
-    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
-    const contactKey = getPhoneKey(normalizedPhone);
 
     const loadThread = async (showLoading: boolean) => {
       if (showLoading) setLoading(true);
@@ -264,6 +262,7 @@ export default function QuoPhoneTrigger({
       try {
         const response = await fetchQuoChatThread(normalizedPhone, chatType);
         if (!active) return;
+        if (!response) throw new Error("Quick Chat returned no thread data");
         setMessages((prev) => {
           const next = mergeQuoMessages(response.messages ?? []);
           // Keep the same array reference when nothing changed, so a silent poll
@@ -278,6 +277,7 @@ export default function QuoPhoneTrigger({
         const convStatus = (response.conversation as any)?.current_status || (response.conversation as any)?.status || "raw";
 
         setConversationMeta({
+          databaseId: response.conversation?.databaseId,
           id: response.conversation?.id,
           // fetchQuoChatThread already maps the external Quo IDs onto these
           // response fields. Reading quo_conversation_id here made every lead
@@ -290,11 +290,6 @@ export default function QuoPhoneTrigger({
           status: convStatus,
         });
 
-        const conversationId = response.conversation?.id;
-
-        if (conversationId && conversationId !== subscribedConversationId) {
-          subscribedConversationId = conversationId;
-        }
       } catch (fetchError) {
         if (!active) return;
         setError(fetchError instanceof Error ? fetchError.message : "Failed to load Quo messages");
@@ -305,84 +300,24 @@ export default function QuoPhoneTrigger({
       }
     };
 
-    const scheduleLiveRefresh = () => {
-      if (refreshTimer) clearTimeout(refreshTimer);
-      refreshTimer = setTimeout(() => void loadThread(false), 450);
-    };
-
-    let subscribedConversationId: string | null = null;
-    // local ref to avoid relying on state dependency inside event listeners
-    const phoneNumberIdRef = { current: "" };
-
-    const handleQuoConvos = (e: any) => {
-      const row = e.detail?.new;
-      if (!active || !row) return;
-      if (row.customer_number === normalizedPhone) {
-        // Conversation updated, we don't fetch everything just wait for messages
-      }
-    };
-
-    const handleQuoMessages = (e: any) => {
-      const row = e.detail?.new;
-      if (!active || !row || !row.id || !subscribedConversationId) return;
-      if (row.conversation_id === subscribedConversationId) {
-        const newMsg: QuoChatMessage = {
-          id: row.id,
-          to: Array.isArray(row.recipients) ? (row.recipients as unknown[]).map((entry) => String(entry)) : [],
-          from: row.sender ?? "",
-          text: row.text ?? "",
-          phoneNumberId: phoneNumberIdRef.current,
-          conversationId: row.conversation_id,
-          direction: row.direction === "outgoing" ? "outgoing" : "incoming",
-          status: row.status,
-          createdAt: row.message_time ?? row.quo_created_at ?? row.created_at,
-        };
-        setMessages((prev) => mergeQuoMessages([...prev, newMsg]));
-      }
-    };
-
-    const handleQuoOutboundMessages = (e: any) => {
-      const row = e.detail?.new;
-      if (!active || !row || !row.id) return;
-      if (row.to_number === normalizedPhone) {
-        const newMsg: QuoChatMessage = {
-          id: `outbound-${row.id}`,
-          to: [row.to_number],
-          from: (chatType === "tech" ? "Tech" : "System"),
-          text: row.body,
-          phoneNumberId: phoneNumberIdRef.current,
-          conversationId: subscribedConversationId,
-          direction: "outgoing",
-          status: row.status,
-          createdAt: row.created_at,
-        };
-        setMessages((prev) => mergeQuoMessages([...prev, newMsg]));
-      }
-    };
-
-    realtimeBus.addEventListener("quo_conversations", handleQuoConvos);
-    realtimeBus.addEventListener("quo_messages", handleQuoMessages);
-    
-
     setMessages([]);
-    void loadThread(true).then(() => {
-      // after first load, populate the phoneNumberIdRef
-      setConversationMeta((meta) => {
-        if (meta?.quoPhoneNumberId) phoneNumberIdRef.current = meta.quoPhoneNumberId;
-        return meta;
-      });
-    });
+    void loadThread(true);
 
     // Expose the loader so expanding a minimized chat can refresh instantly.
     loadThreadRef.current = (showLoading: boolean) => { if (active) void loadThread(showLoading); };
 
-    // Light live refresh: only while the chat is open, expanded, and the tab is
-    // visible. A minimized or backgrounded chat doesn't poll (the 60s unread
-    // check still flags new messages), so this never runs when nobody's looking.
+    // Five-second querying is only a fallback while the targeted Realtime
+    // channel is unavailable. Healthy Realtime connections do not poll.
     const shouldPoll = () =>
       active && !isMinimizedRef.current && (typeof document === "undefined" || document.visibilityState === "visible");
-    const pollId = setInterval(() => { if (shouldPoll()) void loadThread(false); }, QUICK_CHAT_THREAD_POLL_MS);
-    const onVisible = () => { if (document.visibilityState === "visible" && shouldPoll()) void loadThread(false); };
+    const pollId = setInterval(() => {
+      if (shouldPoll() && !threadRealtimeHealthyRef.current) void loadThread(false);
+    }, QUICK_CHAT_THREAD_POLL_MS);
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && shouldPoll() && !threadRealtimeHealthyRef.current) {
+        void loadThread(false);
+      }
+    };
     document.addEventListener("visibilitychange", onVisible);
 
     return () => {
@@ -390,13 +325,53 @@ export default function QuoPhoneTrigger({
       loadThreadRef.current = null;
       clearInterval(pollId);
       document.removeEventListener("visibilitychange", onVisible);
-      if (refreshTimer) clearTimeout(refreshTimer);
-      realtimeBus.removeEventListener("quo_conversations", handleQuoConvos);
-      realtimeBus.removeEventListener("quo_messages", handleQuoMessages);
-      
-      subscribedConversationId = null;
     };
   }, [canUseQuickChat, normalizedPhone, open, chatType]);
+
+  useEffect(() => {
+    const databaseConversationId = conversationMeta?.databaseId;
+    if (!canUseQuickChat || !open || !databaseConversationId) {
+      threadRealtimeHealthyRef.current = false;
+      return;
+    }
+
+    const channel = supabase
+      .channel(`quick-chat-${databaseConversationId}-${realtimeChannelIdRef.current}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "quo_messages",
+          filter: `conversation_id=eq.${databaseConversationId}`,
+        },
+        (payload) => {
+          const row = payload.new as any;
+          if (!row?.id) return;
+          const newMessage: QuoChatMessage = {
+            id: row.id,
+            to: Array.isArray(row.recipients) ? row.recipients.map((entry: unknown) => String(entry)) : [],
+            from: row.sender ?? "",
+            text: row.text ?? "",
+            phoneNumberId: conversationMeta?.quoPhoneNumberId ?? "",
+            conversationId: row.conversation_id,
+            direction: row.direction === "outgoing" ? "outgoing" : "incoming",
+            status: row.status,
+            createdAt: row.message_time ?? row.quo_created_at ?? row.created_at,
+            media: Array.isArray(row.media) ? row.media : [],
+          };
+          setMessages((previous) => mergeQuoMessages([...previous, newMessage]));
+        },
+      )
+      .subscribe((status) => {
+        threadRealtimeHealthyRef.current = status === "SUBSCRIBED";
+      });
+
+    return () => {
+      threadRealtimeHealthyRef.current = false;
+      void supabase.removeChannel(channel);
+    };
+  }, [canUseQuickChat, open, conversationMeta?.databaseId, conversationMeta?.quoPhoneNumberId]);
 
   // Expanding a minimized chat refreshes the thread immediately, so the user
   // doesn't wait up to a poll interval to see messages that arrived while it was
@@ -488,9 +463,6 @@ export default function QuoPhoneTrigger({
       toast.error(`Extension notice: ${err?.message || "Extension dispatch error"}`, { id: toastId });
     } finally {
       setSending(false);
-      void fetchQuoChatThread(normalizedPhone, chatType)
-        .then((thread) => setMessages(mergeQuoMessages(thread.messages ?? [])))
-        .catch(() => undefined);
     }
   };
 
@@ -533,9 +505,6 @@ export default function QuoPhoneTrigger({
       toast.error(`Failed to schedule: ${err?.message || "Extension error"}`, { id: toastId });
     } finally {
       setSending(false);
-      void fetchQuoChatThread(normalizedPhone, chatType)
-        .then((thread) => setMessages(mergeQuoMessages(thread.messages ?? [])))
-        .catch(() => undefined);
     }
   };
 

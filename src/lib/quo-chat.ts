@@ -26,6 +26,7 @@ export interface QuoChatThreadResponse {
     name?: string | null;
   };
   conversation?: {
+    databaseId: string;
     id: string;
     phoneNumberId: string;
     participants: string[];
@@ -174,6 +175,7 @@ export async function fetchQuoChatThread(participant: string, chatType?: "custom
     },
     conversation: conversation
       ? {
+          databaseId: conversation.id,
           id: conversation.quo_conversation_id,
           phoneNumberId: numberRow?.quo_phone_number_id ?? "",
           participants: [conversation.customer_number ?? participant],
