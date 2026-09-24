@@ -1238,15 +1238,7 @@ export default function LeadsPage() {
                       <CopyableCell text={l.service_type || "—"} defaultWidth={false} className="text-muted-foreground" />
                       <CopyableCell text={address} defaultWidth={false} className="text-muted-foreground" />
                       <CopyableCell text={areaText} defaultWidth={false} className="text-muted-foreground" />
-                      <td className="px-2 py-2 text-center text-muted-foreground">
-                        {nearbyCount > 0 ? (
-                          <span className="inline-flex items-center gap-1 rounded-md bg-red-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-red-600 dark:text-red-400">
-                            {nearbyCount} more
-                          </span>
-                        ) : (
-                          "—"
-                        )}
-                      </td>
+                      
                       <CopyableCell text={formatSchedule(l.customer_schedule_requirements)} defaultWidth={false} className="text-muted-foreground" truncate={false} />
                       <td className="whitespace-nowrap px-2 py-2 text-right text-muted-foreground">
                         {dateStr}
