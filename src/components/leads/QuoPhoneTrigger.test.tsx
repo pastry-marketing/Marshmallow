@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import QuoPhoneTrigger from "@/components/leads/QuoPhoneTrigger";
 import { useAuth } from "@/contexts/AuthContext";
 import { fetchQuoChatThread } from "@/lib/quo-chat";
-import { sendQuoMessageViaExtension } from "@/lib/quo-dashboard";
+import { prepareQuoChatViaExtension, sendQuoMessageViaExtension } from "@/lib/quo-dashboard";
 
 vi.mock("@/contexts/AuthContext", () => ({
   useAuth: vi.fn(),
@@ -29,6 +29,7 @@ vi.mock("@/lib/quo-dashboard", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/quo-dashboard")>();
   return {
     ...original,
+    prepareQuoChatViaExtension: vi.fn(),
     sendQuoMessageViaExtension: vi.fn().mockResolvedValue({ success: true }),
   };
 });
@@ -110,6 +111,14 @@ describe("QuoPhoneTrigger", () => {
 
     const textarea = await screen.findByRole("textbox");
     fireEvent.change(textarea, { target: { value: "Use exact chat" } });
+
+    await waitFor(() => {
+      expect(prepareQuoChatViaExtension).toHaveBeenCalledWith(
+        "https://my.quo.com/inbox/PN123/c/CN_saved_conversation",
+      );
+    });
+    expect(fetchQuoChatThread).toHaveBeenCalledTimes(1);
+
     fireEvent.click(screen.getByRole("button", { name: /send/i }));
 
     await waitFor(() => {

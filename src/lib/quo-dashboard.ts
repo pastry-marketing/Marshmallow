@@ -390,6 +390,21 @@ export interface QuoExtensionResponse {
 }
 
 /**
+ * Opens the saved Quo conversation while the user is composing a message.
+ * This is browser-only preparation and does not read or write the database.
+ */
+export function prepareQuoChatViaExtension(chatUrl: string): void {
+  if (!chatUrl || chatUrl === "#") return;
+  window.postMessage(
+    {
+      action: "QUO_PREPARE_CHAT",
+      chatUrl,
+    },
+    "*",
+  );
+}
+
+/**
  * Sends a message via Chrome Extension postMessage and awaits QUO_SEND_MESSAGE_RESPONSE
  */
 export function sendQuoMessageViaExtension(

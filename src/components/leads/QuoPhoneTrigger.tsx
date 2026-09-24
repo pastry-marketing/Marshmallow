@@ -19,6 +19,7 @@ import {
   getQuoNumberName,
   isTechLineNumber,
   normalizeQuoLeadStatus,
+  prepareQuoChatViaExtension,
   QUO_LEAD_STATUS_CONFIG,
   sendQuoMessageViaExtension,
   scheduleQuoMessageViaExtension,
@@ -203,6 +204,7 @@ export default function QuoPhoneTrigger({
   } | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const preparedChatUrlRef = useRef("");
   // Kept in refs so the live-refresh interval can read the latest minimize state
   // and re-trigger a load without tearing down and rebuilding the subscription.
   const isMinimizedRef = useRef(isMinimized);
@@ -409,6 +411,33 @@ export default function QuoPhoneTrigger({
     if (!open) return;
     messagesEndRef.current?.scrollIntoView?.({ block: "end" });
   }, [messages, open]);
+
+  // Pre-open the exact Quo conversation on the first typed character. This
+  // gives Quo time to load in its background tab while the user finishes the
+  // message, without adding any database traffic.
+  useEffect(() => {
+    if (!messageDraft.trim()) {
+      preparedChatUrlRef.current = "";
+      return;
+    }
+    if (!open || !normalizedPhone || !conversationMeta?.quoConversationId) return;
+
+    const chatUrl = getQuoChatUrl(
+      conversationMeta.quoConversationId,
+      normalizedPhone,
+      conversationMeta.quoPhoneNumberId,
+    );
+    if (preparedChatUrlRef.current === chatUrl) return;
+
+    preparedChatUrlRef.current = chatUrl;
+    prepareQuoChatViaExtension(chatUrl);
+  }, [
+    messageDraft,
+    open,
+    normalizedPhone,
+    conversationMeta?.quoConversationId,
+    conversationMeta?.quoPhoneNumberId,
+  ]);
 
   const handleSend = async () => {
     if (!normalizedPhone) {
