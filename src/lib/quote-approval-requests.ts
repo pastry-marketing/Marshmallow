@@ -34,10 +34,11 @@ type ReviewArgs = {
   reviewNote?: string | null;
 };
 
-const rpc = supabase.rpc as unknown as (
-  name: string,
-  args: Record<string, unknown>,
-) => Promise<{ data: unknown; error: { message: string } | null }>;
+const rpc = (name: string, args: Record<string, unknown>) =>
+  supabase.rpc(name as never, args as never) as unknown as Promise<{
+    data: unknown;
+    error: { message: string } | null;
+  }>;
 
 export function canReviewQuoteApproval(role: AppRole | null | undefined) {
   return role === "admin" || role === "cs_admin";
