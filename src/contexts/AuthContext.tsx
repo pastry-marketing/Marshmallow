@@ -167,7 +167,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // deleted account — only sign out when the queries succeeded and the rows
     // are genuinely missing.
     if (profileRes.error || roleRes.error) {
-      console.error("Failed to load user data", profileRes.error ?? roleRes.error);
+      const err = profileRes.error ?? roleRes.error;
+      console.error("Failed to load user data", err);
+      // If the JWT is expired or invalid, force re-authentication instead of
+      // leaving the user on a blank page with no feedback.
+      const msg = err?.message ?? "";
+      if (msg.includes("JWT") || msg.includes("token") || msg.includes("expired")) {
+        await forceSignOutOrphan();
+        return;
+      }
       setProfileLoaded(true);
       return;
     }
