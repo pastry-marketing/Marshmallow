@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
-import { CheckCircle2, ClipboardCheck, ExternalLink, Search, XCircle } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { CheckCircle2, ClipboardCheck, Search, XCircle } from "lucide-react";
 
+import LeadCard from "@/components/leads/LeadCard";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -18,17 +18,14 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import StatusBadge from "@/components/leads/StatusBadge";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
-import { openLeadFromClick } from "@/lib/lead-navigation";
 import {
   canReviewQuoteApproval,
   reviewQuoteApproval,
   type LeadQuoteApprovalRequest,
   type QuoteApprovalDecision,
 } from "@/lib/quote-approval-requests";
-import { STATUS_LABELS } from "@/lib/constants";
 import type { Lead } from "@/types";
 import { toast } from "sonner";
 
@@ -38,12 +35,11 @@ const requestTable = () => supabase.from("lead_quote_approval_requests" as never
 
 export default function QuoteApprovalRequests() {
   const { role, user } = useAuth();
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [reviewingId, setReviewingId] = useState<string | null>(null);
 
-  const { data: requests = [], isLoading } = useQuery<QuoteApprovalRow[]>({
+  const { data: requests = [], isLoading, refetch } = useQuery<QuoteApprovalRow[]>({
     queryKey: ["quote-approval-requests"],
     queryFn: async () => {
       const { data: rows, error } = await requestTable()
@@ -66,6 +62,25 @@ export default function QuoteApprovalRequests() {
       }));
     },
     refetchInterval: 30_000,
+  });
+
+  const { data: profiles = {} } = useQuery({
+    queryKey: ["profiles-map"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("profiles_public" as never)
+        .select("id, full_name");
+      if (error) return {};
+
+      return ((data ?? []) as { id: string; full_name: string | null }[]).reduce<Record<string, string>>(
+        (profileMap, profile) => {
+          profileMap[profile.id] = profile.full_name || "Unknown user";
+          return profileMap;
+        },
+        {},
+      );
+    },
+    staleTime: 60_000,
   });
 
   useEffect(() => {
@@ -130,7 +145,7 @@ export default function QuoteApprovalRequests() {
   const reviewer = canReviewQuoteApproval(role);
 
   return (
-    <div className="mx-auto max-w-[1200px] space-y-5">
+    <div className="mx-auto max-w-[1400px] space-y-5">
       <section className="glass-panel-strong rounded-[28px] px-5 py-5">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
@@ -167,114 +182,103 @@ export default function QuoteApprovalRequests() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid gap-4">
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
           {filteredRequests.map((request) => {
             const lead = request.lead;
             const customerName = lead?.customer_name || request.lead_customer_name || "Lead";
-            const jobId = lead?.job_id || request.lead_job_id || request.lead_id;
             const busy = reviewingId === request.id;
 
+            if (!lead) {
+              return (
+                <Card key={request.id} className="border-dashed border-border/60">
+                  <CardContent className="flex min-h-[220px] flex-col items-center justify-center gap-2 p-6 text-center">
+                    <ClipboardCheck className="h-8 w-8 text-muted-foreground/30" />
+                    <p className="text-sm font-medium">Lead details are unavailable</p>
+                    <p className="text-xs text-muted-foreground">
+                      Refresh the page or confirm that this reviewer can access the lead.
+                    </p>
+                  </CardContent>
+                </Card>
+              );
+            }
+
             return (
-              <Card key={request.id} className="overflow-hidden border-border/60">
-                <CardContent className="p-5">
-                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                    <div className="min-w-0 flex-1 space-y-3">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h2 className="text-base font-semibold">{customerName}</h2>
-                        {lead && <StatusBadge status={lead.status} size="sm" />}
-                        <span className="rounded-full border border-border/60 px-2 py-0.5 text-[11px] text-muted-foreground">
-                          {jobId}
-                        </span>
-                      </div>
-
-                      <div className="grid gap-2 text-sm text-muted-foreground sm:grid-cols-2">
-                        <p>Requested by {request.requested_by_name || "Customer Service"}</p>
-                        <p>{format(new Date(request.created_at), "MMM d, yyyy · h:mm a")}</p>
-                        <p>
-                          Current status: {STATUS_LABELS[request.previous_status] || request.previous_status.replace(/_/g, " ")}
-                        </p>
-                        {lead?.service_type && <p>Service: {lead.service_type}</p>}
-                      </div>
-
-                      {lead?.address && (
-                        <p className="rounded-2xl border border-border/50 bg-muted/[0.16] p-3 text-sm text-muted-foreground">
-                          {lead.address}
-                        </p>
-                      )}
+              <div key={request.id} className="min-w-0 space-y-2">
+                <div className="rounded-[20px] border border-violet-500/25 bg-violet-500/[0.07] p-3 shadow-sm">
+                  <div className="mb-3 flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-violet-500">
+                        Quote approval requested
+                      </p>
+                      <p className="mt-1 truncate text-xs text-muted-foreground">
+                        By {request.requested_by_name || "Customer Service"}
+                      </p>
                     </div>
-
-                    <div className="flex min-w-[230px] flex-col gap-2">
-                      {lead && (
-                        <Button
-                          variant="outline"
-                          className="gap-1.5"
-                          onClick={(event) => openLeadFromClick(event, lead.id, navigate)}
-                        >
-                          <ExternalLink className="h-4 w-4" />
-                          Open lead
-                        </Button>
-                      )}
-
-                      {reviewer ? (
-                        <>
-                          <AlertDialog>
-                            <AlertDialogTrigger asChild>
-                              <Button className="gap-1.5" disabled={busy}>
-                                <CheckCircle2 className="h-4 w-4" />
-                                Approve quote
-                              </Button>
-                            </AlertDialogTrigger>
-                            <AlertDialogContent>
-                              <AlertDialogHeader>
-                                <AlertDialogTitle>Approve this quote request?</AlertDialogTitle>
-                                <AlertDialogDescription>
-                                  {customerName} will move to Quotes to Send for the quotation team.
-                                </AlertDialogDescription>
-                              </AlertDialogHeader>
-                              <AlertDialogFooter>
-                                <AlertDialogCancel>Go back</AlertDialogCancel>
-                                <AlertDialogAction onClick={() => handleReview(request, "approved")}>
-                                  Approve quote
-                                </AlertDialogAction>
-                              </AlertDialogFooter>
-                            </AlertDialogContent>
-                          </AlertDialog>
-
-                          <AlertDialog>
-                            <AlertDialogTrigger asChild>
-                              <Button variant="outline" className="gap-1.5" disabled={busy}>
-                                <XCircle className="h-4 w-4" />
-                                Decline request
-                              </Button>
-                            </AlertDialogTrigger>
-                            <AlertDialogContent>
-                              <AlertDialogHeader>
-                                <AlertDialogTitle>Decline this quote request?</AlertDialogTitle>
-                                <AlertDialogDescription>
-                                  The request will close and the lead will stay at its current status.
-                                </AlertDialogDescription>
-                              </AlertDialogHeader>
-                              <AlertDialogFooter>
-                                <AlertDialogCancel>Go back</AlertDialogCancel>
-                                <AlertDialogAction
-                                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                                  onClick={() => handleReview(request, "declined")}
-                                >
-                                  Decline request
-                                </AlertDialogAction>
-                              </AlertDialogFooter>
-                            </AlertDialogContent>
-                          </AlertDialog>
-                        </>
-                      ) : (
-                        <p className="rounded-xl border border-border/60 px-3 py-2 text-center text-xs text-muted-foreground">
-                          Waiting for CS Admin or Admin approval
-                        </p>
-                      )}
-                    </div>
+                    <span className="shrink-0 text-[10px] text-muted-foreground">
+                      {format(new Date(request.created_at), "MMM d · h:mm a")}
+                    </span>
                   </div>
-                </CardContent>
-              </Card>
+
+                  {reviewer ? (
+                    <div className="grid grid-cols-2 gap-2">
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button size="sm" className="gap-1.5" disabled={busy}>
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                            Approve quote
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Approve this quote request?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              {customerName} will move to Quotes to Send for the quotation team.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Go back</AlertDialogCancel>
+                            <AlertDialogAction onClick={() => handleReview(request, "approved")}>
+                              Approve quote
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button size="sm" variant="outline" className="gap-1.5" disabled={busy}>
+                            <XCircle className="h-3.5 w-3.5" />
+                            Decline request
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Decline this quote request?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              The request will close and the lead will stay at its current status.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Go back</AlertDialogCancel>
+                            <AlertDialogAction
+                              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                              onClick={() => handleReview(request, "declined")}
+                            >
+                              Decline request
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+                    </div>
+                  ) : (
+                    <p className="rounded-xl border border-violet-500/20 bg-background/40 px-3 py-2 text-center text-xs text-muted-foreground">
+                      Waiting for CS Admin or Admin approval
+                    </p>
+                  )}
+                </div>
+
+                <LeadCard lead={lead} profiles={profiles} onRefresh={() => void refetch()} />
+              </div>
             );
           })}
         </div>
