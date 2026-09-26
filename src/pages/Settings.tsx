@@ -1161,25 +1161,25 @@ const Settings = () => {
               <span className="text-[11px] font-medium text-muted-foreground">{ALL_NAV_ITEMS.length} controllable items</span>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+            <div className="max-h-[calc(100vh-14rem)] overflow-auto overscroll-contain">
+              <table className="w-full min-w-max text-sm">
                 <thead>
                   <tr className="border-b border-border/30 bg-muted/20">
-                    <th className="text-left px-4 py-3 text-[11px] font-semibold text-muted-foreground/60 uppercase tracking-wider">
+                    <th className="sticky left-0 top-0 z-30 min-w-[220px] border-b border-r border-border/40 bg-card px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60 shadow-[8px_0_14px_-12px_hsl(var(--foreground)/0.45)]">
                       User
                     </th>
                     {ALL_NAV_ITEMS.map((section) => (
                       <th
                         key={section}
-                        className="px-3 py-3 text-[10px] font-semibold text-muted-foreground/60 text-center uppercase tracking-wider"
+                        className="sticky top-0 z-20 border-b border-border/40 bg-card px-3 py-3 text-center text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60"
                       >
                         {NAV_SECTION_LABELS[section] || section}
                       </th>
                     ))}
-                    <th className="px-3 py-3 text-[10px] font-semibold text-muted-foreground/60 text-center uppercase tracking-wider">
+                    <th className="sticky top-0 z-20 border-b border-border/40 bg-card px-3 py-3 text-center text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
                       Tech Report
                     </th>
-                    <th className="px-3 py-3 text-[10px] font-semibold text-muted-foreground/60 text-center uppercase tracking-wider">
+                    <th className="sticky top-0 z-20 border-b border-border/40 bg-card px-3 py-3 text-center text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
                       Quotation Master
                     </th>
                   </tr>
@@ -1189,9 +1189,9 @@ const Settings = () => {
                   {nonAdminUsers.map((u) => (
                     <tr
                       key={u.id}
-                      className="border-b border-border/20 last:border-b-0 hover:bg-muted/10 transition-colors"
+                      className="group border-b border-border/20 transition-colors last:border-b-0 hover:bg-muted/10"
                     >
-                      <td className="px-4 py-3">
+                      <td className="sticky left-0 z-10 min-w-[220px] border-r border-border/30 bg-card px-4 py-3 shadow-[8px_0_14px_-12px_hsl(var(--foreground)/0.45)]">
                         <div className="flex items-center gap-2.5">
                           <Avatar className="h-7 w-7">
                             <AvatarFallback className="bg-muted text-muted-foreground text-[9px] font-bold">
@@ -1263,7 +1263,7 @@ const Settings = () => {
               <span className="text-[11px] font-medium text-muted-foreground">{ALL_LEAD_STATUSES.length} workflow states</span>
             </div>
 
-            <div className="overflow-x-auto">
+            <div>
               <div className="border-b border-border/30 bg-muted/10 px-5 py-4">
                 <div className="mb-3">
                   <span className="text-sm font-semibold text-foreground">Role Defaults</span>
@@ -1272,17 +1272,17 @@ const Settings = () => {
                   </p>
                 </div>
 
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
+                <div className="max-h-[min(46vh,28rem)] overflow-auto overscroll-contain rounded-xl border border-border/30">
+                  <table className="w-full min-w-max text-sm">
                     <thead>
                       <tr className="border-b border-border/30 bg-muted/20">
-                        <th className="text-left px-4 py-3 text-[11px] font-semibold text-muted-foreground/60 uppercase tracking-wider">
+                        <th className="sticky left-0 top-0 z-30 min-w-[220px] border-b border-r border-border/40 bg-card px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60 shadow-[8px_0_14px_-12px_hsl(var(--foreground)/0.45)]">
                           Role
                         </th>
                         {ALL_LEAD_STATUSES.map((status) => (
                           <th
                             key={`role-${status}`}
-                            className="px-2 py-3 text-[9px] font-semibold text-muted-foreground/60 text-center min-w-[80px] uppercase tracking-wider"
+                            className="sticky top-0 z-20 min-w-[80px] border-b border-border/40 bg-card px-2 py-3 text-center text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/60"
                           >
                             {STATUS_LABELS[status]}
                           </th>
@@ -1294,9 +1294,9 @@ const Settings = () => {
                       {MANAGED_ROLES.map((managedRole) => (
                         <tr
                           key={managedRole}
-                          className="border-b border-border/20 last:border-b-0 hover:bg-muted/10 transition-colors"
+                          className="group border-b border-border/20 transition-colors last:border-b-0 hover:bg-muted/10"
                         >
-                          <td className="px-4 py-3">
+                          <td className="sticky left-0 z-10 min-w-[220px] border-r border-border/30 bg-card px-4 py-3 shadow-[8px_0_14px_-12px_hsl(var(--foreground)/0.45)]">
                             <div>
                               <p className="text-[12px] font-medium">{formatRoleLabel(managedRole)}</p>
                               <p className="text-[10px] text-muted-foreground/50">Role-wide default visibility</p>
@@ -1324,63 +1324,65 @@ const Settings = () => {
                 </div>
               </div>
 
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-border/30 bg-muted/20">
-                    <th className="text-left px-4 py-3 text-[11px] font-semibold text-muted-foreground/60 sticky left-0 bg-muted/20 z-10 uppercase tracking-wider">
-                      User
-                    </th>
-                    {ALL_LEAD_STATUSES.map((status) => (
-                      <th
-                        key={status}
-                        className="px-2 py-3 text-[9px] font-semibold text-muted-foreground/60 text-center min-w-[80px] uppercase tracking-wider"
-                      >
-                        {STATUS_LABELS[status]}
+              <div className="max-h-[calc(100vh-14rem)] overflow-auto overscroll-contain">
+                <table className="w-full min-w-max text-sm">
+                  <thead>
+                    <tr className="border-b border-border/30 bg-muted/20">
+                      <th className="sticky left-0 top-0 z-30 min-w-[220px] border-b border-r border-border/40 bg-card px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60 shadow-[8px_0_14px_-12px_hsl(var(--foreground)/0.45)]">
+                        User
                       </th>
-                    ))}
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {nonAdminUsers.map((targetUser) => (
-                    <tr
-                      key={targetUser.id}
-                      className="border-b border-border/20 last:border-b-0 hover:bg-muted/10 transition-colors"
-                    >
-                      <td className="px-4 py-3 sticky left-0 bg-card z-10">
-                        <div className="flex items-center gap-2.5">
-                          <Avatar className="h-7 w-7">
-                            <AvatarFallback className="bg-muted text-muted-foreground text-[9px] font-bold">
-                              {getInitials(targetUser.full_name)}
-                            </AvatarFallback>
-                          </Avatar>
-                          <div>
-                            <p className="text-[12px] font-medium">{targetUser.full_name}</p>
-                            <p className="text-[10px] text-muted-foreground/50 capitalize">
-                              {targetUser.role.replace("_", " ")}
-                            </p>
-                          </div>
-                        </div>
-                      </td>
-
                       {ALL_LEAD_STATUSES.map((status) => (
-                        <td key={status} className="px-2 py-3 text-center">
-                          <Switch
-                            checked={getStatusVisibility(targetUser.id, status)}
-                            onCheckedChange={(checked) =>
-                              toggleStatusVisibility.mutate({
-                                userId: targetUser.id,
-                                status,
-                                isVisible: checked,
-                              })
-                            }
-                          />
-                        </td>
+                        <th
+                          key={status}
+                          className="sticky top-0 z-20 min-w-[80px] border-b border-border/40 bg-card px-2 py-3 text-center text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/60"
+                        >
+                          {STATUS_LABELS[status]}
+                        </th>
                       ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+
+                  <tbody>
+                    {nonAdminUsers.map((targetUser) => (
+                      <tr
+                        key={targetUser.id}
+                        className="group border-b border-border/20 transition-colors last:border-b-0 hover:bg-muted/10"
+                      >
+                        <td className="sticky left-0 z-10 min-w-[220px] border-r border-border/30 bg-card px-4 py-3 shadow-[8px_0_14px_-12px_hsl(var(--foreground)/0.45)]">
+                          <div className="flex items-center gap-2.5">
+                            <Avatar className="h-7 w-7">
+                              <AvatarFallback className="bg-muted text-muted-foreground text-[9px] font-bold">
+                                {getInitials(targetUser.full_name)}
+                              </AvatarFallback>
+                            </Avatar>
+                            <div>
+                              <p className="text-[12px] font-medium">{targetUser.full_name}</p>
+                              <p className="text-[10px] text-muted-foreground/50 capitalize">
+                                {targetUser.role.replace("_", " ")}
+                              </p>
+                            </div>
+                          </div>
+                        </td>
+
+                        {ALL_LEAD_STATUSES.map((status) => (
+                          <td key={status} className="px-2 py-3 text-center">
+                            <Switch
+                              checked={getStatusVisibility(targetUser.id, status)}
+                              onCheckedChange={(checked) =>
+                                toggleStatusVisibility.mutate({
+                                  userId: targetUser.id,
+                                  status,
+                                  isVisible: checked,
+                                })
+                              }
+                            />
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </CardContent>
         </Card>
