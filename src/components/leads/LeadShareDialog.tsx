@@ -54,18 +54,18 @@ export default function LeadShareDialog({ leadId, customerName, className }: Pro
     if (!rolesRes.data) return;
 
     const csUserIds = (rolesRes.data as CustomerServiceRoleRow[]).map((roleRow) => roleRow.user_id);
-    const { data: profiles } = await supabase.from("profiles").select("id, full_name, email").in("id", csUserIds);
+    const { data: profiles } = await supabase.from("profiles_public" as never).select("id, full_name").in("id", csUserIds) as { data: { id: string; full_name: string | null }[] | null };
     const sharedIds = new Set(
       ((sharesRes.data as LeadShareRow[] | null | undefined) ?? []).map((share) => share.shared_with_user_id),
     );
 
     setCsrUsers(
-      ((profiles as ProfileRow[] | null) ?? [])
+      ((profiles ?? []) as { id: string; full_name: string | null }[])
         .filter((profile) => profile.id !== user?.id)
         .map((profile) => ({
           user_id: profile.id,
-          display_name: profile.full_name || profile.email || "Unnamed User",
-          email: profile.email,
+          display_name: profile.full_name || "Unnamed User",
+          email: null,
           isShared: sharedIds.has(profile.id),
         })),
     );
