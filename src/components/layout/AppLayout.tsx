@@ -49,6 +49,7 @@ export default function AppLayout() {
   const pageMeta: Record<string, { title: string; subtitle: string }> = {
     "/leads": { title: "Leads", subtitle: "Track intake, ownership, and next actions." },
     "/lead-payment-requests": { title: "Payment approvals", subtitle: "Review payment evidence and resolve pending requests." },
+    "/quote-approval": { title: "Quote Approval", subtitle: "Review quote requests before they move to the sending queue." },
     "/quote-pending": { title: "Quotes to send", subtitle: "Prioritize and complete customer quotations." },
     "/lead-cancellation-requests": { title: "Cancellation Requests", subtitle: "Review cancellation reasons and approve or decline requests." },
     "/schedule": { title: "Schedule", subtitle: "Review jobs by day, week, and date range." },

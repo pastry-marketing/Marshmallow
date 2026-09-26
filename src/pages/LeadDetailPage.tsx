@@ -47,6 +47,7 @@ import { LEAD_STATUS_CONFIG, type Lead, type LeadStatus, type LeadCancellationRe
 import { getChangeableStatuses, canChangeStatus } from "@/lib/constants";
 import { optimizeImageForUpload } from "@/lib/image-upload";
 import { updateLeadById } from "@/lib/lead-updates";
+import { requestQuoteApproval } from "@/lib/quote-approval-requests";
 import StatusBadge from "@/components/leads/StatusBadge";
 import CancelledStatusBadge from "@/components/leads/CancelledStatusBadge";
 import NearbyUrgentLeads from "@/components/leads/NearbyUrgentLeads";
@@ -653,6 +654,13 @@ export default function LeadDetailPage() {
 
     setSaving(true);
     const currentUserName = profile?.full_name || user.email || "Unknown user";
+    const quoteApprovalRequested =
+      role === "customer_service" &&
+      form.status === "pending_to_send" &&
+      (isNew || originalLead?.status !== "pending_to_send");
+    const savedStatus: LeadStatus = quoteApprovalRequested
+      ? (originalLead?.status ?? "waiting_complete_details")
+      : form.status;
 
     let scheduled_time_start: string | null = null;
     let scheduled_time_end: string | null = null;
@@ -675,7 +683,7 @@ export default function LeadDetailPage() {
       state: form.state || null,
       zip_code: form.zip_code || null,
       service_type: form.service_type || null,
-      status: form.status,
+      status: savedStatus,
       scheduled_date: form.scheduled_date || null,
       scheduled_time_start,
       scheduled_time_end,
@@ -734,6 +742,28 @@ export default function LeadDetailPage() {
         setLeadId(newLeadId);
         setOriginalLead(data as Lead);
 
+        let quoteApprovalSucceeded = false;
+        if (quoteApprovalRequested) {
+          try {
+            await requestQuoteApproval({
+              lead: {
+                id: newLeadId,
+                job_id: data.job_id,
+                customer_name: data.customer_name,
+                status: savedStatus,
+              },
+              requesterId: user.id,
+            });
+            quoteApprovalSucceeded = true;
+          } catch (approvalError) {
+            toast.error(
+              approvalError instanceof Error
+                ? `Lead created, but approval request failed: ${approvalError.message}`
+                : "Lead created, but approval request failed",
+            );
+          }
+        }
+
         await insertInitialNotes(newLeadId);
 
         if (newPhotos.length > 0) {
@@ -748,7 +778,7 @@ export default function LeadDetailPage() {
           await dispatchLeadStatusNotification({
             leadId: newLeadId,
             leadName: form.customer_name,
-            status: form.status,
+            status: savedStatus,
             expectedCompletionDate: form.expected_completion_date,
           });
         } catch (notifErr) {
@@ -761,7 +791,11 @@ export default function LeadDetailPage() {
           console.warn("Activity logging failed:", actErr);
         }
 
-        toast.success("Lead created!");
+        if (quoteApprovalSucceeded) {
+          toast.success("Lead created and quote sent for approval");
+        } else if (!quoteApprovalRequested) {
+          toast.success("Lead created!");
+        }
 
         navigate(`/leads/${newLeadId}`, { replace: true });
         setSaving(false);
@@ -775,7 +809,7 @@ export default function LeadDetailPage() {
       if (form.status === "paid" && form.amount) {
         updatePayload.amount = parseAmount(form.amount);
       }
-      if (previousStatus !== form.status) {
+      if (previousStatus !== savedStatus) {
         updatePayload.cs_tag = null;
       }
 
@@ -791,6 +825,18 @@ export default function LeadDetailPage() {
         }
       }
 
+      if (quoteApprovalRequested && previousStatus) {
+        await requestQuoteApproval({
+          lead: {
+            id: leadId,
+            job_id: originalLead?.job_id || jobId || leadId,
+            customer_name: form.customer_name,
+            status: previousStatus,
+          },
+          requesterId: user.id,
+        });
+      }
+
       if (newPhotos.length > 0) {
         try {
           await uploadNewPhotos(leadId);
@@ -801,14 +847,14 @@ export default function LeadDetailPage() {
       }
 
       if (
-        (previousStatus !== form.status && (form.status === "urgent_job" || form.status === "need_tech" || form.status === "job_in_progress")) ||
-        (form.status === "job_in_progress" && originalLead?.expected_completion_date !== form.expected_completion_date && form.expected_completion_date)
+        (previousStatus !== savedStatus && (savedStatus === "urgent_job" || savedStatus === "need_tech" || savedStatus === "job_in_progress")) ||
+        (savedStatus === "job_in_progress" && originalLead?.expected_completion_date !== form.expected_completion_date && form.expected_completion_date)
       ) {
         try {
           await dispatchLeadStatusNotification({
             leadId: leadId,
             leadName: form.customer_name,
-            status: form.status,
+            status: savedStatus,
             expectedCompletionDate: form.expected_completion_date,
           });
         } catch (notifErr) {
@@ -818,9 +864,9 @@ export default function LeadDetailPage() {
 
       try {
         const changedDetails: Record<string, unknown> = { customer_name: form.customer_name };
-        if (previousStatus && previousStatus !== form.status) {
+        if (previousStatus && previousStatus !== savedStatus) {
           changedDetails.status_from = LEAD_STATUS_CONFIG[previousStatus]?.label || previousStatus;
-          changedDetails.status_to = LEAD_STATUS_CONFIG[form.status]?.label || form.status;
+          changedDetails.status_to = LEAD_STATUS_CONFIG[savedStatus]?.label || savedStatus;
         }
         await logActivity(user.id, "updated", "lead", leadId, changedDetails);
       } catch (actErr) {
@@ -831,7 +877,7 @@ export default function LeadDetailPage() {
       setTimeout(() => setSaved(false), 2000);
 
       await fetchLead();
-      toast.success("Lead updated!");
+      toast.success(quoteApprovalRequested ? "Lead updated and quote sent for approval" : "Lead updated!");
     } catch (err: unknown) {
       console.error("Failed to save lead:", err);
       const message = err instanceof Error ? err.message : "Failed to save lead";

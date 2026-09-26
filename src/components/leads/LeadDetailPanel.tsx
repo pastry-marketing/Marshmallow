@@ -60,6 +60,7 @@ import {
 } from "@/lib/cancellation-requests";
 import { updateLeadById } from "@/lib/lead-updates";
 import { dispatchLeadStatusNotification } from "@/lib/lead-notifications";
+import { requestQuoteApproval } from "@/lib/quote-approval-requests";
 
 interface Props {
   leadId: string;
@@ -510,6 +511,13 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
       const previousStatus = lead?.status;
       const newStatus = form.status;
       const changes = buildLeadChanges();
+      const quoteApprovalRequested =
+        role === "customer_service" &&
+        newStatus === "pending_to_send" &&
+        previousStatus !== "pending_to_send";
+      const savedStatus = quoteApprovalRequested ? previousStatus : newStatus;
+      if (!savedStatus) throw new Error("Current lead status is unavailable");
+      if (quoteApprovalRequested) delete changes.status;
 
       const updateData: Record<string, unknown> = {
         customer_name: form.customer_name,
@@ -521,7 +529,7 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
         city: form.city,
         state: form.state,
         zip_code: form.zip_code,
-        status: form.status,
+        status: savedStatus,
         scheduled_date: form.scheduled_date,
         scheduled_time_start: form.scheduled_time_start,
         scheduled_time_end: form.scheduled_time_end,
@@ -552,7 +560,7 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
         updateData.cancellation_reason = null;
       }
 
-      if (form.status !== lead?.status) {
+      if (!quoteApprovalRequested && form.status !== lead?.status) {
         (updateData as Record<string, unknown>).cs_tag = null;
       }
 
@@ -568,23 +576,27 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
         }
       }
 
+      if (quoteApprovalRequested && lead) {
+        await requestQuoteApproval({ lead, requesterId: user.id });
+      }
+
       if (
-        (lead?.status !== form.status && (form.status === "urgent_job" || form.status === "need_tech" || form.status === "job_in_progress")) ||
-        (form.status === "job_in_progress" && lead?.expected_completion_date !== form.expected_completion_date && form.expected_completion_date)
+        (lead?.status !== savedStatus && (savedStatus === "urgent_job" || savedStatus === "need_tech" || savedStatus === "job_in_progress")) ||
+        (savedStatus === "job_in_progress" && lead?.expected_completion_date !== form.expected_completion_date && form.expected_completion_date)
       ) {
         await dispatchLeadStatusNotification({
           leadId,
           leadName: form.customer_name,
-          status: form.status,
+          status: savedStatus,
           expectedCompletionDate: form.expected_completion_date,
         });
       }
 
-      if (lead?.status !== form.status && form.status === "quote_updated") {
+      if (lead?.status !== savedStatus && savedStatus === "quote_updated") {
         await dispatchLeadStatusNotification({
           leadId,
           leadName: form.customer_name,
-          status: form.status,
+          status: savedStatus,
           quoteRequestedBy: lead?.quote_requested_by,
         });
       }
@@ -598,26 +610,28 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
         });
       }
 
-      if (previousStatus !== newStatus) {
+      if (previousStatus !== savedStatus) {
         await logActivity(user.id, "status_changed", "lead", leadId, {
           target_name: lead?.job_id || leadId,
           customer_name: form.customer_name,
           job_id: lead?.job_id || null,
           status_from: previousStatus,
-          status_to: newStatus,
+          status_to: savedStatus,
           changes: {
             status: {
               before: previousStatus ?? null,
-              after: newStatus ?? null,
+              after: savedStatus ?? null,
             },
           },
         });
       }
+
+      return { quoteApprovalRequested };
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       setSaved(true);
       setTimeout(() => setSaved(false), 1800);
-      toast.success("Lead saved");
+      toast.success(result?.quoteApprovalRequested ? "Lead saved and quote sent for approval" : "Lead saved");
       queryClient.invalidateQueries({ queryKey: ["lead", leadId] });
       onUpdate();
     },

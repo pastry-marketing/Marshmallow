@@ -56,6 +56,11 @@ const NAV_SECTION_LABELS: Record<string, string> = {
   schedule: "Schedule",
   areas: "Area Insights",
   cancellation_requests: "Lead Cancellation Requests",
+  payment_requests: "Payment Approvals",
+  quote_approval_requests: "Quote Approval",
+  quote_pending_requests: "Quotes to Send",
+  map_view: "Map View",
+  technicians: "Technicians",
   quick_chat: "CX Quickchat",
   tech_quick_chat: "Tech Quickchat",
 };

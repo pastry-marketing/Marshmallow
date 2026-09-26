@@ -4,9 +4,9 @@ import { ALL_LEAD_STATUSES, ALL_NAV_ITEMS, type NavItem } from "@/lib/constants"
 const DEFAULT_NAV_ACCESS: Record<AppRole, Set<NavItem>> = {
   admin: new Set(ALL_NAV_ITEMS),
   processor: new Set(["leads", "schedule", "cancellation_requests", "map_view", "technicians"]),
-  customer_service: new Set(["leads", "schedule"]),
+  customer_service: new Set(["leads", "schedule", "quote_approval_requests"]),
   opr: new Set(["leads"]),
-  cs_admin: new Set(["leads", "schedule"]),
+  cs_admin: new Set(["leads", "schedule", "quote_approval_requests"]),
   // opr_admin mirrors opr's default access; the Technicians tab is granted per
   // user via navigation permissions, and unlocks add/import for this role.
   opr_admin: new Set(["leads"]),

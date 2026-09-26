@@ -30,6 +30,7 @@ import { formatUSPhone, hasContactNumber } from "@/lib/phone";
 import { logActivity } from "@/lib/activity";
 import { dispatchLeadStatusNotification } from "@/lib/lead-notifications";
 import { optimizeImageForUpload } from "@/lib/image-upload";
+import { requestQuoteApproval } from "@/lib/quote-approval-requests";
 import { motion, AnimatePresence } from "framer-motion";
 import NumberNameCombobox from "./NumberNameCombobox";
 import MultiDateTimePicker from "./MultiDateTimePicker";
@@ -238,6 +239,8 @@ const AddLeadDialog = ({ open, onOpenChange, onSuccess, initialData }: Props) =>
 
     const jobId = generateJobId();
     const currentUserName = profile?.full_name || user.email || "Unknown user";
+    const requestsQuoteApproval = role === "customer_service" && form.status === "pending_to_send";
+    const createdStatus: LeadStatus = requestsQuoteApproval ? "waiting_complete_details" : form.status;
 
     let scheduled_time_start: string | null = null;
     let scheduled_time_end: string | null = null;
@@ -257,7 +260,7 @@ const AddLeadDialog = ({ open, onOpenChange, onSuccess, initialData }: Props) =>
       address: form.address || null,
       half_address: form.half_address || null,
       service_type: form.service_type?.trim() || "",
-      status: form.status,
+      status: createdStatus,
       scheduled_date: form.scheduled_date || null,
       scheduled_time_start,
       scheduled_time_end,
@@ -288,6 +291,28 @@ const AddLeadDialog = ({ open, onOpenChange, onSuccess, initialData }: Props) =>
     }
 
     if (data) {
+      let quoteApprovalRequested = false;
+      if (requestsQuoteApproval) {
+        try {
+          await requestQuoteApproval({
+            lead: {
+              id: data.id,
+              job_id: data.job_id,
+              customer_name: data.customer_name,
+              status: createdStatus,
+            },
+            requesterId: user.id,
+          });
+          quoteApprovalRequested = true;
+        } catch (approvalError) {
+          toast.error(
+            approvalError instanceof Error
+              ? `Lead created, but approval request failed: ${approvalError.message}`
+              : "Lead created, but approval request failed",
+          );
+        }
+      }
+
       for (const photo of photos) {
         const optimizedPhoto = await optimizeImageForUpload(photo);
         const ext = optimizedPhoto.name.split(".").pop();
@@ -334,15 +359,19 @@ const AddLeadDialog = ({ open, onOpenChange, onSuccess, initialData }: Props) =>
       await dispatchLeadStatusNotification({
         leadId: data.id,
         leadName: form.customer_name,
-        status: form.status,
+        status: createdStatus,
         isNewLead: true,
       });
       await logActivity(user.id, "created", "lead", data.id, {
         customer_name: form.customer_name,
-        status: form.status,
+        status: createdStatus,
       });
 
-      toast.success("Lead created successfully!");
+      if (quoteApprovalRequested) {
+        toast.success("Lead created and quote sent for approval");
+      } else if (!requestsQuoteApproval) {
+        toast.success("Lead created successfully!");
+      }
       onSuccess();
       closeDialog(true);
     }

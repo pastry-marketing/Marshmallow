@@ -16,6 +16,7 @@ import {
   Megaphone,
   KeyRound,
   FileWarning,
+  ClipboardCheck,
   Shield,
   AlertTriangle,
 } from "lucide-react";
@@ -60,6 +61,7 @@ const getNavItems = (role: string) => [
   { title: "Map View", url: "/map-view", icon: MapIcon, navKey: "map_view", group: "Work" },
   { title: "Cancellation requests", url: "/lead-cancellation-requests", icon: ClipboardX, navKey: "cancellation_requests", group: "Review" },
   { title: "Payment approvals", url: "/lead-payment-requests", icon: DollarSign, navKey: "payment_requests", group: "Review" },
+  { title: "Quote Approval", url: "/quote-approval", icon: ClipboardCheck, navKey: "quote_approval_requests", group: "Review" },
   { title: "Quotes to send", url: "/quote-pending", icon: FileWarning, navKey: "quote_pending_requests", group: "Review" },
   { title: "Technicians", url: "/technicians", icon: Contact, navKey: "technicians", group: "Manage" },
   { title: "Area Insights", url: "/areas", icon: MapPin, navKey: "areas", group: "Manage" },
@@ -149,6 +151,24 @@ export default function AppSidebar() {
     refetchInterval: 30000,
   });
 
+  const canSeeQuoteApproval = canAccess("quote_approval_requests");
+  const { data: pendingQuoteApprovalCount = 0 } = useQuery({
+    queryKey: ["pending-quote-approval-count"],
+    enabled: canSeeQuoteApproval,
+    queryFn: async () => {
+      const { count, error } = await supabase
+        .from("lead_quote_approval_requests" as never)
+        .select("*", { count: "exact", head: true })
+        .eq("status", "pending");
+      if (error) {
+        console.error("Error fetching pending quote approval count:", error.message);
+        return 0;
+      }
+      return count || 0;
+    },
+    refetchInterval: 30000,
+  });
+
   const { data: pendingQuoteCount = 0 } = useQuery({
     queryKey: ["pending-quote-requests-count"],
     queryFn: async () => {
@@ -231,6 +251,24 @@ export default function AppSidebar() {
       void supabase.removeChannel(channel);
     };
   }, [queryClient, role]);
+
+  useEffect(() => {
+    if (!canSeeQuoteApproval) return;
+    const channel = supabase
+      .channel("quote-approval-sidebar-realtime")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "lead_quote_approval_requests" },
+        () => {
+          queryClient.invalidateQueries({ queryKey: ["pending-quote-approval-count"] });
+        },
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [canSeeQuoteApproval, queryClient]);
 
   // Realtime subscription for quote pending requests badge and notification
   useEffect(() => {
@@ -467,6 +505,12 @@ export default function AppSidebar() {
                                   <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500 shadow-[0_0_6px_#10b981]"></span>
                                 </span>
                               )}
+                              {item.navKey === "quote_approval_requests" && pendingQuoteApprovalCount > 0 && collapsed && (
+                                <span className="absolute -top-1.5 -right-1.5 flex h-2 w-2 z-20">
+                                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75"></span>
+                                  <span className="relative inline-flex rounded-full h-2 w-2 bg-violet-500 shadow-[0_0_6px_#8b5cf6]"></span>
+                                </span>
+                              )}
                               {item.navKey === "quote_pending_requests" && pendingQuoteCount > 0 && collapsed && (
                                 <span className="absolute -top-1.5 -right-1.5 flex h-2 w-2 z-20">
                                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
@@ -494,6 +538,12 @@ export default function AppSidebar() {
                                     <span className="relative flex h-2 w-2 shrink-0">
                                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                                       <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500 shadow-[0_0_8px_#10b981]"></span>
+                                    </span>
+                                  )}
+                                  {item.navKey === "quote_approval_requests" && pendingQuoteApprovalCount > 0 && (
+                                    <span className="relative flex h-2 w-2 shrink-0">
+                                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75"></span>
+                                      <span className="relative inline-flex rounded-full h-2 w-2 bg-violet-500 shadow-[0_0_8px_#8b5cf6]"></span>
                                     </span>
                                   )}
                                   {item.navKey === "quote_pending_requests" && pendingQuoteCount > 0 && (

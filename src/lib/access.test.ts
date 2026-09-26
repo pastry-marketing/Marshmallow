@@ -59,6 +59,26 @@ describe("technician details", () => {
   });
 });
 
+describe("quote approval navigation access", () => {
+  it.each(["customer_service", "cs_admin"] as const)("is visible to %s by default", (role) => {
+    expect(getDefaultNavAccess(role).has("quote_approval_requests")).toBe(true);
+    expect(canAccessNavItem(role, "quote_approval_requests")).toBe(true);
+  });
+
+  it("respects an admin-managed deny override", () => {
+    const deniedOverride = [{ nav_section: "quote_approval_requests", allowed: false }] as NavigationPermission[];
+
+    expect(canAccessNavItem("customer_service", "quote_approval_requests", deniedOverride)).toBe(false);
+    expect(canAccessNavItem("cs_admin", "quote_approval_requests", deniedOverride)).toBe(false);
+  });
+
+  it("can be granted to another non-admin role", () => {
+    const allowedOverride = [{ nav_section: "quote_approval_requests", allowed: true }] as NavigationPermission[];
+
+    expect(canAccessNavItem("processor", "quote_approval_requests", allowedOverride)).toBe(true);
+  });
+});
+
 describe("OPR Admin inheritance", () => {
   it("has the same default navigation as OPR", () => {
     expect([...getDefaultNavAccess("opr_admin")]).toEqual([...getDefaultNavAccess("opr")]);

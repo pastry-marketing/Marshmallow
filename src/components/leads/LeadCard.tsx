@@ -7,6 +7,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useIsLastMessageFromCustomer } from "@/hooks/useIsLastMessageFromCustomer";
 import { expandStateAbbreviation } from "@/lib/utils";
 import { openLeadFromClick } from "@/lib/lead-navigation";
+import { requestQuoteApproval } from "@/lib/quote-approval-requests";
 import { Lead, LeadStatus, STATUS_LABELS, getChangeableStatuses, canChangeStatus } from "@/lib/constants";
 import { CS_TAG_LABELS, type CsTag } from "@/types";
 import { Card } from "@/components/ui/card";
@@ -1131,6 +1132,20 @@ function LeadCard({
 
     if (newStatus === "activate_customer" && (isAdmin || isProcessor)) {
       setActivateCustomerOpen(true);
+      return;
+    }
+
+    if (newStatus === "pending_to_send" && role === "customer_service") {
+      if (!user) return;
+      setChangingStatus(true);
+      try {
+        await requestQuoteApproval({ lead, requesterId: user.id });
+        toast.success("Quote sent for approval");
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Failed to request quote approval");
+      } finally {
+        setChangingStatus(false);
+      }
       return;
     }
 
