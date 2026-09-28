@@ -150,6 +150,17 @@ const StatusDropdownFiltered = ({
   );
 };
 
+/**
+ * Read a money input. An empty field clears the value, and a literal 0 is kept:
+ * `parseFloat(value) || null` turned 0 into null, so typing 0 silently blanked
+ * the field instead of saving it.
+ */
+const parseAmountInput = (value: string): number | null => {
+  if (value.trim() === "") return null;
+  const parsed = parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
 const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
   const { user, role, profile, canAccess } = useAuth();
   const queryClient = useQueryClient();
@@ -1062,7 +1073,7 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
                         type="number"
                         step="0.01"
                         value={form.labor_amount ?? ""}
-                        onChange={(e) => update("labor_amount", parseFloat(e.target.value) || null)}
+                        onChange={(e) => update("labor_amount", parseAmountInput(e.target.value))}
                         className={fieldClass}
                       />
                     </div>
@@ -1073,7 +1084,7 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
                         type="number"
                         step="0.01"
                         value={form.material_amount ?? ""}
-                        onChange={(e) => update("material_amount", parseFloat(e.target.value) || null)}
+                        onChange={(e) => update("material_amount", parseAmountInput(e.target.value))}
                         className={fieldClass}
                       />
                     </div>
@@ -1084,7 +1095,7 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
                         type="number"
                         step="0.01"
                         value={form.for_you_amount ?? ""}
-                        onChange={(e) => update("for_you_amount", parseFloat(e.target.value) || null)}
+                        onChange={(e) => update("for_you_amount", parseAmountInput(e.target.value))}
                         className={fieldClass}
                       />
                     </div>
@@ -1095,7 +1106,7 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
                         type="number"
                         step="0.01"
                         value={form.for_us_amount ?? ""}
-                        onChange={(e) => update("for_us_amount", parseFloat(e.target.value) || null)}
+                        onChange={(e) => update("for_us_amount", parseAmountInput(e.target.value))}
                         className={fieldClass}
                       />
                     </div>
@@ -1214,7 +1225,7 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
                   type="number"
                   step="0.01"
                   value={form.amount ?? ""}
-                  onChange={(e) => update("amount", parseFloat(e.target.value) || null)}
+                  onChange={(e) => update("amount", parseAmountInput(e.target.value))}
                   className={fieldClass}
                 />
               </div>

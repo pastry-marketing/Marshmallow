@@ -1282,10 +1282,15 @@ function LeadCard({
       let screenshotUrl: string | null = null;
       if (screenshotFile) {
         const optimizedScreenshot = await optimizeImageForUpload(screenshotFile);
-        const ext = optimizedScreenshot.name.split(".").pop();
+        const ext = optimizedScreenshot.name.split(".").pop() || "jpg";
         const path = `payments/${lead.id}_${Date.now()}.${ext}`;
         const { error: uploadError } = await supabase.storage.from("lead-photos").upload(path, optimizedScreenshot);
-        if (!uploadError) screenshotUrl = path;
+        // Never record the payment without the proof that was attached to it.
+        // Swallowing this marked the lead Paid with no screenshot and still
+        // reported success, so the proof was lost with nobody told. The
+        // cancellation proof and the Processor payment request both throw here.
+        if (uploadError) throw uploadError;
+        screenshotUrl = path;
       }
 
       const { error } = await supabase
