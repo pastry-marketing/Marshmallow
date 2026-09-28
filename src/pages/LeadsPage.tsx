@@ -449,7 +449,16 @@ export default function LeadsPage() {
               role === "admin" || role === "processor" || role === "cs_admin" || isOperatorRole(role) ||
               (role === "customer_service" && newRow.created_by === user.id);
             if (shouldSee) {
-              setLeads((prev) => [newRow, ...prev]);
+              // Dedupe by id: the creator's own refetch (AddLeadDialog's
+              // onSuccess) can land before this event, and a blind prepend
+              // would then show the lead twice until the next full refresh.
+              setLeads((prev) => {
+                const i = prev.findIndex((l) => l.id === newRow.id);
+                if (i === -1) return [newRow, ...prev];
+                const next = [...prev];
+                next[i] = { ...next[i], ...newRow };
+                return next;
+              });
             }
           } else if (payload.eventType === "UPDATE" && newRow) {
             setLeads((prev) =>
