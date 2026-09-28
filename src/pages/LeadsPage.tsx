@@ -1300,13 +1300,13 @@ export default function LeadsPage() {
             <table className="w-full table-fixed border-collapse text-left text-xs">
               <thead className="sticky top-0 z-10 bg-card/95 backdrop-blur">
                 <tr className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                  <th className="px-2 py-1.5 font-semibold w-[13%]">Customer</th>
+                  <th className="px-2 py-1.5 font-semibold w-[12%]">Customer</th>
                   <th className="px-2 py-1.5 font-semibold w-[14%]">Service</th>
-                  <th className="px-2 py-1.5 font-semibold w-[20%]">Address</th>
+                  <th className="px-2 py-1.5 font-semibold w-[23%]">Address</th>
                   <th className="px-2 py-1.5 font-semibold w-[13%]">Area</th>
-                  <th className="px-2 py-1.5 font-semibold w-[18%]">Schedule</th>
-                  <th className="px-2 py-1.5 font-semibold w-[11%]">Terms</th>
-                  <th className="px-2 py-1.5 font-semibold text-right w-[11%]">Date created</th>
+                  <th className="px-2 py-1.5 font-semibold w-[17%]">Schedule</th>
+                  <th className="px-2 py-1.5 font-semibold w-[12%]">Terms</th>
+                  <th className="px-2 py-1.5 font-semibold text-right w-[9%]">Date created</th>
                 </tr>
               </thead>
               <tbody>
@@ -1338,18 +1338,8 @@ export default function LeadsPage() {
                           className={isTodayOrTomorrow(l.customer_schedule_requirements) ? "text-red-500 font-bold animate-pulse" : "text-muted-foreground"} 
                           truncate={false} 
                         />
-                      <td className="px-2 py-2">
-                        {l.terms === "free_estimate" ? (
-                          <span className="inline-block whitespace-nowrap rounded-full bg-emerald-500/12 px-2 py-0.5 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
-                            Free Estimate
-                          </span>
-                        ) : l.terms === "quoted" ? (
-                          <span className="inline-block whitespace-nowrap rounded-full bg-amber-500/12 px-2 py-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
-                            Quoted
-                          </span>
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
-                        )}
+                      <td className="whitespace-nowrap px-2 py-2 text-foreground">
+                        {l.terms === "free_estimate" ? "Free Estimate" : l.terms === "quoted" ? "Quoted" : <span className="text-muted-foreground">—</span>}
                       </td>
                       <td className="whitespace-nowrap px-2 py-2 text-right text-muted-foreground">
                         {dateStr}
