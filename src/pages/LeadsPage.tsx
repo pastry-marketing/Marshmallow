@@ -77,12 +77,12 @@ const LEAD_LIST_COLUMNS =
 // Only the few columns the Urgent-leads overview table shows (plus zip/city for
 // the "Urgent in area" proximity count) — kept tiny so its frequent live refresh
 // stays a featherweight, filtered (status=urgent_job) indexed read.
-const URGENT_TABLE_COLUMNS = "id, customer_name, customer_phone, service_type, city, state, address, zip_code, urgent_at, created_at, customer_schedule_requirements";
+const URGENT_TABLE_COLUMNS = "id, customer_name, customer_phone, service_type, city, state, address, zip_code, urgent_at, created_at, customer_schedule_requirements, terms";
 // How often to refresh the urgent overview while the page is visible. Small,
 // because it only reads the tiny urgent subset, not the whole leads table.
 const URGENT_TABLE_POLL_MS = 5000;
 
-type UrgentRow = Pick<Lead, "id" | "customer_name" | "customer_phone" | "service_type" | "city" | "state" | "address" | "zip_code" | "urgent_at" | "created_at" | "customer_schedule_requirements">;
+type UrgentRow = Pick<Lead, "id" | "customer_name" | "customer_phone" | "service_type" | "city" | "state" | "address" | "zip_code" | "urgent_at" | "created_at" | "customer_schedule_requirements" | "terms">;
 
 function CopyableCell({ text, title, className, defaultWidth = true, emptyClassName = "text-muted-foreground", align = "left", truncate = true }: { text: string; title?: string; className?: string; defaultWidth?: boolean; emptyClassName?: string; align?: "left" | "right"; truncate?: boolean }) {
   if (!text || text === "—") return <td className={`px-2 py-2 ${className || ""}`}><span className={emptyClassName}>—</span></td>;
@@ -752,7 +752,7 @@ export default function LeadsPage() {
       // doesn't re-render the table or recompute the proximity map.
       if (
         prev.length === next.length &&
-        prev.every((p, i) => p.id === next[i].id && p.urgent_at === next[i].urgent_at)
+        prev.every((p, i) => p.id === next[i].id && p.urgent_at === next[i].urgent_at && p.terms === next[i].terms)
       ) {
         return prev;
       }
@@ -1300,12 +1300,13 @@ export default function LeadsPage() {
             <table className="w-full table-fixed border-collapse text-left text-xs">
               <thead className="sticky top-0 z-10 bg-card/95 backdrop-blur">
                 <tr className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                  <th className="px-2 py-1.5 font-semibold w-[14%]">Customer</th>
-                  <th className="px-2 py-1.5 font-semibold w-[15%]">Service</th>
-                  <th className="px-2 py-1.5 font-semibold w-[24%]">Address</th>
-                    <th className="px-2 py-1.5 font-semibold w-[14%]">Area</th>
-                    <th className="px-2 py-1.5 font-semibold w-[23%]">Schedule</th>
-                  <th className="px-2 py-1.5 font-semibold text-right w-[10%]">Date created</th>
+                  <th className="px-2 py-1.5 font-semibold w-[13%]">Customer</th>
+                  <th className="px-2 py-1.5 font-semibold w-[14%]">Service</th>
+                  <th className="px-2 py-1.5 font-semibold w-[20%]">Address</th>
+                  <th className="px-2 py-1.5 font-semibold w-[13%]">Area</th>
+                  <th className="px-2 py-1.5 font-semibold w-[18%]">Schedule</th>
+                  <th className="px-2 py-1.5 font-semibold w-[11%]">Terms</th>
+                  <th className="px-2 py-1.5 font-semibold text-right w-[11%]">Date created</th>
                 </tr>
               </thead>
               <tbody>
@@ -1337,6 +1338,19 @@ export default function LeadsPage() {
                           className={isTodayOrTomorrow(l.customer_schedule_requirements) ? "text-red-500 font-bold animate-pulse" : "text-muted-foreground"} 
                           truncate={false} 
                         />
+                      <td className="px-2 py-2">
+                        {l.terms === "free_estimate" ? (
+                          <span className="inline-block whitespace-nowrap rounded-full bg-emerald-500/12 px-2 py-0.5 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
+                            Free Estimate
+                          </span>
+                        ) : l.terms === "quoted" ? (
+                          <span className="inline-block whitespace-nowrap rounded-full bg-amber-500/12 px-2 py-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
+                            Quoted
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </td>
                       <td className="whitespace-nowrap px-2 py-2 text-right text-muted-foreground">
                         {dateStr}
                       </td>
