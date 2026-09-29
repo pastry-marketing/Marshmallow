@@ -612,6 +612,93 @@ export type Database = {
           },
         ]
       }
+      lead_quote_approval_requests: {
+        Row: {
+          created_at: string
+          id: string
+          lead_customer_name: string | null
+          lead_id: string
+          lead_job_id: string | null
+          previous_status: string
+          requested_by: string | null
+          requested_by_name: string | null
+          review_note: string | null
+          reviewed_at: string | null
+          reviewed_by: string | null
+          reviewed_by_name: string | null
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          lead_customer_name?: string | null
+          lead_id: string
+          lead_job_id?: string | null
+          previous_status: string
+          requested_by?: string | null
+          requested_by_name?: string | null
+          review_note?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          reviewed_by_name?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          lead_customer_name?: string | null
+          lead_id?: string
+          lead_job_id?: string | null
+          previous_status?: string
+          requested_by?: string | null
+          requested_by_name?: string | null
+          review_note?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          reviewed_by_name?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lead_quote_approval_requests_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_quote_approval_requests_requested_by_fkey"
+            columns: ["requested_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_quote_approval_requests_requested_by_fkey"
+            columns: ["requested_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_quote_approval_requests_reviewed_by_fkey"
+            columns: ["reviewed_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_quote_approval_requests_reviewed_by_fkey"
+            columns: ["reviewed_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       lead_shares: {
         Row: {
           created_at: string | null
@@ -773,9 +860,11 @@ export type Database = {
           last_edited_by_name: string | null
           latitude: number | null
           longitude: number | null
+          manual_entry: boolean
           material_amount: number | null
           nearby_areas: Json | null
           number_name: string | null
+          org_id: string
           payment_amount: number | null
           payment_screenshot_url: string | null
           processor_notes: string | null
@@ -829,9 +918,11 @@ export type Database = {
           last_edited_by_name?: string | null
           latitude?: number | null
           longitude?: number | null
+          manual_entry?: boolean
           material_amount?: number | null
           nearby_areas?: Json | null
           number_name?: string | null
+          org_id?: string
           payment_amount?: number | null
           payment_screenshot_url?: string | null
           processor_notes?: string | null
@@ -885,9 +976,11 @@ export type Database = {
           last_edited_by_name?: string | null
           latitude?: number | null
           longitude?: number | null
+          manual_entry?: boolean
           material_amount?: number | null
           nearby_areas?: Json | null
           number_name?: string | null
+          org_id?: string
           payment_amount?: number | null
           payment_screenshot_url?: string | null
           processor_notes?: string | null
@@ -954,6 +1047,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "leads_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "leads_quote_requested_by_fkey"
             columns: ["quote_requested_by"]
             isOneToOne: false
@@ -968,6 +1068,42 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      map_coverage_areas: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          id: string
+          is_active: boolean
+          latitude: number
+          longitude: number
+          name: string
+          radius_miles: number
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          is_active?: boolean
+          latitude: number
+          longitude: number
+          name?: string
+          radius_miles: number
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          is_active?: boolean
+          latitude?: number
+          longitude?: number
+          name?: string
+          radius_miles?: number
+          updated_at?: string
+        }
+        Relationships: []
       }
       navigation_permissions: {
         Row: {
@@ -1028,8 +1164,85 @@ export type Database = {
           },
         ]
       }
+      organization_members: {
+        Row: {
+          created_at: string
+          id: string
+          org_id: string
+          role: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          org_id: string
+          role: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          org_id?: string
+          role?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "organization_members_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "organization_members_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "organization_members_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      organizations: {
+        Row: {
+          created_at: string
+          id: string
+          is_active: boolean
+          logo_url: string | null
+          name: string
+          slug: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          logo_url?: string | null
+          name: string
+          slug: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          logo_url?: string | null
+          name?: string
+          slug?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
+          can_add_manual_leads: boolean
           can_manage_users: boolean | null
           can_view_tech_report: boolean
           created_at: string | null
@@ -1040,6 +1253,7 @@ export type Database = {
           opr_code: string | null
         }
         Insert: {
+          can_add_manual_leads?: boolean
           can_manage_users?: boolean | null
           can_view_tech_report?: boolean
           created_at?: string | null
@@ -1050,6 +1264,7 @@ export type Database = {
           opr_code?: string | null
         }
         Update: {
+          can_add_manual_leads?: boolean
           can_manage_users?: boolean | null
           can_view_tech_report?: boolean
           created_at?: string | null
@@ -1577,42 +1792,6 @@ export type Database = {
         }
         Relationships: []
       }
-      map_coverage_areas: {
-        Row: {
-          created_at: string
-          created_by: string | null
-          id: string
-          is_active: boolean
-          latitude: number
-          longitude: number
-          name: string
-          radius_miles: number
-          updated_at: string
-        }
-        Insert: {
-          created_at?: string
-          created_by?: string | null
-          id?: string
-          is_active?: boolean
-          latitude: number
-          longitude: number
-          name?: string
-          radius_miles: number
-          updated_at?: string
-        }
-        Update: {
-          created_at?: string
-          created_by?: string | null
-          id?: string
-          is_active?: boolean
-          latitude?: number
-          longitude?: number
-          name?: string
-          radius_miles?: number
-          updated_at?: string
-        }
-        Relationships: []
-      }
       technicians: {
         Row: {
           area: string
@@ -1817,10 +1996,14 @@ export type Database = {
     Functions: {
       assign_next_opr_code: { Args: { _user_id: string }; Returns: string }
       can_access_quo_ai: { Args: never; Returns: boolean }
+      can_access_quote_approval: { Args: never; Returns: boolean }
+      can_create_manual_lead: { Args: never; Returns: boolean }
+      can_manage_map_coverage: { Args: { _user_id: string }; Returns: boolean }
       can_use_quick_chat: { Args: { _user_id: string }; Returns: boolean }
       cron_quo_reconcile_sync: { Args: never; Returns: undefined }
       cron_quo_sync_contacts: { Args: never; Returns: undefined }
       current_user_opr_code: { Args: never; Returns: string }
+      default_org_id: { Args: never; Returns: string }
       delete_lead_by_admin: { Args: { target_lead_id: string }; Returns: Json }
       dispatch_lead_status_notification: {
         Args: {
@@ -1830,6 +2013,13 @@ export type Database = {
           p_user_ids: string[]
         }
         Returns: number
+      }
+      get_opr_codes_summary: {
+        Args: never
+        Returns: {
+          count: number
+          opr_code: string
+        }[]
       }
       get_top_nearby_populated_areas: {
         Args: { _latitude: number; _longitude: number }
@@ -1869,6 +2059,7 @@ export type Database = {
       healthcheck: { Args: never; Returns: Json }
       is_admin_user: { Args: { check_user_id: string }; Returns: boolean }
       is_assigned_opr_code: { Args: { _opr_code: string }; Returns: boolean }
+      is_org_member: { Args: { _org_id: string }; Returns: boolean }
       list_opr_codes: {
         Args: never
         Returns: {
@@ -1876,6 +2067,14 @@ export type Database = {
           opr_code: string
         }[]
       }
+      manual_lead_access: {
+        Args: never
+        Returns: {
+          can_add_manual_leads: boolean
+          user_id: string
+        }[]
+      }
+      org_role: { Args: { _org_id: string }; Returns: string }
       quo_conversation_counts_by_number: {
         Args: never
         Returns: {
@@ -1896,6 +2095,11 @@ export type Database = {
         }
         Returns: string
       }
+      request_quote_approval: { Args: { _lead_id: string }; Returns: string }
+      review_quote_approval_request: {
+        Args: { _decision: string; _request_id: string; _review_note?: string }
+        Returns: string
+      }
       search_technicians: {
         Args: { _limit: number; _offset: number; _q: string }
         Returns: {
@@ -1910,6 +2114,10 @@ export type Database = {
           service: string
           total_count: number
         }[]
+      }
+      set_can_add_manual_leads: {
+        Args: { allowed: boolean; target_user_id: string }
+        Returns: undefined
       }
     }
     Enums: {
