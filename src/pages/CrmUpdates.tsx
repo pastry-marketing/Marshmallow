@@ -44,11 +44,15 @@ const AFFECTED_SECTIONS = [
   { value: "settings", label: "Settings" },
 ];
 
+// Every role an update can be aimed at. Labels match the role picker in
+// Settings, so the same role reads the same way in both places.
 const ROLES: { value: AppRole; label: string }[] = [
   { value: "admin", label: "Admin" },
   { value: "processor", label: "Processor" },
   { value: "customer_service", label: "Customer Service" },
-  { value: "opr", label: "OPR" },
+  { value: "cs_admin", label: "CS Admin" },
+  { value: "opr", label: "OPR (Operator)" },
+  { value: "opr_admin", label: "OPR Admin" },
 ];
 
 interface CrmUpdate {
