@@ -30,11 +30,13 @@ $$;
 
 -- Synthetic identity, materialised in section 5 and rolled back with the rest:
 --   00000000-0000-4000-8000-0000000000ff
--- A bare auth.users row (id only) is enough: handle_new_user() creates the
--- matching public.profiles row, and nothing creates a user_roles row, so the
--- identity stays role-less - the worst case for every guard below. The row must
--- exist because leads.created_by -> profiles(id) is a real FK, otherwise the
--- "extension path is allowed" insert would fail on the FK, not on RLS.
+-- One auth.users row is enough: handle_new_user() creates the matching
+-- public.profiles row, and nothing creates a user_roles row, so the identity
+-- stays role-less - the worst case for every guard below. The row must exist
+-- because leads.created_by -> profiles(id) is a real FK, otherwise the
+-- "extension path is allowed" insert would fail on the FK rather than on RLS.
+-- The email is mandatory: profiles.email is NOT NULL and handle_new_user()
+-- copies NEW.email across verbatim, so a bare id is rejected with 23502.
 
 -- -----------------------------------------------------------------------------
 -- 1. Schema
@@ -261,8 +263,16 @@ RESET ROLE;
 -- -----------------------------------------------------------------------------
 -- Still postgres here (RESET ROLE above). Materialise the identity so the
 -- profiles FK is satisfiable; handle_new_user() fills in the profiles row.
-INSERT INTO auth.users (id) VALUES ('00000000-0000-4000-8000-0000000000ff')
+INSERT INTO auth.users (id, email)
+  VALUES ('00000000-0000-4000-8000-0000000000ff', 'rls-gate-probe@example.invalid')
   ON CONFLICT (id) DO NOTHING;
+
+-- Guard against handle_new_user() changing shape and silently leaving the
+-- section 5 inserts to fail on the FK instead of on the policy under test.
+SELECT pg_temp.assert(
+  EXISTS (SELECT 1 FROM public.profiles WHERE id = '00000000-0000-4000-8000-0000000000ff'),
+  'synthetic role-less identity has a profiles row (leads.created_by FK is satisfiable)'
+);
 
 SELECT set_config('request.jwt.claims',
   json_build_object('sub', '00000000-0000-4000-8000-0000000000ff', 'role', 'authenticated')::text,
