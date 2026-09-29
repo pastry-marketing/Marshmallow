@@ -1001,12 +1001,12 @@ const Settings = () => {
                 </span>
 
                 {(isAdmin || currentRole === "cs_admin") && (
-                  <div className="flex w-full flex-col gap-3 lg:w-auto lg:flex-row lg:items-center">
+                  <div className="flex w-full flex-col gap-3 lg:w-auto lg:flex-row lg:flex-wrap lg:items-center">
                     {isAdmin && <Select
                       value={u.role}
                       onValueChange={(v) => updateRole.mutate({ userId: u.id, role: v as AppRole })}
                     >
-                      <SelectTrigger className="h-10 w-full text-[12px] lg:w-[180px]">
+                      <SelectTrigger className="h-10 w-full text-[12px] lg:w-[180px] lg:shrink-0">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -1020,14 +1020,14 @@ const Settings = () => {
                     </Select>}
 
                     {(u.role === "opr" || u.role === "opr_admin") && u.opr_code && (
-                      <span className="inline-flex items-center gap-1 rounded-2xl border border-border/60 bg-background/70 px-3 py-2 text-[12px] font-semibold">
+                      <span className="inline-flex shrink-0 items-center gap-1 rounded-2xl border border-border/60 bg-background/70 px-3 py-2 text-[12px] font-semibold">
                         <span className="text-muted-foreground">OPR Code</span>
                         <code className="rounded-md border border-border/40 bg-muted/60 px-2 py-0.5 font-mono tracking-wider text-foreground">{u.opr_code}</code>
                       </span>
                     )}
 
                     {isAdmin && u.role === "cs_admin" && (
-                      <div className="flex items-center gap-2 rounded-2xl border border-border/60 bg-background/70 px-3 py-2">
+                      <div className="flex shrink-0 items-center gap-2 rounded-2xl border border-border/60 bg-background/70 px-3 py-2">
                         <Switch 
                           checked={u.can_manage_users || false}
                           onCheckedChange={(checked) => toggleCanManageUsers.mutate({ userId: u.id, canManage: checked })}
@@ -1037,7 +1037,7 @@ const Settings = () => {
                     )}
 
                     {u.role === "customer_service" && (isAdmin || currentRole === "cs_admin") && (
-                      <div className="flex items-center gap-2 rounded-2xl border border-border/60 bg-background/70 px-3 py-2">
+                      <div className="flex shrink-0 items-center gap-2 rounded-2xl border border-border/60 bg-background/70 px-3 py-2">
                         <Switch
                           checked={u.can_add_manual_leads || false}
                           onCheckedChange={(checked) =>
@@ -1051,7 +1051,7 @@ const Settings = () => {
                     <Button
                       variant="outline"
                       size="sm"
-                      className="gap-1.5 text-[11px]"
+                      className="gap-1.5 text-[11px] shrink-0"
                       onClick={() => {
                         setPasswordUserId(u.id);
                         setPasswordUserName(u.full_name || u.email || "User");
