@@ -59,6 +59,19 @@ export function canAddManualLead(
   return false;
 }
 
+/**
+ * Who is offered the "Add Lead via Extension" button: a Customer Service user
+ * who has not been granted Manual Lead Addition, and so captures leads through
+ * the extension instead. Processors and Operators create no leads by either
+ * route, so they get neither this nor the New Lead button.
+ */
+export function canAddLeadViaExtension(
+  role: AppRole | null | undefined,
+  profile?: { can_add_manual_leads?: boolean | null } | null,
+): boolean {
+  return role === "customer_service" && !canAddManualLead(role, profile);
+}
+
 /** Roles that manage technicians across OPRs must choose an OPR code. */
 export function mustChooseOprCode(role: AppRole | null | undefined): boolean {
   return role === "admin" || role === "processor" || role === "opr_admin";

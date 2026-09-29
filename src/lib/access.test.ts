@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canAccessNavItem, canAddManualLead, canDeleteTechnicians, canSeeTechDetails, getDefaultNavAccess } from "@/lib/access";
+import { canAccessNavItem, canAddLeadViaExtension, canAddManualLead, canDeleteTechnicians, canSeeTechDetails, getDefaultNavAccess } from "@/lib/access";
 import type { NavigationPermission } from "@/types";
 
 describe("cancellation request navigation access", () => {
@@ -117,5 +117,31 @@ describe("manual lead addition", () => {
   it("denies an unauthenticated caller", () => {
     expect(canAddManualLead(null)).toBe(false);
     expect(canAddManualLead(undefined, granted)).toBe(false);
+  });
+});
+
+describe("add lead via extension", () => {
+  const granted = { can_add_manual_leads: true };
+  const notGranted = { can_add_manual_leads: false };
+
+  it("is offered to a customer_service user without the manual grant", () => {
+    expect(canAddLeadViaExtension("customer_service", notGranted)).toBe(true);
+    expect(canAddLeadViaExtension("customer_service", null)).toBe(true);
+    expect(canAddLeadViaExtension("customer_service", undefined)).toBe(true);
+  });
+
+  it("is not offered once that user can add leads manually", () => {
+    expect(canAddLeadViaExtension("customer_service", granted)).toBe(false);
+    expect(canAddLeadViaExtension("admin", notGranted)).toBe(false);
+    expect(canAddLeadViaExtension("cs_admin", notGranted)).toBe(false);
+  });
+
+  // The reported bug: these roles do not add leads by either route, yet the
+  // button fell out of the "cannot add manually" branch and showed for them.
+  it("is never offered to roles that do not add leads", () => {
+    expect(canAddLeadViaExtension("processor", notGranted)).toBe(false);
+    expect(canAddLeadViaExtension("opr", notGranted)).toBe(false);
+    expect(canAddLeadViaExtension("opr_admin", notGranted)).toBe(false);
+    expect(canAddLeadViaExtension(null)).toBe(false);
   });
 });

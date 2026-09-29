@@ -40,7 +40,7 @@ import LeadReportDialog from "@/components/leads/LeadReportDialog";
 import ExportLeadsDialog, { ExportOptions } from "@/components/leads/ExportLeadsDialog";
 import InstallExtensionDialog from "@/components/leads/InstallExtensionDialog";
 import { toast } from "sonner";
-import { canAddManualLead, isOperatorRole } from "@/lib/access";
+import { canAddLeadViaExtension, canAddManualLead, isOperatorRole } from "@/lib/access";
 
 
 import { motion } from "framer-motion";
@@ -229,6 +229,9 @@ export default function LeadsPage() {
   // Manual creation is admin / cs_admin, or a CS that Settings granted
   // "Manual Lead Addition". Everyone else adds leads through the extension.
   const canCreateLead = canAddManualLead(role, profile);
+  // Only a CS user who lacks the manual grant is pointed at the extension;
+  // Processors and Operators add leads by neither route.
+  const canAddViaExtension = canAddLeadViaExtension(role, profile);
 
   const { filterLeads, allowedStatuses } = useAllowedStatuses();
 
@@ -1178,12 +1181,12 @@ export default function LeadsPage() {
               <Plus className="h-4 w-4" />
               New Lead
             </Button>
-          ) : (
+          ) : canAddViaExtension ? (
             <Button onClick={() => setShowInstallDialog(true)} size="sm" className="gap-1.5 h-9 order-first">
               <Puzzle className="h-4 w-4" />
               Add Lead via Extension
             </Button>
-          )}
+          ) : null}
           {isAdmin && (
             <Button
               variant="outline"
