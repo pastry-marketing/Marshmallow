@@ -74,6 +74,8 @@ export interface Profile {
   can_manage_users?: boolean;
   opr_code?: string | null;
   can_view_tech_report?: boolean | null;
+  /** CS-only grant that unlocks the manual "New Lead" button in the CRM. */
+  can_add_manual_leads?: boolean | null;
 }
 
 export interface UserRole {

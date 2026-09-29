@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canAccessNavItem, canDeleteTechnicians, canSeeTechDetails, getDefaultNavAccess } from "@/lib/access";
+import { canAccessNavItem, canAddManualLead, canDeleteTechnicians, canSeeTechDetails, getDefaultNavAccess } from "@/lib/access";
 import type { NavigationPermission } from "@/types";
 
 describe("cancellation request navigation access", () => {
@@ -87,5 +87,35 @@ describe("OPR Admin inheritance", () => {
   it("allows OPR Admin, but not regular OPR, to delete technicians", () => {
     expect(canDeleteTechnicians("opr_admin")).toBe(true);
     expect(canDeleteTechnicians("opr")).toBe(false);
+  });
+});
+
+describe("manual lead addition", () => {
+  const granted = { can_add_manual_leads: true };
+  const notGranted = { can_add_manual_leads: false };
+
+  it("always allows admin and cs_admin, without needing a profile", () => {
+    expect(canAddManualLead("admin", null)).toBe(true);
+    expect(canAddManualLead("admin", notGranted)).toBe(true);
+    expect(canAddManualLead("cs_admin", null)).toBe(true);
+    expect(canAddManualLead("cs_admin", notGranted)).toBe(true);
+  });
+
+  it("denies customer_service until the flag is granted", () => {
+    expect(canAddManualLead("customer_service", notGranted)).toBe(false);
+    expect(canAddManualLead("customer_service", null)).toBe(false);
+    expect(canAddManualLead("customer_service", undefined)).toBe(false);
+    expect(canAddManualLead("customer_service", granted)).toBe(true);
+  });
+
+  it("never applies to roles that do not add leads", () => {
+    expect(canAddManualLead("processor", granted)).toBe(false);
+    expect(canAddManualLead("opr", granted)).toBe(false);
+    expect(canAddManualLead("opr_admin", granted)).toBe(false);
+  });
+
+  it("denies an unauthenticated caller", () => {
+    expect(canAddManualLead(null)).toBe(false);
+    expect(canAddManualLead(undefined, granted)).toBe(false);
   });
 });
