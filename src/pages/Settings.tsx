@@ -169,7 +169,7 @@ function TemplateEditor({
 const MANAGED_ROLES: AppRole[] = ["customer_service", "processor", "opr", "cs_admin"];
 
 const Settings = () => {
-  const { user, role: currentRole } = useAuth();
+  const { user, role: currentRole, profileLoaded } = useAuth();
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [newEmail, setNewEmail] = useState("");
@@ -869,6 +869,26 @@ const Settings = () => {
       }, 0),
     [nonAdminUsers, statusVisibilityByRoleAndStatus, statusVisibilityByUserAndStatus],
   );
+
+  // Everything below is gated on isAdmin / currentRole. Those are null until the
+  // profile and role queries resolve, so rendering early makes the tab bar grow,
+  // the user list re-filter, and the per-row permission controls appear - which
+  // reflows the whole page on every refresh. Wait for the profile first so the
+  // layout is painted once, in its final state.
+  if (!profileLoaded) {
+    return (
+      <div className="mx-auto max-w-[1440px] space-y-6" aria-busy="true">
+        <div className="h-24 animate-pulse rounded-2xl border border-border/50 bg-card/60" />
+        <div className="h-12 animate-pulse rounded-2xl border border-border/50 bg-muted/25" />
+        <div className="grid gap-3">
+          {[0, 1, 2, 3, 4].map((row) => (
+            <div key={row} className="h-[86px] animate-pulse rounded-2xl border border-border/50 bg-card/50" />
+          ))}
+        </div>
+        <span className="sr-only">Loading settings…</span>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-[1440px] space-y-6">
