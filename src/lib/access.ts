@@ -32,6 +32,33 @@ export function canExportData(role: AppRole | null | undefined): boolean {
   return role === "admin";
 }
 
+/**
+ * Whether this user may create a lead from inside the CRM (the "New Lead"
+ * button and the ⌘N command). Admin and CS Admin always may; a CS user needs
+ * the per-user `can_add_manual_leads` grant from Settings.
+ *
+ * Everyone else adds leads through the Chrome extension, which does not go
+ * through this check.
+ */
+export function canAddManualLead(
+  role: AppRole | null | undefined,
+  profile?: { can_add_manual_leads?: boolean | null } | null,
+): boolean {
+  if (!role) {
+    return false;
+  }
+
+  if (role === "admin" || role === "cs_admin") {
+    return true;
+  }
+
+  if (role === "customer_service") {
+    return Boolean(profile?.can_add_manual_leads);
+  }
+
+  return false;
+}
+
 /** Roles that manage technicians across OPRs must choose an OPR code. */
 export function mustChooseOprCode(role: AppRole | null | undefined): boolean {
   return role === "admin" || role === "processor" || role === "opr_admin";

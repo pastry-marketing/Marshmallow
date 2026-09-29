@@ -40,7 +40,7 @@ import LeadReportDialog from "@/components/leads/LeadReportDialog";
 import ExportLeadsDialog, { ExportOptions } from "@/components/leads/ExportLeadsDialog";
 import InstallExtensionDialog from "@/components/leads/InstallExtensionDialog";
 import { toast } from "sonner";
-import { isOperatorRole } from "@/lib/access";
+import { canAddManualLead, isOperatorRole } from "@/lib/access";
 
 
 import { motion } from "framer-motion";
@@ -168,7 +168,7 @@ function isTodayOrTomorrow(scheduleText: string | null | undefined): boolean {
 }
 
 export default function LeadsPage() {
-  const { user, role } = useAuth();
+  const { user, role, profile } = useAuth();
   const { toggleNotepad, isNotepadOpen, activeUserIds } = useNotepad();
   const isAnyNotepadOpen = activeUserIds.length > 0;
   const [searchParams, setSearchParams] = useSearchParams();
@@ -226,8 +226,9 @@ export default function LeadsPage() {
   const attentionView = searchParams.get("attention") === "1";
   const isAdmin = role === "admin";
   const isCS = role === "customer_service";
-  // CS Admins create leads with the same access a CS has.
-  const canCreateLead = isAdmin || isCS || role === "cs_admin";
+  // Manual creation is admin / cs_admin, or a CS that Settings granted
+  // "Manual Lead Addition". Everyone else adds leads through the extension.
+  const canCreateLead = canAddManualLead(role, profile);
 
   const { filterLeads, allowedStatuses } = useAllowedStatuses();
 
@@ -1172,10 +1173,15 @@ export default function LeadsPage() {
           transition={{ delay: 0.15, duration: 0.35 }}
           className="flex items-center gap-2 flex-wrap sm:justify-end"
         >
-          {canCreateLead && (
+          {canCreateLead ? (
             <Button onClick={() => setShowAddDialog(true)} size="sm" className="gap-1.5 h-9 order-first">
               <Plus className="h-4 w-4" />
               New Lead
+            </Button>
+          ) : (
+            <Button onClick={() => setShowInstallDialog(true)} size="sm" className="gap-1.5 h-9 order-first">
+              <Puzzle className="h-4 w-4" />
+              Add Lead via Extension
             </Button>
           )}
           {isAdmin && (
@@ -1190,8 +1196,6 @@ export default function LeadsPage() {
             </Button>
           )}
 
-          {/* The extension only captures new leads, so it is offered to the
-              roles that create them. Processors and Operators never do. */}
           {canCreateLead && (
             <Button
               variant="outline"

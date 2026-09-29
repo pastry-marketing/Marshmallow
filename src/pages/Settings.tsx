@@ -92,6 +92,7 @@ interface SettingsUser {
   can_manage_users: boolean | null;
   opr_code: string | null;
   can_view_tech_report: boolean | null;
+  can_add_manual_leads: boolean | null;
 }
 
 interface AccessCodeRow {
@@ -168,7 +169,7 @@ function TemplateEditor({
 const MANAGED_ROLES: AppRole[] = ["customer_service", "processor", "opr", "cs_admin"];
 
 const Settings = () => {
-  const { user, role: currentRole } = useAuth();
+  const { user, role: currentRole, profileLoaded } = useAuth();
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [newEmail, setNewEmail] = useState("");
@@ -187,15 +188,20 @@ const Settings = () => {
 
   const isAdmin = currentRole === "admin";
 
-  const { data: users = [] } = useQuery<SettingsUser[]>({
-    queryKey: ["settings-users", isAdmin],
+  // Single source of truth for this query's cache key. setQueryData requires an
+  // EXACT key match, while invalidateQueries prefix-matches, so the flag toggles
+  // below must use this same key or their optimistic update silently no-ops.
+  const settingsUsersQueryKey = ["settings-users", isAdmin] as const;
+
+  const { data: users = [], isPending: usersPending } = useQuery<SettingsUser[]>({
+    queryKey: settingsUsersQueryKey,
     queryFn: async () => {
       const { data: roles } = await supabase.from("user_roles").select("user_id, role");
       const roleByUserId = new Map((roles ?? []).map((row) => [row.user_id, row.role as AppRole]));
 
       if (isAdmin) {
         // Admins can read all profiles via RLS
-        const { data: profiles } = (await supabase.from("profiles").select("id, email, full_name, is_quotation_master, can_manage_users, opr_code, can_view_tech_report" as never)) as unknown as {
+        const { data: profiles } = (await supabase.from("profiles").select("id, email, full_name, is_quotation_master, can_manage_users, opr_code, can_view_tech_report, can_add_manual_leads" as never)) as unknown as {
           data:
             | {
                 id: string;
@@ -205,6 +211,7 @@ const Settings = () => {
                 can_manage_users: boolean | null;
                 opr_code: string | null;
                 can_view_tech_report: boolean | null;
+                can_add_manual_leads: boolean | null;
               }[]
             | null;
         };
@@ -222,6 +229,7 @@ const Settings = () => {
               can_manage_users: profile.can_manage_users,
               opr_code: profile.opr_code,
               can_view_tech_report: profile.can_view_tech_report,
+              can_add_manual_leads: profile.can_add_manual_leads,
             } as SettingsUser;
           })
           .filter((entry): entry is SettingsUser => entry !== null);
@@ -230,6 +238,15 @@ const Settings = () => {
       // Non-admin (cs_admin with can_manage_users): use profiles_public which
       // bypasses RLS, then enrich with own profile data for the current user.
       const { data: publicProfiles } = await supabase.from("profiles_public" as never).select("id, full_name") as { data: { id: string; full_name: string | null }[] | null };
+
+      // profiles_public only exposes id + full_name, so the Manual Lead grant
+      // has to come from the narrow SECURITY DEFINER RPC instead.
+      const { data: manualAccess } = await supabase.rpc("manual_lead_access" as never) as {
+        data: { user_id: string; can_add_manual_leads: boolean }[] | null;
+      };
+      const manualLeadByUserId = new Map(
+        (manualAccess ?? []).map((row) => [row.user_id, row.can_add_manual_leads]),
+      );
 
       return (publicProfiles ?? [])
         .map((profile) => {
@@ -244,6 +261,7 @@ const Settings = () => {
             can_manage_users: null,
             opr_code: null,
             can_view_tech_report: false,
+            can_add_manual_leads: manualLeadByUserId.get(profile.id) ?? false,
           } as SettingsUser;
         })
         .filter((entry): entry is SettingsUser => entry !== null);
@@ -696,7 +714,7 @@ const Settings = () => {
       return { userId, isMaster };
     },
     onSuccess: (data) => {
-      queryClient.setQueryData(["settings-users"], (old: SettingsUser[] | undefined) =>
+      queryClient.setQueryData(settingsUsersQueryKey, (old: SettingsUser[] | undefined) =>
         old ? old.map((u) => (u.id === data.userId ? { ...u, is_quotation_master: data.isMaster } : u)) : [],
       );
       toast.success(`Quotation Master ${data.isMaster ? "granted" : "revoked"}`);
@@ -711,7 +729,7 @@ const Settings = () => {
       return { userId, canManage };
     },
     onSuccess: (data) => {
-      queryClient.setQueryData(["settings-users"], (old: SettingsUser[] | undefined) =>
+      queryClient.setQueryData(settingsUsersQueryKey, (old: SettingsUser[] | undefined) =>
         old ? old.map((u) => (u.id === data.userId ? { ...u, can_manage_users: data.canManage } : u)) : [],
       );
       toast.success(`CS Admin settings access `);
@@ -726,12 +744,33 @@ const Settings = () => {
       return { userId, canView };
     },
     onSuccess: (data) => {
-      queryClient.setQueryData(["settings-users"], (old: SettingsUser[] | undefined) =>
+      queryClient.setQueryData(settingsUsersQueryKey, (old: SettingsUser[] | undefined) =>
         old ? old.map((u) => (u.id === data.userId ? { ...u, can_view_tech_report: data.canView } : u)) : [],
       );
       toast.success(`Technician report access ${data.canView ? "granted" : "revoked"}`);
     },
     onError: (error) => toast.error(`Failed to update report access: ${error.message}`),
+  });
+
+  // profiles UPDATE RLS is admin-only, so this goes through the SECURITY
+  // DEFINER RPC that lets a CS Admin (with can_manage_users) grant the flag
+  // to Customer Service users only.
+  const toggleCanAddManualLead = useMutation({
+    mutationFn: async ({ userId, allowed }: { userId: string; allowed: boolean }) => {
+      const { error } = await supabase.rpc("set_can_add_manual_leads" as never, {
+        target_user_id: userId,
+        allowed,
+      } as never);
+      if (error) throw error;
+      return { userId, allowed };
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(settingsUsersQueryKey, (old: SettingsUser[] | undefined) =>
+        old ? old.map((u) => (u.id === data.userId ? { ...u, can_add_manual_leads: data.allowed } : u)) : [],
+      );
+      toast.success(`Manual Lead Addition ${data.allowed ? "granted" : "revoked"}`);
+    },
+    onError: (error) => toast.error(`Failed to update Manual Lead Addition: ${error.message}`),
   });
 
   const handleDeleteUser = async (userId: string) => {
@@ -835,6 +874,26 @@ const Settings = () => {
       }, 0),
     [nonAdminUsers, statusVisibilityByRoleAndStatus, statusVisibilityByUserAndStatus],
   );
+
+  // Everything below is gated on isAdmin / currentRole. Those are null until the
+  // profile and role queries resolve, so rendering early makes the tab bar grow,
+  // the user list re-filter, and the per-row permission controls appear - which
+  // reflows the whole page on every refresh. Wait for the profile first so the
+  // layout is painted once, in its final state.
+  if (!profileLoaded || usersPending) {
+    return (
+      <div className="mx-auto max-w-[1440px] space-y-6" aria-busy="true">
+        <div className="h-24 animate-pulse rounded-2xl border border-border/50 bg-card/60" />
+        <div className="h-12 animate-pulse rounded-2xl border border-border/50 bg-muted/25" />
+        <div className="grid gap-3">
+          {[0, 1, 2, 3, 4].map((row) => (
+            <div key={row} className="h-[86px] animate-pulse rounded-2xl border border-border/50 bg-card/50" />
+          ))}
+        </div>
+        <span className="sr-only">Loading settings…</span>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-[1440px] space-y-6">
@@ -967,12 +1026,12 @@ const Settings = () => {
                 </span>
 
                 {(isAdmin || currentRole === "cs_admin") && (
-                  <div className="flex w-full flex-col gap-3 lg:w-auto lg:flex-row lg:items-center">
+                  <div className="flex w-full flex-col gap-3 lg:w-auto lg:flex-row lg:flex-wrap lg:items-center">
                     {isAdmin && <Select
                       value={u.role}
                       onValueChange={(v) => updateRole.mutate({ userId: u.id, role: v as AppRole })}
                     >
-                      <SelectTrigger className="h-10 w-full text-[12px] lg:w-[180px]">
+                      <SelectTrigger className="h-10 w-full text-[12px] lg:w-[180px] lg:shrink-0">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -986,14 +1045,14 @@ const Settings = () => {
                     </Select>}
 
                     {(u.role === "opr" || u.role === "opr_admin") && u.opr_code && (
-                      <span className="inline-flex items-center gap-1 rounded-2xl border border-border/60 bg-background/70 px-3 py-2 text-[12px] font-semibold">
+                      <span className="inline-flex shrink-0 items-center gap-1 rounded-2xl border border-border/60 bg-background/70 px-3 py-2 text-[12px] font-semibold">
                         <span className="text-muted-foreground">OPR Code</span>
                         <code className="rounded-md border border-border/40 bg-muted/60 px-2 py-0.5 font-mono tracking-wider text-foreground">{u.opr_code}</code>
                       </span>
                     )}
 
                     {isAdmin && u.role === "cs_admin" && (
-                      <div className="flex items-center gap-2 rounded-2xl border border-border/60 bg-background/70 px-3 py-2">
+                      <div className="flex shrink-0 items-center gap-2 rounded-2xl border border-border/60 bg-background/70 px-3 py-2">
                         <Switch 
                           checked={u.can_manage_users || false}
                           onCheckedChange={(checked) => toggleCanManageUsers.mutate({ userId: u.id, canManage: checked })}
@@ -1005,7 +1064,7 @@ const Settings = () => {
                     <Button
                       variant="outline"
                       size="sm"
-                      className="gap-1.5 text-[11px]"
+                      className="gap-1.5 text-[11px] shrink-0"
                       onClick={() => {
                         setPasswordUserId(u.id);
                         setPasswordUserName(u.full_name || u.email || "User");
@@ -1204,6 +1263,9 @@ const Settings = () => {
                     <th className="sticky top-0 z-20 border-b border-border/40 bg-card px-3 py-3 text-center text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
                       Quotation Master
                     </th>
+                    <th className="sticky top-0 z-20 border-b border-border/40 bg-card px-3 py-3 text-center text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
+                      Manual Lead
+                    </th>
                   </tr>
                 </thead>
 
@@ -1257,6 +1319,18 @@ const Settings = () => {
                             toggleQuotationMaster.mutate({ userId: u.id, isMaster: checked })
                           }
                         />
+                      </td>
+                      <td className="px-3 py-3 text-center">
+                        {u.role === "customer_service" ? (
+                          <Switch
+                            checked={u.can_add_manual_leads || false}
+                            onCheckedChange={(checked) =>
+                              toggleCanAddManualLead.mutate({ userId: u.id, allowed: checked })
+                            }
+                          />
+                        ) : (
+                          <span className="text-[11px] text-muted-foreground/50">&mdash;</span>
+                        )}
                       </td>
                     </tr>
                   ))}
