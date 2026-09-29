@@ -92,6 +92,7 @@ interface SettingsUser {
   can_manage_users: boolean | null;
   opr_code: string | null;
   can_view_tech_report: boolean | null;
+  can_add_manual_leads: boolean | null;
 }
 
 interface AccessCodeRow {
@@ -195,7 +196,7 @@ const Settings = () => {
 
       if (isAdmin) {
         // Admins can read all profiles via RLS
-        const { data: profiles } = (await supabase.from("profiles").select("id, email, full_name, is_quotation_master, can_manage_users, opr_code, can_view_tech_report" as never)) as unknown as {
+        const { data: profiles } = (await supabase.from("profiles").select("id, email, full_name, is_quotation_master, can_manage_users, opr_code, can_view_tech_report, can_add_manual_leads" as never)) as unknown as {
           data:
             | {
                 id: string;
@@ -205,6 +206,7 @@ const Settings = () => {
                 can_manage_users: boolean | null;
                 opr_code: string | null;
                 can_view_tech_report: boolean | null;
+                can_add_manual_leads: boolean | null;
               }[]
             | null;
         };
@@ -222,6 +224,7 @@ const Settings = () => {
               can_manage_users: profile.can_manage_users,
               opr_code: profile.opr_code,
               can_view_tech_report: profile.can_view_tech_report,
+              can_add_manual_leads: profile.can_add_manual_leads,
             } as SettingsUser;
           })
           .filter((entry): entry is SettingsUser => entry !== null);
@@ -230,6 +233,15 @@ const Settings = () => {
       // Non-admin (cs_admin with can_manage_users): use profiles_public which
       // bypasses RLS, then enrich with own profile data for the current user.
       const { data: publicProfiles } = await supabase.from("profiles_public" as never).select("id, full_name") as { data: { id: string; full_name: string | null }[] | null };
+
+      // profiles_public only exposes id + full_name, so the Manual Lead grant
+      // has to come from the narrow SECURITY DEFINER RPC instead.
+      const { data: manualAccess } = await supabase.rpc("manual_lead_access" as never) as {
+        data: { user_id: string; can_add_manual_leads: boolean }[] | null;
+      };
+      const manualLeadByUserId = new Map(
+        (manualAccess ?? []).map((row) => [row.user_id, row.can_add_manual_leads]),
+      );
 
       return (publicProfiles ?? [])
         .map((profile) => {
@@ -244,6 +256,7 @@ const Settings = () => {
             can_manage_users: null,
             opr_code: null,
             can_view_tech_report: false,
+            can_add_manual_leads: manualLeadByUserId.get(profile.id) ?? false,
           } as SettingsUser;
         })
         .filter((entry): entry is SettingsUser => entry !== null);
@@ -734,6 +747,27 @@ const Settings = () => {
     onError: (error) => toast.error(`Failed to update report access: ${error.message}`),
   });
 
+  // profiles UPDATE RLS is admin-only, so this goes through the SECURITY
+  // DEFINER RPC that lets a CS Admin (with can_manage_users) grant the flag
+  // to Customer Service users only.
+  const toggleCanAddManualLead = useMutation({
+    mutationFn: async ({ userId, allowed }: { userId: string; allowed: boolean }) => {
+      const { error } = await supabase.rpc("set_can_add_manual_leads" as never, {
+        target_user_id: userId,
+        allowed,
+      } as never);
+      if (error) throw error;
+      return { userId, allowed };
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(["settings-users"], (old: SettingsUser[] | undefined) =>
+        old ? old.map((u) => (u.id === data.userId ? { ...u, can_add_manual_leads: data.allowed } : u)) : [],
+      );
+      toast.success(`Manual Lead Addition ${data.allowed ? "granted" : "revoked"}`);
+    },
+    onError: (error) => toast.error(`Failed to update Manual Lead Addition: ${error.message}`),
+  });
+
   const handleDeleteUser = async (userId: string) => {
     const targetUser = getUserById(userId);
 
@@ -1002,6 +1036,18 @@ const Settings = () => {
                       </div>
                     )}
 
+                    {u.role === "customer_service" && (isAdmin || currentRole === "cs_admin") && (
+                      <div className="flex items-center gap-2 rounded-2xl border border-border/60 bg-background/70 px-3 py-2">
+                        <Switch
+                          checked={u.can_add_manual_leads || false}
+                          onCheckedChange={(checked) =>
+                            toggleCanAddManualLead.mutate({ userId: u.id, allowed: checked })
+                          }
+                        />
+                        <span className="text-[12px] font-medium leading-none">Manual Lead Addition</span>
+                      </div>
+                    )}
+
                     <Button
                       variant="outline"
                       size="sm"
@@ -1204,6 +1250,9 @@ const Settings = () => {
                     <th className="sticky top-0 z-20 border-b border-border/40 bg-card px-3 py-3 text-center text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
                       Quotation Master
                     </th>
+                    <th className="sticky top-0 z-20 border-b border-border/40 bg-card px-3 py-3 text-center text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
+                      Manual Lead
+                    </th>
                   </tr>
                 </thead>
 
@@ -1257,6 +1306,18 @@ const Settings = () => {
                             toggleQuotationMaster.mutate({ userId: u.id, isMaster: checked })
                           }
                         />
+                      </td>
+                      <td className="px-3 py-3 text-center">
+                        {u.role === "customer_service" ? (
+                          <Switch
+                            checked={u.can_add_manual_leads || false}
+                            onCheckedChange={(checked) =>
+                              toggleCanAddManualLead.mutate({ userId: u.id, allowed: checked })
+                            }
+                          />
+                        ) : (
+                          <span className="text-[11px] text-muted-foreground/50">&mdash;</span>
+                        )}
                       </td>
                     </tr>
                   ))}
