@@ -188,8 +188,13 @@ const Settings = () => {
 
   const isAdmin = currentRole === "admin";
 
-  const { data: users = [] } = useQuery<SettingsUser[]>({
-    queryKey: ["settings-users", isAdmin],
+  // Single source of truth for this query's cache key. setQueryData requires an
+  // EXACT key match, while invalidateQueries prefix-matches, so the flag toggles
+  // below must use this same key or their optimistic update silently no-ops.
+  const settingsUsersQueryKey = ["settings-users", isAdmin] as const;
+
+  const { data: users = [], isPending: usersPending } = useQuery<SettingsUser[]>({
+    queryKey: settingsUsersQueryKey,
     queryFn: async () => {
       const { data: roles } = await supabase.from("user_roles").select("user_id, role");
       const roleByUserId = new Map((roles ?? []).map((row) => [row.user_id, row.role as AppRole]));
@@ -709,7 +714,7 @@ const Settings = () => {
       return { userId, isMaster };
     },
     onSuccess: (data) => {
-      queryClient.setQueryData(["settings-users"], (old: SettingsUser[] | undefined) =>
+      queryClient.setQueryData(settingsUsersQueryKey, (old: SettingsUser[] | undefined) =>
         old ? old.map((u) => (u.id === data.userId ? { ...u, is_quotation_master: data.isMaster } : u)) : [],
       );
       toast.success(`Quotation Master ${data.isMaster ? "granted" : "revoked"}`);
@@ -724,7 +729,7 @@ const Settings = () => {
       return { userId, canManage };
     },
     onSuccess: (data) => {
-      queryClient.setQueryData(["settings-users"], (old: SettingsUser[] | undefined) =>
+      queryClient.setQueryData(settingsUsersQueryKey, (old: SettingsUser[] | undefined) =>
         old ? old.map((u) => (u.id === data.userId ? { ...u, can_manage_users: data.canManage } : u)) : [],
       );
       toast.success(`CS Admin settings access `);
@@ -739,7 +744,7 @@ const Settings = () => {
       return { userId, canView };
     },
     onSuccess: (data) => {
-      queryClient.setQueryData(["settings-users"], (old: SettingsUser[] | undefined) =>
+      queryClient.setQueryData(settingsUsersQueryKey, (old: SettingsUser[] | undefined) =>
         old ? old.map((u) => (u.id === data.userId ? { ...u, can_view_tech_report: data.canView } : u)) : [],
       );
       toast.success(`Technician report access ${data.canView ? "granted" : "revoked"}`);
@@ -760,7 +765,7 @@ const Settings = () => {
       return { userId, allowed };
     },
     onSuccess: (data) => {
-      queryClient.setQueryData(["settings-users"], (old: SettingsUser[] | undefined) =>
+      queryClient.setQueryData(settingsUsersQueryKey, (old: SettingsUser[] | undefined) =>
         old ? old.map((u) => (u.id === data.userId ? { ...u, can_add_manual_leads: data.allowed } : u)) : [],
       );
       toast.success(`Manual Lead Addition ${data.allowed ? "granted" : "revoked"}`);
@@ -875,7 +880,7 @@ const Settings = () => {
   // the user list re-filter, and the per-row permission controls appear - which
   // reflows the whole page on every refresh. Wait for the profile first so the
   // layout is painted once, in its final state.
-  if (!profileLoaded) {
+  if (!profileLoaded || usersPending) {
     return (
       <div className="mx-auto max-w-[1440px] space-y-6" aria-busy="true">
         <div className="h-24 animate-pulse rounded-2xl border border-border/50 bg-card/60" />
@@ -1053,18 +1058,6 @@ const Settings = () => {
                           onCheckedChange={(checked) => toggleCanManageUsers.mutate({ userId: u.id, canManage: checked })}
                         />
                         <span className="text-[12px] font-medium leading-none">Can Manage CS Users</span>
-                      </div>
-                    )}
-
-                    {u.role === "customer_service" && (isAdmin || currentRole === "cs_admin") && (
-                      <div className="flex shrink-0 items-center gap-2 rounded-2xl border border-border/60 bg-background/70 px-3 py-2">
-                        <Switch
-                          checked={u.can_add_manual_leads || false}
-                          onCheckedChange={(checked) =>
-                            toggleCanAddManualLead.mutate({ userId: u.id, allowed: checked })
-                          }
-                        />
-                        <span className="text-[12px] font-medium leading-none">Manual Lead Addition</span>
                       </div>
                     )}
 
