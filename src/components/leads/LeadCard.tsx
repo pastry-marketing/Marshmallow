@@ -25,8 +25,10 @@ import {
   CalendarDays,
   Ban,
   CalendarClock,
+  CheckCircle2,
   Clock,
   ShieldCheck,
+  XCircle,
   Copy,
   Check,
   Clipboard,
@@ -110,6 +112,18 @@ interface LeadCardProps {
   initialPendingCancellationRequest?: LeadCancellationRequest | null;
   /** A quote approval this lead is still waiting on a CS Admin to decide. */
   pendingQuoteApproval?: boolean;
+  /**
+   * A quote approval this viewer can decide, rendered with its actions directly
+   * above the status control. Supplied by the Quote Approval page; every other
+   * list leaves it out and shows no review actions.
+   */
+  quoteApproval?: {
+    requestedByName?: string | null;
+    requestedAt?: string | null;
+    busy?: boolean;
+    onApprove: () => void;
+    onDecline: () => void;
+  } | null;
 }
 
 const NOTE_INDICATOR_START_AT = new Date("2026-06-12T12:01:26.000Z").getTime();
@@ -692,6 +706,7 @@ function LeadCard({
   initialPhotoPaths,
   initialPendingCancellationRequest,
   pendingQuoteApproval = false,
+  quoteApproval = null,
 }: LeadCardProps) {
   const { user, role, profile, canAccess } = useAuth();
   const navigate = useNavigate();
@@ -2009,10 +2024,79 @@ function LeadCard({
 
         <div className="mt-auto border-t border-white/30 px-4 pb-4 pt-4 dark:border-white/5">
           <div className="crm-lead-card-footer rounded-[24px] p-2.5 shadow-[0_24px_40px_-28px_rgba(59,130,246,0.18)] dark:shadow-none">
-            {pendingQuoteApproval && (
+            {pendingQuoteApproval && !quoteApproval && (
               <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold text-amber-600 dark:text-amber-400">
                 <Clock className="h-3.5 w-3.5 shrink-0" />
                 <span>Pending CS Admin approval</span>
+              </div>
+            )}
+
+            {quoteApproval && (
+              <div className="mb-2.5 space-y-2 rounded-[18px] border border-violet-500/25 bg-violet-500/[0.07] p-2.5">
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-violet-500">
+                    Quote approval requested
+                  </p>
+                  {quoteApproval.requestedAt && (
+                    <span className="shrink-0 text-[10px] text-muted-foreground">
+                      {formatDateTime(quoteApproval.requestedAt)}
+                    </span>
+                  )}
+                </div>
+                <p className="truncate text-[11px] text-muted-foreground">
+                  By {quoteApproval.requestedByName || "Customer Service"}
+                </p>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <Button size="sm" className="h-9 gap-1.5 px-2 text-[11px]" disabled={quoteApproval.busy}>
+                        <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                        <span className="truncate">Forward to Quotation Master</span>
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Forward this quote to the Quotation Master?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          {lead.customer_name || "This lead"} will move to Quotes to Send for the quotation team.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Go back</AlertDialogCancel>
+                        <AlertDialogAction onClick={quoteApproval.onApprove}>
+                          Forward to Quotation Master
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <Button size="sm" variant="outline" className="h-9 gap-1.5 px-2 text-[11px]" disabled={quoteApproval.busy}>
+                        <XCircle className="h-3.5 w-3.5 shrink-0" />
+                        <span className="truncate">Decline request</span>
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Decline this quote request?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          The request will close and the lead will stay at its current status.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Go back</AlertDialogCancel>
+                        <AlertDialogAction
+                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                          onClick={quoteApproval.onDecline}
+                        >
+                          Decline request
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                </div>
               </div>
             )}
             <div className="mb-2.5 flex items-center gap-2">

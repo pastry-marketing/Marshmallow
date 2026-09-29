@@ -1,23 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { format } from "date-fns";
-import { CheckCircle2, ClipboardCheck, Search, XCircle } from "lucide-react";
+import { ClipboardCheck, Search } from "lucide-react";
 
 import LeadCard from "@/components/leads/LeadCard";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import {
@@ -185,7 +172,6 @@ export default function QuoteApprovalRequests() {
         <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
           {filteredRequests.map((request) => {
             const lead = request.lead;
-            const customerName = lead?.customer_name || request.lead_customer_name || "Lead";
             const busy = reviewingId === request.id;
 
             if (!lead) {
@@ -203,81 +189,27 @@ export default function QuoteApprovalRequests() {
             }
 
             return (
-              <div key={request.id} className="min-w-0 space-y-2">
-                <div className="rounded-[20px] border border-violet-500/25 bg-violet-500/[0.07] p-3 shadow-sm">
-                  <div className="mb-3 flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-violet-500">
-                        Quote approval requested
-                      </p>
-                      <p className="mt-1 truncate text-xs text-muted-foreground">
-                        By {request.requested_by_name || "Customer Service"}
-                      </p>
-                    </div>
-                    <span className="shrink-0 text-[10px] text-muted-foreground">
-                      {format(new Date(request.created_at), "MMM d · h:mm a")}
-                    </span>
-                  </div>
-
-                  {reviewer ? (
-                    <div className="grid grid-cols-2 gap-2">
-                      <AlertDialog>
-                        <AlertDialogTrigger asChild>
-                          <Button size="sm" className="gap-1.5" disabled={busy}>
-                            <CheckCircle2 className="h-3.5 w-3.5" />
-                            Approve quote
-                          </Button>
-                        </AlertDialogTrigger>
-                        <AlertDialogContent>
-                          <AlertDialogHeader>
-                            <AlertDialogTitle>Approve this quote request?</AlertDialogTitle>
-                            <AlertDialogDescription>
-                              {customerName} will move to Quotes to Send for the quotation team.
-                            </AlertDialogDescription>
-                          </AlertDialogHeader>
-                          <AlertDialogFooter>
-                            <AlertDialogCancel>Go back</AlertDialogCancel>
-                            <AlertDialogAction onClick={() => handleReview(request, "approved")}>
-                              Approve quote
-                            </AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
-                      </AlertDialog>
-
-                      <AlertDialog>
-                        <AlertDialogTrigger asChild>
-                          <Button size="sm" variant="outline" className="gap-1.5" disabled={busy}>
-                            <XCircle className="h-3.5 w-3.5" />
-                            Decline request
-                          </Button>
-                        </AlertDialogTrigger>
-                        <AlertDialogContent>
-                          <AlertDialogHeader>
-                            <AlertDialogTitle>Decline this quote request?</AlertDialogTitle>
-                            <AlertDialogDescription>
-                              The request will close and the lead will stay at its current status.
-                            </AlertDialogDescription>
-                          </AlertDialogHeader>
-                          <AlertDialogFooter>
-                            <AlertDialogCancel>Go back</AlertDialogCancel>
-                            <AlertDialogAction
-                              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                              onClick={() => handleReview(request, "declined")}
-                            >
-                              Decline request
-                            </AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
-                      </AlertDialog>
-                    </div>
-                  ) : (
-                    <p className="rounded-xl border border-violet-500/20 bg-background/40 px-3 py-2 text-center text-xs text-muted-foreground">
-                      Waiting for CS Admin or Admin approval
-                    </p>
-                  )}
-                </div>
-
-                <LeadCard lead={lead} profiles={profiles} onRefresh={() => void refetch()} />
+              <div key={request.id} className="min-w-0">
+                <LeadCard
+                  lead={lead}
+                  profiles={profiles}
+                  onRefresh={() => void refetch()}
+                  // The review actions live on the card itself, right above the
+                  // status control, so they scroll with the lead they belong to
+                  // instead of sitting in a separate panel above it.
+                  quoteApproval={
+                    reviewer
+                      ? {
+                          requestedByName: request.requested_by_name,
+                          requestedAt: request.created_at,
+                          busy,
+                          onApprove: () => handleReview(request, "approved"),
+                          onDecline: () => handleReview(request, "declined"),
+                        }
+                      : null
+                  }
+                  pendingQuoteApproval={!reviewer}
+                />
               </div>
             );
           })}
