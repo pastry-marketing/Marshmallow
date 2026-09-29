@@ -732,6 +732,9 @@ export default function LeadDetailPage() {
           created_by: user.id,
           created_by_name: currentUserName,
           assigned_cs: isCS ? user.id : null,
+          // Manual CRM entry. The Chrome extension leaves this false, and RLS
+          // only lets a CS through when Settings granted Manual Lead Addition.
+          manual_entry: true,
         };
 
         const { data, error } = await supabase.from("leads").insert(insertData).select().single();

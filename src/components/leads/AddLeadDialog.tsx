@@ -267,6 +267,9 @@ const AddLeadDialog = ({ open, onOpenChange, onSuccess, initialData }: Props) =>
       created_by: user.id,
       created_by_name: currentUserName,
       assigned_cs: createsAsCs ? user.id : null,
+      // Manual CRM entry. The Chrome extension leaves this false, and RLS
+      // only lets a CS through when Settings granted Manual Lead Addition.
+      manual_entry: true,
 
       quote: form.quote || null,
       service_details: form.service_details || null,
