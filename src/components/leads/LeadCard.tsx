@@ -25,6 +25,7 @@ import {
   CalendarDays,
   Ban,
   CalendarClock,
+  Clock,
   ShieldCheck,
   Copy,
   Check,
@@ -107,6 +108,8 @@ interface LeadCardProps {
   initialPhotoCount?: number;
   initialPhotoPaths?: string[];
   initialPendingCancellationRequest?: LeadCancellationRequest | null;
+  /** A quote approval this lead is still waiting on a CS Admin to decide. */
+  pendingQuoteApproval?: boolean;
 }
 
 const NOTE_INDICATOR_START_AT = new Date("2026-06-12T12:01:26.000Z").getTime();
@@ -688,6 +691,7 @@ function LeadCard({
   initialPhotoCount,
   initialPhotoPaths,
   initialPendingCancellationRequest,
+  pendingQuoteApproval = false,
 }: LeadCardProps) {
   const { user, role, profile, canAccess } = useAuth();
   const navigate = useNavigate();
@@ -2005,6 +2009,12 @@ function LeadCard({
 
         <div className="mt-auto border-t border-white/30 px-4 pb-4 pt-4 dark:border-white/5">
           <div className="crm-lead-card-footer rounded-[24px] p-2.5 shadow-[0_24px_40px_-28px_rgba(59,130,246,0.18)] dark:shadow-none">
+            {pendingQuoteApproval && (
+              <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold text-amber-600 dark:text-amber-400">
+                <Clock className="h-3.5 w-3.5 shrink-0" />
+                <span>Pending CS Admin approval</span>
+              </div>
+            )}
             <div className="mb-2.5 flex items-center gap-2">
               <Select value={lead.status} onValueChange={handleStatusChange} disabled={changingStatus || isPaid || isOpr}>
                 <SelectTrigger

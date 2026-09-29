@@ -40,7 +40,7 @@ import LeadReportDialog from "@/components/leads/LeadReportDialog";
 import ExportLeadsDialog, { ExportOptions } from "@/components/leads/ExportLeadsDialog";
 import InstallExtensionDialog from "@/components/leads/InstallExtensionDialog";
 import { toast } from "sonner";
-import { canAddManualLead, isOperatorRole } from "@/lib/access";
+import { canAddLeadViaExtension, canAddManualLead, isOperatorRole } from "@/lib/access";
 
 
 import { motion } from "framer-motion";
@@ -213,8 +213,12 @@ export default function LeadsPage() {
     photoPaths: string[];
     pendingCancellationRequest: LeadCancellationRequest | null;
     cancellationReason: string | null;
+    pendingQuoteApproval: boolean;
   }>>({});
   const [metadataFallbackKey, setMetadataFallbackKey] = useState<string | null>(null);
+  // Bumped when a quote approval is filed or decided, so the "Pending CS Admin
+  // approval" badge clears as soon as the request is approved or declined.
+  const [quoteApprovalVersion, setQuoteApprovalVersion] = useState(0);
   const deferredSearch = useDeferredValue(search);
 
   const rawStatusFilter = searchParams.get("status") || "all";
@@ -225,6 +229,9 @@ export default function LeadsPage() {
   // Manual creation is admin / cs_admin, or a CS that Settings granted
   // "Manual Lead Addition". Everyone else adds leads through the extension.
   const canCreateLead = canAddManualLead(role, profile);
+  // Only a CS user who lacks the manual grant is pointed at the extension;
+  // Processors and Operators add leads by neither route.
+  const canAddViaExtension = canAddLeadViaExtension(role, profile);
 
   const { filterLeads, allowedStatuses } = useAllowedStatuses();
 
@@ -495,6 +502,24 @@ export default function LeadsPage() {
     };
   }, [role, user]);
 
+  // Quote approval decisions do not always touch the lead row (a decline leaves
+  // it untouched), so the badge listens to the request table itself.
+  useEffect(() => {
+    if (!user || !role) return;
+    const channel = supabase
+      .channel("leads-page-quote-approvals")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "lead_quote_approval_requests" },
+        () => setQuoteApprovalVersion((v) => v + 1),
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [role, user]);
+
   const visibleMyLeads = useMemo(() => filterLeads([...leads]), [leads, filterLeads]);
   const visibleSharedLeads = useMemo(() => [...sharedLeads], [sharedLeads]);
 
@@ -604,7 +629,7 @@ export default function LeadsPage() {
       setMetadataFallbackKey(null);
 
       try {
-        const [notesRes, techNotesRes, photosRes, cancelRes] = await Promise.all([
+        const [notesRes, techNotesRes, photosRes, cancelRes, quoteApprovalRes] = await Promise.all([
           supabase
             .from("lead_notes")
             .select("lead_id, note_type")
@@ -627,7 +652,15 @@ export default function LeadsPage() {
             .from("lead_cancellation_requests")
             .select("*")
             .in("lead_id", pagedIds)
-            .order("created_at", { ascending: false })
+            .order("created_at", { ascending: false }),
+          // Quote approvals still awaiting a CS Admin decision, for the badge on
+          // the card. Kept out of the batch error below: a role that cannot read
+          // this table just gets no badge, rather than losing all card metadata.
+          supabase
+            .from("lead_quote_approval_requests" as never)
+            .select("lead_id")
+            .eq("status", "pending")
+            .in("lead_id", pagedIds)
         ]);
 
         if (!active) return;
@@ -641,6 +674,7 @@ export default function LeadsPage() {
           photoPaths: string[];
           pendingCancellationRequest: LeadCancellationRequest | null;
           cancellationReason: string | null;
+          pendingQuoteApproval: boolean;
         }> = {};
 
         pagedIds.forEach((id) => {
@@ -651,6 +685,7 @@ export default function LeadsPage() {
             photoPaths: [],
             pendingCancellationRequest: null,
             cancellationReason: null,
+            pendingQuoteApproval: false,
           };
         });
 
@@ -716,6 +751,13 @@ export default function LeadsPage() {
           });
         }
 
+        if (!quoteApprovalRes.error && quoteApprovalRes.data) {
+          (quoteApprovalRes.data as unknown as { lead_id: string }[]).forEach((req) => {
+            const mapItem = metadataMap[req.lead_id];
+            if (mapItem) mapItem.pendingQuoteApproval = true;
+          });
+        }
+
         setPagedMetadata(metadataMap);
       } catch (err) {
         console.error("Failed to load paged metadata", err);
@@ -728,7 +770,7 @@ export default function LeadsPage() {
     return () => {
       active = false;
     };
-  }, [pagedIdsStr, profiles]);
+  }, [pagedIdsStr, profiles, quoteApprovalVersion]);
 
   const countSource = activeTab === "shared" ? visibleSharedLeads : visibleMyLeads;
 
@@ -1139,12 +1181,12 @@ export default function LeadsPage() {
               <Plus className="h-4 w-4" />
               New Lead
             </Button>
-          ) : (
+          ) : canAddViaExtension ? (
             <Button onClick={() => setShowInstallDialog(true)} size="sm" className="gap-1.5 h-9 order-first">
               <Puzzle className="h-4 w-4" />
               Add Lead via Extension
             </Button>
-          )}
+          ) : null}
           {isAdmin && (
             <Button
               variant="outline"
@@ -1599,6 +1641,7 @@ export default function LeadsPage() {
                 initialPhotoCount={metadata?.photoCount}
                 initialPhotoPaths={metadata?.photoPaths}
                 initialPendingCancellationRequest={metadata?.pendingCancellationRequest}
+                pendingQuoteApproval={metadata?.pendingQuoteApproval}
               />
             </motion.div>
             );
