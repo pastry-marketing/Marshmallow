@@ -1151,15 +1151,19 @@ export default function LeadsPage() {
             </Button>
           )}
 
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowInstallDialog(true)}
-            className="gap-1.5 text-[12px] h-9 border-border/60 hover:bg-muted/30"
-          >
-            <Puzzle className="h-3.5 w-3.5" />
-            Extension
-          </Button>
+          {/* The extension only captures new leads, so it is offered to the
+              roles that create them. Processors and Operators never do. */}
+          {canCreateLead && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowInstallDialog(true)}
+              className="gap-1.5 text-[12px] h-9 border-border/60 hover:bg-muted/30"
+            >
+              <Puzzle className="h-3.5 w-3.5" />
+              Extension
+            </Button>
+          )}
 
           <Button
             variant="outline"
