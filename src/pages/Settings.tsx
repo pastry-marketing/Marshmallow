@@ -25,7 +25,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { toast } from "sonner";
-import { Plus, Shield, Eye, EyeOff, Trash2, ShieldCheck, ShieldOff, QrCode, Copy, RefreshCw, KeyRound, Lock, FileText, BookOpen, Megaphone, FileSpreadsheet } from "lucide-react";
+import { Plus, Shield, Eye, EyeOff, Trash2, ShieldCheck, ShieldOff, QrCode, Copy, RefreshCw, KeyRound, Lock, FileText, BookOpen, Megaphone, FileSpreadsheet, Hash } from "lucide-react";
 import { DocumentationTab } from "@/components/settings/DocumentationTab";
 import { GoogleSheetsTab } from "@/components/settings/GoogleSheetsTab";
 const CrmUpdates = lazy(() => import("@/pages/CrmUpdates"));
@@ -1004,7 +1004,7 @@ const Settings = () => {
         <div className="grid gap-3">
           {displayedUsers.map((u) => (
             <Card key={u.id} className="overflow-hidden border-border/60 bg-card/95 hover:shadow-premium-md">
-              <CardContent className="flex flex-col gap-3 p-4 lg:grid lg:grid-cols-[2.25rem_minmax(0,1fr)] lg:items-start lg:gap-x-4 lg:gap-y-3 xl:grid-cols-[2.25rem_minmax(0,1fr)_auto] xl:items-center">
+              <CardContent className="flex flex-col gap-3 p-4 lg:grid lg:grid-cols-[2.25rem_minmax(0,1fr)] lg:items-start lg:gap-x-4 lg:gap-y-3 xl:grid-cols-[2.25rem_minmax(11rem,1fr)_minmax(0,auto)] xl:items-center">
                 <Avatar className="h-9 w-9 shrink-0">
                   <AvatarFallback className="bg-primary/8 text-primary text-[11px] font-bold">
                     {getInitials(u.full_name)}
@@ -1027,12 +1027,12 @@ const Settings = () => {
                 </div>
 
                 {(isAdmin || currentRole === "cs_admin") && (
-                  <div className="flex w-full flex-col gap-2 lg:col-span-2 lg:flex-row lg:flex-wrap lg:items-center lg:justify-end xl:col-span-1 xl:w-auto">
+                  <div className="flex w-full flex-col gap-2 lg:col-span-2 lg:flex-row lg:flex-wrap lg:items-center lg:justify-end lg:gap-1.5 xl:col-span-1 xl:w-auto">
                     {isAdmin && <Select
                       value={u.role}
                       onValueChange={(v) => updateRole.mutate({ userId: u.id, role: v as AppRole })}
                     >
-                      <SelectTrigger className="h-10 w-full text-[12px] lg:w-[180px] lg:shrink-0">
+                      <SelectTrigger className="h-10 w-full text-[12px] lg:w-[150px] lg:shrink-0">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -1046,19 +1046,25 @@ const Settings = () => {
                     </Select>}
 
                     {(u.role === "opr" || u.role === "opr_admin") && u.opr_code && (
-                      <span className="inline-flex shrink-0 items-center gap-1 rounded-2xl border border-border/60 bg-background/70 px-3 py-2 text-[12px] font-semibold">
-                        <span className="text-muted-foreground">OPR Code</span>
-                        <code className="rounded-md border border-border/40 bg-muted/60 px-2 py-0.5 font-mono tracking-wider text-foreground">{u.opr_code}</code>
+                      <span
+                        title="OPR Code"
+                        className="inline-flex shrink-0 items-center gap-1 rounded-2xl border border-border/60 bg-background/70 px-2.5 py-2"
+                      >
+                        <Hash className="h-3 w-3 shrink-0 text-muted-foreground" />
+                        <code className="font-mono tracking-wider text-foreground">{u.opr_code}</code>
                       </span>
                     )}
 
                     {isAdmin && u.role === "cs_admin" && (
-                      <div className="flex shrink-0 items-center gap-2 rounded-2xl border border-border/60 bg-background/70 px-3 py-2">
+                      <div
+                        title="Allows this CS Admin to create, edit and delete Customer Service users"
+                        className="flex shrink-0 items-center gap-1.5 rounded-2xl border border-border/60 bg-background/70 px-2.5 py-2"
+                      >
                         <Switch 
                           checked={u.can_manage_users || false}
                           onCheckedChange={(checked) => toggleCanManageUsers.mutate({ userId: u.id, canManage: checked })}
                         />
-                        <span className="text-[12px] font-medium leading-none">Can Manage CS Users</span>
+                        <span className="text-[11px] font-medium leading-none">Manage CS Users</span>
                       </div>
                     )}
 
@@ -1079,11 +1085,11 @@ const Settings = () => {
                     </Button>
 
                     {u.role !== "admin" && (
-                      <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-                        <div className="flex flex-wrap items-center gap-1.5 rounded-2xl border border-border/60 bg-background/70 px-3 py-2">
+                      <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:gap-1.5">
+                        <div className="flex flex-wrap items-center gap-1 rounded-2xl border border-border/60 bg-background/70 px-2.5 py-1.5">
                           {getAccessCode(u.id) ? (
                             <>
-                              <code className="rounded-md border border-border/40 bg-muted/60 px-2.5 py-1 font-mono text-[13px] font-bold tracking-[0.15em] text-foreground">
+                              <code className="rounded-md border border-border/40 bg-muted/60 px-2 py-0.5 font-mono text-[13px] font-bold tracking-[0.15em] text-foreground">
                                 {getAccessCode(u.id)}
                               </code>
 
