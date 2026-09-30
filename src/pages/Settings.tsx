@@ -305,6 +305,8 @@ const Settings = () => {
   const [totpDialogOpen, setTotpDialogOpen] = useState(false);
   const [totpData, setTotpData] = useState<{ userId: string; userName: string; qrCode: string; secret: string } | null>(null);
   const [totpLoadingUser, setTotpLoadingUser] = useState<string | null>(null);
+  const [deletingTotpUserId, setDeletingTotpUserId] = useState<string | null>(null);
+  const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
 
   const handleEnrollTotp = async (userId: string, userName: string) => {
     setTotpLoadingUser(userId);
@@ -1004,16 +1006,16 @@ const Settings = () => {
         <div className="grid gap-3">
           {displayedUsers.map((u) => (
             <Card key={u.id} className="overflow-hidden border-border/60 bg-card/95 hover:shadow-premium-md">
-              <CardContent className="flex flex-col gap-3 p-4 lg:grid lg:grid-cols-[2.25rem_minmax(0,1fr)] lg:items-start lg:gap-x-4 lg:gap-y-3 xl:grid-cols-[2.25rem_minmax(11rem,1fr)_minmax(0,auto)] xl:items-center">
+              <CardContent className="flex flex-col gap-3 p-4 lg:flex-row lg:flex-wrap lg:items-center lg:gap-x-3 lg:gap-y-2 xl:gap-x-4">
                 <Avatar className="h-9 w-9 shrink-0">
                   <AvatarFallback className="bg-primary/8 text-primary text-[11px] font-bold">
                     {getInitials(u.full_name)}
                   </AvatarFallback>
                 </Avatar>
 
-                <div className="min-w-0">
+                <div className="min-w-0 lg:min-w-[12rem] lg:flex-1">
                   <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                    <p className="truncate text-[13px] font-semibold text-foreground">{u.full_name || "Unnamed User"}</p>
+                    <p title={u.full_name || "Unnamed User"} className="truncate text-[13px] font-semibold text-foreground">{u.full_name || "Unnamed User"}</p>
                     <span
                       className={cn(
                         "shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold capitalize",
@@ -1023,11 +1025,11 @@ const Settings = () => {
                       {u.role.replace("_", " ")}
                     </span>
                   </div>
-                  <p className="truncate text-[11px] text-muted-foreground">{u.email || "No email"}</p>
+                  <p title={u.email || "No email"} className="truncate text-[11px] text-muted-foreground">{u.email || "No email"}</p>
                 </div>
 
                 {(isAdmin || currentRole === "cs_admin") && (
-                  <div className="flex w-full flex-col gap-2 lg:col-span-2 lg:flex-row lg:flex-wrap lg:items-center lg:justify-end lg:gap-1.5 xl:col-span-1 xl:w-auto">
+                  <div className="flex w-full flex-col gap-2 lg:w-auto lg:shrink-0 lg:flex-row lg:flex-nowrap lg:items-center lg:gap-1.5">
                     {isAdmin && <Select
                       value={u.role}
                       onValueChange={(v) => updateRole.mutate({ userId: u.id, role: v as AppRole })}
@@ -1048,7 +1050,7 @@ const Settings = () => {
                     {(u.role === "opr" || u.role === "opr_admin") && u.opr_code && (
                       <span
                         title="OPR Code"
-                        className="inline-flex shrink-0 items-center gap-1 rounded-2xl border border-border/60 bg-background/70 px-2.5 py-2"
+                        className="inline-flex h-10 shrink-0 items-center gap-1 rounded-2xl border border-border/60 bg-background/70 px-2.5"
                       >
                         <Hash className="h-3 w-3 shrink-0 text-muted-foreground" />
                         <code className="font-mono tracking-wider text-foreground">{u.opr_code}</code>
@@ -1058,13 +1060,13 @@ const Settings = () => {
                     {isAdmin && u.role === "cs_admin" && (
                       <div
                         title="Allows this CS Admin to create, edit and delete Customer Service users"
-                        className="flex shrink-0 items-center gap-1.5 rounded-2xl border border-border/60 bg-background/70 px-2.5 py-2"
+                        className="flex h-10 shrink-0 items-center gap-1.5 rounded-2xl border border-border/60 bg-background/70 px-2.5"
                       >
-                        <Switch 
+                        <Switch
                           checked={u.can_manage_users || false}
                           onCheckedChange={(checked) => toggleCanManageUsers.mutate({ userId: u.id, canManage: checked })}
                         />
-                        <span className="text-[11px] font-medium leading-none">Manage CS Users</span>
+                        <span className="text-[11px] font-medium leading-none">Manage CS</span>
                       </div>
                     )}
 
@@ -1125,106 +1127,120 @@ const Settings = () => {
                             </Button>
                           )}
                         </div>
-
-                        {(isAdmin || (currentRole === "cs_admin" && u.role === "customer_service")) && (
-                          <div className="flex flex-wrap items-center gap-1.5 rounded-2xl border border-border/60 bg-background/70 px-3 py-2">
-                            <div className="flex items-center gap-1.5 mr-1 text-[11px] font-medium text-muted-foreground">
-                              <Shield className="h-3.5 w-3.5 text-primary" />
-                              <span>TOTP:</span>
-                            </div>
-                            {userTotpMap[u.id] ? (
-                              <div className="flex items-center gap-1.5">
-                                <Badge variant="outline" className="h-6 gap-1 border-emerald-500/30 bg-emerald-500/10 text-[11px] font-semibold text-emerald-500">
-                                  <ShieldCheck className="h-3 w-3" />
-                                  Active
-                                </Badge>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-7 w-7 text-muted-foreground hover:text-foreground"
-                                  onClick={() => handleEnrollTotp(u.id, u.full_name || u.email || "user")}
-                                  disabled={totpLoadingUser === u.id}
-                                  title="Recreate / Reset TOTP"
-                                >
-                                  <RefreshCw className={`h-3 w-3 ${totpLoadingUser === u.id ? "animate-spin" : ""}`} />
-                                </Button>
-                                <AlertDialog>
-                                  <AlertDialogTrigger asChild>
-                                    <Button
-                                      variant="ghost"
-                                      size="icon"
-                                      className="h-7 w-7 text-destructive/60 hover:text-destructive hover:bg-destructive/10"
-                                      disabled={totpLoadingUser === u.id}
-                                      title="Delete TOTP"
-                                    >
-                                      <ShieldOff className="h-3 w-3" />
-                                    </Button>
-                                  </AlertDialogTrigger>
-                                  <AlertDialogContent>
-                                    <AlertDialogHeader>
-                                      <AlertDialogTitle>Delete TOTP for {u.full_name || u.email}?</AlertDialogTitle>
-                                      <AlertDialogDescription>
-                                        This will remove the user's authenticator configuration. They will no longer be prompted for TOTP codes when logging in.
-                                      </AlertDialogDescription>
-                                    </AlertDialogHeader>
-                                    <AlertDialogFooter>
-                                      <AlertDialogCancel>Cancel</AlertDialogCancel>
-                                      <AlertDialogAction
-                                        onClick={() => handleDeleteTotp(u.id, u.full_name || u.email || "user")}
-                                        className="bg-destructive text-destructive-foreground"
-                                      >
-                                        Delete TOTP
-                                      </AlertDialogAction>
-                                    </AlertDialogFooter>
-                                  </AlertDialogContent>
-                                </AlertDialog>
-                              </div>
-                            ) : (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="gap-1.5 text-[11px] h-7"
-                                onClick={() => handleEnrollTotp(u.id, u.full_name || u.email || "user")}
-                                disabled={totpLoadingUser === u.id}
-                              >
-                                <QrCode className="h-3 w-3" />
-                                {totpLoadingUser === u.id ? "Generating..." : "Setup TOTP"}
-                              </Button>
-                            )}
-                          </div>
-                        )}
-
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <Button
-                              variant="outline"
-                              size="icon"
-                              className="h-8 w-8 text-destructive/50 hover:border-destructive/20 hover:bg-destructive/5 hover:text-destructive"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>Delete user "{u.full_name || u.email || "user"}"?</AlertDialogTitle>
-                              <AlertDialogDescription>
-                                This will remove the user's profile, roles, and permissions. The authentication
-                                account will be deactivated.
-                              </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>Cancel</AlertDialogCancel>
-                              <AlertDialogAction
-                                onClick={() => handleDeleteUser(u.id)}
-                                className="bg-destructive text-destructive-foreground"
-                              >
-                                Delete
-                              </AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
                       </div>
                     )}
+
+                    {(isAdmin || (currentRole === "cs_admin" && u.role === "customer_service")) && (
+                      userTotpMap[u.id] ? (
+                        <div className="flex shrink-0 items-center gap-1">
+                          <span
+                            title="Two-factor authentication is active for this user"
+                            className="inline-flex h-8 items-center gap-1 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-2 text-[11px] font-semibold text-emerald-500"
+                          >
+                            <ShieldCheck className="h-3.5 w-3.5" />
+                            2FA
+                          </span>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                            onClick={() => handleEnrollTotp(u.id, u.full_name || u.email || "user")}
+                            disabled={totpLoadingUser === u.id}
+                            title="Recreate / Reset 2FA"
+                          >
+                            <RefreshCw className={`h-3.5 w-3.5 ${totpLoadingUser === u.id ? "animate-spin" : ""}`} />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-destructive/60 hover:bg-destructive/10 hover:text-destructive"
+                            onClick={() => setDeletingTotpUserId(u.id)}
+                            disabled={totpLoadingUser === u.id}
+                            title="Remove 2FA"
+                          >
+                            <ShieldOff className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-10 shrink-0 gap-1.5 px-2.5 text-[11px]"
+                          onClick={() => handleEnrollTotp(u.id, u.full_name || u.email || "user")}
+                          disabled={totpLoadingUser === u.id}
+                          title="Set up two-factor authentication"
+                        >
+                          <Shield className="h-3.5 w-3.5" />
+                          2FA
+                        </Button>
+                      )
+                    )}
+
+                    {u.role !== "admin" && (
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="h-10 w-10 shrink-0 text-destructive/50 hover:border-destructive/20 hover:bg-destructive/5 hover:text-destructive"
+                        onClick={() => setDeletingUserId(u.id)}
+                        title={`Delete ${u.full_name || u.email || "user"}`}
+                        aria-label={`Delete ${u.full_name || u.email || "user"}`}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
+
+                    <AlertDialog
+                      open={deletingTotpUserId === u.id}
+                      onOpenChange={(o) => { if (!o) setDeletingTotpUserId(null); }}
+                    >
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Delete TOTP for {u.full_name || u.email}?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            This will remove the user's authenticator configuration. They will no longer be prompted for TOTP codes when logging in.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction
+                            onClick={async () => {
+                              await handleDeleteTotp(u.id, u.full_name || u.email || "user");
+                              setDeletingTotpUserId(null);
+                            }}
+                            className="bg-destructive text-destructive-foreground"
+                          >
+                            Delete TOTP
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+
+                    <AlertDialog
+                      open={deletingUserId === u.id}
+                      onOpenChange={(o) => { if (!o) setDeletingUserId(null); }}
+                    >
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Delete user "{u.full_name || u.email || "user"}"?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            This will remove the user's profile, roles, and permissions. The authentication
+                            account will be deactivated.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction
+                            onClick={async () => {
+                              await handleDeleteUser(u.id);
+                              setDeletingUserId(null);
+                            }}
+                            className="bg-destructive text-destructive-foreground"
+                          >
+                            Delete
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
                   </div>
                 )}
               </CardContent>
