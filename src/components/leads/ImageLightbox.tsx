@@ -56,6 +56,7 @@ export default function ImageLightbox({ images, initialIndex = 0, open, onOpenCh
         <Button
           variant="ghost"
           size="icon"
+          aria-label="Close image"
           className="absolute top-3 right-3 z-50 text-white/70 hover:text-white hover:bg-white/10 [&_svg]:size-5"
           onClick={() => onOpenChange(false)}
         >
@@ -67,6 +68,7 @@ export default function ImageLightbox({ images, initialIndex = 0, open, onOpenCh
             <Button
               variant="ghost"
               size="icon"
+              aria-label="Previous image"
               className="absolute left-2 z-40 text-white/70 hover:text-white hover:bg-white/10"
               onClick={handlePrev}
             >
@@ -112,6 +114,7 @@ export default function ImageLightbox({ images, initialIndex = 0, open, onOpenCh
             <Button
               variant="ghost"
               size="icon"
+              aria-label="Next image"
               className="absolute right-2 z-40 text-white/70 hover:text-white hover:bg-white/10"
               onClick={handleNext}
             >

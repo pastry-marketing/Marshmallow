@@ -1679,6 +1679,7 @@ const Settings = () => {
                 <Button
                   variant="outline"
                   size="icon"
+                  aria-label="Copy setup key"
                   className="shrink-0 h-10 w-10"
                   onClick={() => {
                     if (totpData?.secret) {

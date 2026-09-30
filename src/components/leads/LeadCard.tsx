@@ -2191,6 +2191,7 @@ function LeadCard({
                     <Button
                       variant="outline"
                       size="icon"
+                      aria-label="Delete lead"
                       className="crm-lead-card-inner h-11 w-full rounded-[14px] text-destructive/60 transition-all duration-200 hover:-translate-y-0.5 hover:border-destructive/30 hover:bg-destructive/[0.06] hover:text-destructive hover:shadow-[0_18px_26px_-20px_rgba(239,68,68,0.22)] dark:hover:shadow-none"
                     >
                       <Trash2 className="h-3.5 w-3.5" />

@@ -167,6 +167,7 @@ export default function MFAEnroll() {
                     <Button
                       variant="ghost"
                       size="icon"
+                      aria-label="Copy setup key"
                       className="h-7 w-7"
                       onClick={() => { navigator.clipboard.writeText(secret); toast.success('Copied!'); }}
                     >

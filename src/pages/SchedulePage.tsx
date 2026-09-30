@@ -346,6 +346,7 @@ export default function SchedulePage() {
             <Button
               variant="outline"
               size="icon"
+              aria-label="Previous period"
               className="h-10 w-10 rounded-xl border-border/60 bg-background/70 shadow-sm"
               onClick={handlePrev}
               disabled={hasCustomRange}
@@ -365,6 +366,7 @@ export default function SchedulePage() {
             <Button
               variant="outline"
               size="icon"
+              aria-label="Next period"
               className="h-10 w-10 rounded-xl border-border/60 bg-background/70 shadow-sm"
               onClick={handleNext}
               disabled={hasCustomRange}

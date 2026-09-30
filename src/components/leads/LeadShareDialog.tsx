@@ -113,7 +113,7 @@ export default function LeadShareDialog({ leadId, customerName, className }: Pro
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button variant="outline" size="icon" className={cn("h-9 w-9", className)} onClick={(e) => e.stopPropagation()}>
+        <Button variant="outline" size="icon" className={cn("h-9 w-9", className)} onClick={(e) => e.stopPropagation()} aria-label="Share lead">
           <Share2 className="h-3.5 w-3.5" />
         </Button>
       </DialogTrigger>
