@@ -370,10 +370,10 @@ export default function NoteThread({ leadId, noteType, label, profiles = {}, onN
                         autoFocus
                       />
                       <div className="flex gap-1 justify-end">
-                        <Button size="icon" variant="ghost" className="h-6 w-6" onClick={handleCancelEdit}>
+                        <Button size="icon" variant="ghost" className="h-6 w-6" onClick={handleCancelEdit} aria-label="Cancel editing note">
                           <X className="h-3 w-3" />
                         </Button>
-                        <Button size="icon" className="h-6 w-6" onClick={handleSaveEdit}>
+                        <Button size="icon" className="h-6 w-6" onClick={handleSaveEdit} aria-label="Save note">
                           <Check className="h-3 w-3" />
                         </Button>
                       </div>
@@ -472,6 +472,7 @@ export default function NoteThread({ leadId, noteType, label, profiles = {}, onN
               />
               <Button
                 size="icon"
+                aria-label="Send note"
                 className="h-9 w-9 shrink-0 rounded-[14px] shadow-[0_12px_22px_-16px_hsl(var(--primary)/0.45)]"
                 onClick={handleSend}
                 disabled={sending || !newNote.trim()}

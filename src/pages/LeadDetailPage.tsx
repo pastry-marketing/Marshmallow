@@ -1156,7 +1156,7 @@ export default function LeadDetailPage() {
         <div className="flex flex-col gap-5 px-5 py-5 sm:px-6 sm:py-6">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="flex min-w-0 items-start gap-3">
-              <Button variant="ghost" size="icon" onClick={() => navigate("/leads")} className="mt-1 shrink-0 rounded-xl">
+              <Button variant="ghost" size="icon" onClick={() => navigate("/leads")} className="mt-1 shrink-0 rounded-xl" aria-label="Back to leads">
                 <ArrowLeft className="h-5 w-5" />
               </Button>
 

@@ -392,6 +392,7 @@ export default function ManageNumbersModal({
                       <Button
                         variant="ghost"
                         size="icon"
+                        aria-label="Move up"
                         onClick={() => handleMove(index, "up")}
                         disabled={index === 0}
                         className="h-7 w-7 text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-30 rounded-lg"
@@ -401,6 +402,7 @@ export default function ManageNumbersModal({
                       <Button
                         variant="ghost"
                         size="icon"
+                        aria-label="Move down"
                         onClick={() => handleMove(index, "down")}
                         disabled={index === filteredList.length - 1}
                         className="h-7 w-7 text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-30 rounded-lg"
