@@ -19,6 +19,30 @@ import { format } from "date-fns";
 import { useAllowedStatuses } from "@/hooks/useAllowedStatuses";
 import { compareLeadDisplayPriority } from "@/lib/constants";
 
+const ALL_LEADS_TABLE_COLUMNS =
+  "id, job_id, customer_name, customer_phone, address, status, service_type, created_at, last_edited_at, cs_tag, created_by, quote_requested_by, urgent_at";
+
+/**
+ * Everything this table renders, plus every field the sort needs.
+ * `compareLeadDisplayPriority` reads cs_tag, quote_requested_by and urgent_at
+ * (tag rank, quote pinning, urgent ordering) and `isLeadPinnedForUser` reads
+ * created_by / quote_requested_by, so those are not optional.
+ *
+ * `nearby_areas`, `quote`, `service_details` and `customer_schedule_requirements`
+ * are deliberately excluded: they are only read by the detail view, which loads
+ * its own row by id. Measured across the table they were ~674 kB of the 2.1 MB
+ * that `select("*")` transferred, on every poll, for every client.
+ *
+ * Realtime `postgres_changes` delivers whole rows, so INSERT/UPDATE events merge
+ * as a superset of this projection and the table stays correct between refetches.
+ */
+type AllLeadsRow = Pick<
+  Lead,
+  | "id" | "job_id" | "customer_name" | "customer_phone" | "address" | "status"
+  | "service_type" | "created_at" | "last_edited_at" | "cs_tag" | "created_by"
+  | "quote_requested_by" | "urgent_at"
+>;
+
 const AllLeads = () => {
   const { user, role } = useAuth();
   const { toggleNotepad, activeUserIds } = useNotepad();
@@ -40,10 +64,10 @@ const AllLeads = () => {
     queryFn: async () => {
       // Page through the whole table so "All Leads" and its status counts don't
       // silently drop older leads past PostgREST's 1000-row response cap.
-      return fetchAllRows<Lead>((from, to) => {
+      return fetchAllRows<AllLeadsRow>((from, to) => {
         let query = supabase
           .from("leads")
-          .select("*")
+          .select(ALL_LEADS_TABLE_COLUMNS)
           .order("created_at", { ascending: false })
           .order("id", { ascending: false })
           .range(from, to);
@@ -55,7 +79,13 @@ const AllLeads = () => {
       });
     },
     enabled: !!user,
-    refetchInterval: 15000, // Fallback polling every 15 seconds
+    // The realtime channel below applies INSERT/UPDATE/DELETE as they happen, so
+    // this interval is only a safety net for missed events. It used to be 15s,
+    // which meant re-downloading the whole table four times a minute for the
+    // admin/processor/opr roles, who can see every row. 60s keeps the fallback
+    // while cutting that traffic to a quarter.
+    refetchInterval: 60000,
+    staleTime: 30000,
   });
 
   useEffect(() => {
@@ -67,10 +97,10 @@ const AllLeads = () => {
         "postgres_changes",
         { event: "*", schema: "public", table: "leads" },
         (payload) => {
-          const newRow = payload.new as Lead | undefined;
-          const oldRow = payload.old as Lead | undefined;
-          
-          queryClient.setQueryData<Lead[]>(["leads", role, user.id], (oldData) => {
+          const newRow = payload.new as AllLeadsRow | undefined;
+          const oldRow = payload.old as AllLeadsRow | undefined;
+
+          queryClient.setQueryData<AllLeadsRow[]>(["leads", role, user.id], (oldData) => {
             if (!oldData) return oldData;
 
             if (payload.eventType === "INSERT" && newRow) {
