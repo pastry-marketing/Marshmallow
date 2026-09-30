@@ -68,7 +68,7 @@ export const DOC_SECTIONS: DocSection[] = [
           ["quote_pending_requests", "Quotes to Send", "Admin and Quotation Masters"],
           ["quo_monitor", "Quo AI Assistant", "Admin by default; Admin can override per user"],
           ["quick_chat", "Quick Chat", "Admin by default; Admin can override per user"],
-          ["tech_quick_chat", "Tech Quick Chat", "Intended for OPR/OPR Admin, but the can_use_quick_chat RLS check is not yet aware of this key - see section 24"],
+          ["tech_quick_chat", "Tech Quick Chat", "For Technicians, OPR and OPR Admin; enforced by can_use_quick_chat()"],
           ["analytics", "Analytics", "Admin only by default"],
           ["areas", "Area Insights", "Admin only by default"],
           ["activity_logs", "Activity Logs", "Admin only by default"],
@@ -398,8 +398,7 @@ export const DOC_SECTIONS: DocSection[] = [
     title: "24. CRM Updates & Quick Chat",
     blocks: [
       { type: "p", text: "CRM Updates: Admins publish release/announcement notes (crm_updates); each user's read state is tracked in crm_update_receipts and delivered live over Realtime as a popup." },
-      { type: "p", text: "Quick Chat: gated by the quick_chat navigation permission and the can_use_quick_chat(uuid) RLS check. A blinking green dot appears on a lead when the customer sent the last message." },
-  { type: "p", text: "Known gap: there is a separate tech_quick_chat navigation key for OPR and OPR Admin, but can_use_quick_chat(_user_id uuid) takes only a user id and knows nothing about which key is being checked. A user granted tech_quick_chat but not quick_chat is therefore silently denied by the RLS check and sees no Quick Chat indicator. The fix is to replace the function with one that accepts the nav key, e.g. can_use_quick_chat(_user_id uuid, _nav_key text) evaluating the matching navigation_permissions row." },
+      { type: "p", text: "Quick Chat: gated by a navigation permission - quick_chat for Customer Service and CS Admin, tech_quick_chat for Technicians, OPR and OPR Admin - and by the can_use_quick_chat(uuid) RLS check on quo_outbound_messages, which accepts either key. A blinking green dot appears on a lead when the customer sent the last message." },
       { type: "p", text: "Login and new-user forms include show/hide password toggles." },
       { type: "p", text: "The former Quo AI assistant (auto-tagging, daily briefs, AI job queue and its tables) has been fully removed; Quo is now webhook chat only." },
     ],
