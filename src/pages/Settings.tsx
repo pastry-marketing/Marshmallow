@@ -25,8 +25,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { toast } from "sonner";
-import { Plus, Shield, Eye, EyeOff, Trash2, ShieldCheck, ShieldOff, QrCode, Copy, RefreshCw, KeyRound, Lock, FileText, BookOpen, Megaphone, FileSpreadsheet, Hash, MoreHorizontal, UserCog } from "lucide-react";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Plus, Shield, Eye, EyeOff, Trash2, ShieldCheck, ShieldOff, QrCode, Copy, RefreshCw, KeyRound, Lock, FileText, BookOpen, Megaphone, FileSpreadsheet, Hash } from "lucide-react";
 import { DocumentationTab } from "@/components/settings/DocumentationTab";
 import { GoogleSheetsTab } from "@/components/settings/GoogleSheetsTab";
 const CrmUpdates = lazy(() => import("@/pages/CrmUpdates"));
@@ -1007,16 +1006,16 @@ const Settings = () => {
         <div className="grid gap-3">
           {displayedUsers.map((u) => (
             <Card key={u.id} className="overflow-hidden border-border/60 bg-card/95 hover:shadow-premium-md">
-              <CardContent className="flex flex-col gap-3 p-4 lg:grid lg:grid-cols-[2.25rem_minmax(0,1fr)] lg:items-start lg:gap-x-4 lg:gap-y-3 xl:grid-cols-[2.25rem_minmax(11rem,1fr)_minmax(0,auto)] xl:items-center">
+              <CardContent className="flex flex-col gap-3 p-4 lg:flex-row lg:flex-wrap lg:items-center lg:gap-x-3 lg:gap-y-2 xl:gap-x-4">
                 <Avatar className="h-9 w-9 shrink-0">
                   <AvatarFallback className="bg-primary/8 text-primary text-[11px] font-bold">
                     {getInitials(u.full_name)}
                   </AvatarFallback>
                 </Avatar>
 
-                <div className="min-w-0">
+                <div className="min-w-0 lg:min-w-[12rem] lg:flex-1">
                   <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                    <p className="truncate text-[13px] font-semibold text-foreground">{u.full_name || "Unnamed User"}</p>
+                    <p title={u.full_name || "Unnamed User"} className="truncate text-[13px] font-semibold text-foreground">{u.full_name || "Unnamed User"}</p>
                     <span
                       className={cn(
                         "shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold capitalize",
@@ -1026,11 +1025,11 @@ const Settings = () => {
                       {u.role.replace("_", " ")}
                     </span>
                   </div>
-                  <p className="truncate text-[11px] text-muted-foreground">{u.email || "No email"}</p>
+                  <p title={u.email || "No email"} className="truncate text-[11px] text-muted-foreground">{u.email || "No email"}</p>
                 </div>
 
                 {(isAdmin || currentRole === "cs_admin") && (
-                  <div className="flex w-full flex-col gap-2 lg:col-span-2 lg:flex-row lg:flex-wrap lg:items-center lg:gap-1.5 xl:col-span-1 xl:w-auto xl:flex-nowrap">
+                  <div className="flex w-full flex-col gap-2 lg:w-auto lg:shrink-0 lg:flex-row lg:flex-nowrap lg:items-center lg:gap-1.5">
                     {isAdmin && <Select
                       value={u.role}
                       onValueChange={(v) => updateRole.mutate({ userId: u.id, role: v as AppRole })}
@@ -1047,6 +1046,29 @@ const Settings = () => {
                         <SelectItem value="opr_admin">OPR Admin</SelectItem>
                       </SelectContent>
                     </Select>}
+
+                    {(u.role === "opr" || u.role === "opr_admin") && u.opr_code && (
+                      <span
+                        title="OPR Code"
+                        className="inline-flex h-10 shrink-0 items-center gap-1 rounded-2xl border border-border/60 bg-background/70 px-2.5"
+                      >
+                        <Hash className="h-3 w-3 shrink-0 text-muted-foreground" />
+                        <code className="font-mono tracking-wider text-foreground">{u.opr_code}</code>
+                      </span>
+                    )}
+
+                    {isAdmin && u.role === "cs_admin" && (
+                      <div
+                        title="Allows this CS Admin to create, edit and delete Customer Service users"
+                        className="flex h-10 shrink-0 items-center gap-1.5 rounded-2xl border border-border/60 bg-background/70 px-2.5"
+                      >
+                        <Switch
+                          checked={u.can_manage_users || false}
+                          onCheckedChange={(checked) => toggleCanManageUsers.mutate({ userId: u.id, canManage: checked })}
+                        />
+                        <span className="text-[11px] font-medium leading-none">Manage CS</span>
+                      </div>
+                    )}
 
                     <Button
                       variant="outline"
@@ -1108,88 +1130,64 @@ const Settings = () => {
                       </div>
                     )}
 
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
+                    {(isAdmin || (currentRole === "cs_admin" && u.role === "customer_service")) && (
+                      userTotpMap[u.id] ? (
+                        <div className="flex shrink-0 items-center gap-1">
+                          <span
+                            title="Two-factor authentication is active for this user"
+                            className="inline-flex h-8 items-center gap-1 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-2 text-[11px] font-semibold text-emerald-500"
+                          >
+                            <ShieldCheck className="h-3.5 w-3.5" />
+                            2FA
+                          </span>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                            onClick={() => handleEnrollTotp(u.id, u.full_name || u.email || "user")}
+                            disabled={totpLoadingUser === u.id}
+                            title="Recreate / Reset 2FA"
+                          >
+                            <RefreshCw className={`h-3.5 w-3.5 ${totpLoadingUser === u.id ? "animate-spin" : ""}`} />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-destructive/60 hover:bg-destructive/10 hover:text-destructive"
+                            onClick={() => setDeletingTotpUserId(u.id)}
+                            disabled={totpLoadingUser === u.id}
+                            title="Remove 2FA"
+                          >
+                            <ShieldOff className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      ) : (
                         <Button
                           variant="outline"
-                          size="icon"
-                          className="h-10 w-10 shrink-0"
-                          title={`Actions for ${u.full_name || u.email || "user"}`}
-                          aria-label={`Actions for ${u.full_name || u.email || "user"}`}
+                          size="sm"
+                          className="h-10 shrink-0 gap-1.5 px-2.5 text-[11px]"
+                          onClick={() => handleEnrollTotp(u.id, u.full_name || u.email || "user")}
+                          disabled={totpLoadingUser === u.id}
+                          title="Set up two-factor authentication"
                         >
-                          <MoreHorizontal className="h-4 w-4" />
+                          <Shield className="h-3.5 w-3.5" />
+                          2FA
                         </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="w-60">
-                        {isAdmin && u.role === "cs_admin" && (
-                          <DropdownMenuItem
-                            onSelect={(e) => e.preventDefault()}
-                            className="flex cursor-default items-center justify-between gap-3"
-                          >
-                            <span className="flex items-center gap-2 text-[12px]">
-                              <UserCog className="h-3.5 w-3.5" />
-                              Manage CS Users
-                            </span>
-                            <Switch
-                              checked={u.can_manage_users || false}
-                              onCheckedChange={(checked) => toggleCanManageUsers.mutate({ userId: u.id, canManage: checked })}
-                            />
-                          </DropdownMenuItem>
-                        )}
+                      )
+                    )}
 
-                        {(u.role === "opr" || u.role === "opr_admin") && u.opr_code && (
-                          <DropdownMenuItem disabled className="flex items-center justify-between gap-3">
-                            <span className="flex items-center gap-2 text-[12px]">
-                              <Hash className="h-3.5 w-3.5" />
-                              OPR Code
-                            </span>
-                            <code className="font-mono tracking-wider">{u.opr_code}</code>
-                          </DropdownMenuItem>
-                        )}
-
-                        {(isAdmin || (currentRole === "cs_admin" && u.role === "customer_service")) && (
-                          userTotpMap[u.id] ? (
-                            <>
-                              <DropdownMenuItem
-                                onSelect={() => handleEnrollTotp(u.id, u.full_name || u.email || "user")}
-                                className="text-[12px]"
-                              >
-                                <RefreshCw className={`mr-2 h-3.5 w-3.5 ${totpLoadingUser === u.id ? "animate-spin" : ""}`} />
-                                Reset TOTP
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                onSelect={() => setDeletingTotpUserId(u.id)}
-                                className="text-[12px] text-destructive focus:text-destructive"
-                              >
-                                <ShieldOff className="mr-2 h-3.5 w-3.5" />
-                                Remove TOTP
-                              </DropdownMenuItem>
-                            </>
-                          ) : (
-                            <DropdownMenuItem
-                              onSelect={() => handleEnrollTotp(u.id, u.full_name || u.email || "user")}
-                              className="text-[12px]"
-                            >
-                              <QrCode className="mr-2 h-3.5 w-3.5" />
-                              {totpLoadingUser === u.id ? "Generating..." : "Set up TOTP"}
-                            </DropdownMenuItem>
-                          )
-                        )}
-
-                        {u.role !== "admin" && (
-                          <>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem
-                              onSelect={() => setDeletingUserId(u.id)}
-                              className="text-[12px] text-destructive focus:text-destructive"
-                            >
-                              <Trash2 className="mr-2 h-3.5 w-3.5" />
-                              Delete user
-                            </DropdownMenuItem>
-                          </>
-                        )}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                    {u.role !== "admin" && (
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="h-10 w-10 shrink-0 text-destructive/50 hover:border-destructive/20 hover:bg-destructive/5 hover:text-destructive"
+                        onClick={() => setDeletingUserId(u.id)}
+                        title={`Delete ${u.full_name || u.email || "user"}`}
+                        aria-label={`Delete ${u.full_name || u.email || "user"}`}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
 
                     <AlertDialog
                       open={deletingTotpUserId === u.id}
