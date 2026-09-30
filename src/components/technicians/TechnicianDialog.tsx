@@ -301,7 +301,7 @@ export function TechnicianDialog({ open, onOpenChange, technician, onSaved }: Pr
             <Textarea id="tech-notes" value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} />
           </div>
         </div>
-        <DialogFooter>
+        <DialogFooter className="sticky bottom-0 -mx-6 -mb-6 border-t border-border/40 bg-[hsl(var(--background)/0.96)] px-6 pb-6 pt-3 backdrop-blur">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>Cancel</Button>
           <Button onClick={handleSubmit} disabled={saving}>
             {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
