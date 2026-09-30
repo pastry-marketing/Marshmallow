@@ -1004,29 +1004,30 @@ const Settings = () => {
         <div className="grid gap-3">
           {displayedUsers.map((u) => (
             <Card key={u.id} className="overflow-hidden border-border/60 bg-card/95 hover:shadow-premium-md">
-              <CardContent className="flex flex-col gap-4 p-4 lg:flex-row lg:items-center">
+              <CardContent className="flex flex-col gap-3 p-4 lg:grid lg:grid-cols-[2.25rem_minmax(0,1fr)] lg:items-start lg:gap-x-4 lg:gap-y-3 xl:grid-cols-[2.25rem_minmax(0,1fr)_auto] xl:items-center">
                 <Avatar className="h-9 w-9 shrink-0">
                   <AvatarFallback className="bg-primary/8 text-primary text-[11px] font-bold">
                     {getInitials(u.full_name)}
                   </AvatarFallback>
                 </Avatar>
 
-                <div className="min-w-0 flex-1">
-                  <p className="text-[13px] font-semibold text-foreground">{u.full_name || "Unnamed User"}</p>
+                <div className="min-w-0">
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                    <p className="truncate text-[13px] font-semibold text-foreground">{u.full_name || "Unnamed User"}</p>
+                    <span
+                      className={cn(
+                        "shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold capitalize",
+                        roleColors[u.role] || DEFAULT_ROLE_COLOR,
+                      )}
+                    >
+                      {u.role.replace("_", " ")}
+                    </span>
+                  </div>
                   <p className="truncate text-[11px] text-muted-foreground">{u.email || "No email"}</p>
                 </div>
 
-                <span
-                  className={cn(
-                    "rounded-full border px-2.5 py-1 text-[10px] font-semibold capitalize",
-                    roleColors[u.role] || DEFAULT_ROLE_COLOR,
-                  )}
-                >
-                  {u.role.replace("_", " ")}
-                </span>
-
                 {(isAdmin || currentRole === "cs_admin") && (
-                  <div className="flex w-full flex-col gap-3 lg:w-auto lg:flex-row lg:flex-wrap lg:items-center">
+                  <div className="flex w-full flex-col gap-2 lg:col-span-2 lg:flex-row lg:flex-wrap lg:items-center lg:justify-end xl:col-span-1 xl:w-auto">
                     {isAdmin && <Select
                       value={u.role}
                       onValueChange={(v) => updateRole.mutate({ userId: u.id, role: v as AppRole })}

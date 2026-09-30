@@ -307,7 +307,7 @@ export default function LeadReportDialog({ open, onOpenChange }: LeadReportDialo
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto rounded-3xl border border-border/60 bg-card/95 shadow-brand backdrop-blur-xl">
-        <DialogHeader className="flex flex-row items-center justify-between border-b border-border/50 pb-4">
+          <DialogHeader className="flex flex-row flex-wrap items-center justify-between gap-x-4 gap-y-3 border-b border-border/50 pb-4">
           <div>
             <DialogTitle className="text-xl font-bold tracking-tight text-foreground">
               Lead Submission Report
