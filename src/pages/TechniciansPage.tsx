@@ -27,6 +27,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { TechnicianDialog, TechnicianRecord } from "@/components/technicians/TechnicianDialog";
 import { ImportTechniciansDialog } from "@/components/technicians/ImportTechniciansDialog";
 import { TechnicianReport } from "@/components/technicians/TechnicianReport";
+import { TechnicianPerformance } from "@/components/technicians/TechnicianPerformance";
 import { toast } from "@/hooks/use-toast";
 import {
   fetchAllTechnicians,
@@ -277,7 +278,11 @@ export default function TechniciansPage() {
   const isAdmin = role === "admin";
   const canDelete = canDeleteTechnicians(role);
   const canReport = isAdmin || profile?.can_view_tech_report === true;
-  const [activeView, setActiveView] = useState<"directory" | "report">("directory");
+  // The performance view is backed by tech_paid_performance, which aggregates
+  // every lead in the database and is admin-only at the database level, so the
+  // tab is not offered to anyone else - including the per-user tech report grant.
+  const canPerformance = isAdmin;
+  const [activeView, setActiveView] = useState<"directory" | "report" | "performance">("directory");
 
   // Scope of technicians this user may see (opr → own, opr_admin → coded).
   const visibility = useMemo<TechnicianVisibility>(
@@ -781,7 +786,7 @@ export default function TechniciansPage() {
         </div>
       </div>
 
-      {canReport && (
+      {(canReport || canPerformance) && (
         <div className="inline-flex rounded-lg border border-border/60 bg-muted/40 p-0.5 text-xs">
           <button
             type="button"
@@ -790,13 +795,24 @@ export default function TechniciansPage() {
           >
             Directory
           </button>
-          <button
-            type="button"
-            onClick={() => setActiveView("report")}
-            className={`rounded-md px-3 py-1.5 font-medium transition-colors ${activeView === "report" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
-          >
-            Report
-          </button>
+          {canReport && (
+            <button
+              type="button"
+              onClick={() => setActiveView("report")}
+              className={`rounded-md px-3 py-1.5 font-medium transition-colors ${activeView === "report" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              OPR Report
+            </button>
+          )}
+          {canPerformance && (
+            <button
+              type="button"
+              onClick={() => setActiveView("performance")}
+              className={`rounded-md px-3 py-1.5 font-medium transition-colors ${activeView === "performance" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              Tech Report
+            </button>
+          )}
         </div>
       )}
 
@@ -804,7 +820,9 @@ export default function TechniciansPage() {
         <TechnicianReport isAdmin={isAdmin} />
       )}
 
-      <div hidden={canReport && activeView === "report"}>
+      {canPerformance && activeView === "performance" && <TechnicianPerformance />}
+
+      <div hidden={(canReport && activeView === "report") || (canPerformance && activeView === "performance")}>
 
       <Card className="border-border/60">
         <CardContent className="p-3 flex flex-wrap items-center justify-between gap-3">
