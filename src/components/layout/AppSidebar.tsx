@@ -18,8 +18,8 @@ import {
   FileWarning,
   ClipboardCheck,
   Shield,
-AlertTriangle,
-      TrendingUp,
+  AlertTriangle,
+  TrendingUp,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useNavigate } from "react-router-dom";
@@ -66,7 +66,7 @@ const getNavItems = (role: string) => [
   { title: "Quotes to send", url: "/quote-pending", icon: FileWarning, navKey: "quote_pending_requests", group: "Review" },
 { title: "Technicians", url: "/technicians", icon: Contact, navKey: "technicians", group: "Manage" },
     { title: "Area Insights", url: "/areas", icon: MapPin, navKey: "areas", group: "Manage" },
-    { title: "Optimization", url: "/optimization", icon: TrendingUp, navKey: "optimization", group: "Optimization" },
+  { title: "Optimization", url: "/optimization", icon: TrendingUp, navKey: "optimization", group: "Manage" },
   { title: "Analytics", url: "/analytics", icon: BarChart3, navKey: "analytics", group: "Insights" },
   { title: "Activity Logs", url: "/activity-logs", icon: ScrollText, navKey: "activity_logs", group: "Insights" },
   ...(role === "cs_admin" ? [{ title: "Users", url: "/settings", icon: Shield, navKey: "settings", group: "Manage" }] : [{ title: "Settings", url: "/settings", icon: Settings, navKey: "settings", group: "Admin" }]),
