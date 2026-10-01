@@ -126,10 +126,19 @@ export function canAccessNavItem(
     return false;
   }
 
-  if (navItem === "crm_updates") {
-    // Admin-only page
-    return false;
-  }
+if (navItem === "crm_updates") {
+      // Admin-only page
+      return false;
+    }
+
+    if (navItem === "optimization") {
+      // Admin-only. tech_paid_performance aggregates every lead across every
+      // technician, so it cannot be narrowed per user the way a lead list can,
+      // and the database refuses the call for any non-admin. Returning false
+      // here stops Feature Access from offering a grant that would then fail.
+      return false;
+    }
+
 
 
   if (navItem === "cancellation_requests" && canAccessCancellationRequests(role)) {

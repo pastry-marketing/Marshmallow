@@ -61,6 +61,7 @@ const NAV_SECTION_LABELS: Record<string, string> = {
   quote_pending_requests: "Quotes to Send",
   map_view: "Map View",
   technicians: "Technicians",
+      optimization: "Optimization",
   quick_chat: "CX Quickchat",
   tech_quick_chat: "Tech Quickchat",
 };
