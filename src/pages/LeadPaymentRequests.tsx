@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { DollarSign, CheckCircle2, XCircle } from "lucide-react";
+import { ApprovePaymentDialog } from "@/components/payments/ApprovePaymentDialog";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
@@ -33,6 +34,15 @@ const roleLabel: Record<string, string> = {
   processor: "Processor",
   admin: "Admin",
 };
+
+/**
+ * Which lead the approval dialog is open for. Null means closed.
+ *
+ * Kept as state rather than reusing the old AlertDialog trigger, because the
+ * approval is no longer a single confirmation: it now carries an area decision
+ * and a technician flag that have to reset between leads.
+ */
+type ApproveTarget = Parameters<typeof ApprovePaymentDialog>[0]["target"];
 
 function ScreenshotPreview({ path }: { path: string }) {
   const [url, setUrl] = useState<string | null>(null);
@@ -141,6 +151,8 @@ export default function LeadPaymentRequests() {
     };
   }, [queryClient]);
 
+  const [approveTarget, setApproveTarget] = useState<ApproveTarget>(null);
+
   const handleReview = async (row: Row, action: "approved" | "rejected") => {
     if (!user || !row.lead) return;
     try {
@@ -224,26 +236,22 @@ export default function LeadPaymentRequests() {
                     <div className="flex min-w-[220px] flex-col gap-2">
                       {canReview ? (
                         <>
-                          <AlertDialog>
-                            <AlertDialogTrigger asChild>
-                              <Button className="gap-1.5">
-                                <CheckCircle2 className="h-4 w-4" />
-                                Approve & mark paid
-                              </Button>
-                            </AlertDialogTrigger>
-                            <AlertDialogContent>
-                              <AlertDialogHeader>
-                                <AlertDialogTitle>Confirm payment approval</AlertDialogTitle>
-                                <AlertDialogDescription>
-                                  This will mark {lead?.customer_name || "this lead"} as paid for ${Number(row.amount).toFixed(2)}.
-                                </AlertDialogDescription>
-                              </AlertDialogHeader>
-                              <AlertDialogFooter>
-                                <AlertDialogCancel>Go back</AlertDialogCancel>
-                                <AlertDialogAction onClick={() => handleReview(row, "approved")}>Approve payment</AlertDialogAction>
-                              </AlertDialogFooter>
-                            </AlertDialogContent>
-                          </AlertDialog>
+                          <Button
+                            className="gap-1.5"
+                            onClick={() => setApproveTarget({
+                              leadId: lead?.id ?? "",
+                              customerName: lead?.customer_name || "this lead",
+                              amount: Number(row.amount),
+                              techName: lead?.tech_name ?? null,
+                              address: lead?.address ?? null,
+                              city: lead?.city ?? null,
+                              state: lead?.state ?? null,
+                              zip_code: lead?.zip_code ?? null,
+                            })}
+                          >
+                            <CheckCircle2 className="h-4 w-4" />
+                            Approve & mark paid
+                          </Button>
                           <AlertDialog>
                             <AlertDialogTrigger asChild>
                               <Button variant="outline" className="gap-1.5">
@@ -278,6 +286,18 @@ export default function LeadPaymentRequests() {
           })}
         </div>
       )}
-    </div>
-  );
-}
+
+      <ApprovePaymentDialog
+        open={approveTarget !== null}
+        target={approveTarget}
+        onOpenChange={(next) => { if (!next) setApproveTarget(null); }}
+        onApprove={async () => {
+          const row = requests.find((r) => r.lead_id === approveTarget?.leadId);
+          if (!row) return;
+          await handleReview(row, "approved");
+          setApproveTarget(null);
+        }}
+      />
+      </div>
+    );
+  }
