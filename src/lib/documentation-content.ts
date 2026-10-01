@@ -62,6 +62,7 @@ export const DOC_SECTIONS: DocSection[] = [
           ["schedule", "Schedule", "Admin, CS, CS Admin, Processor"],
           ["map_view", "Map View", "Admin, Processor"],
           ["technicians", "Technicians", "Admin, Processor; OPR Admin when granted per user"],
+          ["optimization", "Optimization", "Admin only (hard-locked, cannot be granted)"],
           ["cancellation_requests", "Lead Cancellation Requests", "Admin, Processor"],
           ["payment_requests", "Paid Approval Pending", "Admin only (hard-locked, cannot be granted)"],
           ["quote_approval_requests", "Quote Approval", "CS and CS Admin by default; Admin can override per user"],

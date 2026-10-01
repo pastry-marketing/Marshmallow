@@ -24,6 +24,7 @@ import QuoMonitorPage from "@/pages/quo-monitor/QuoMonitorPage";
 import CrmUpdates from "@/pages/CrmUpdates";
 import MapViewPage from "@/pages/MapViewPage";
 import TechniciansPage from "@/pages/TechniciansPage";
+import OptimizationPage from "@/pages/OptimizationPage";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -124,6 +125,7 @@ const App = () => (
               <Route path="areas" element={<PageRoute navItem="areas"><AreasPage /></PageRoute>} />
               <Route path="map-view" element={<PageRoute navItem="map_view"><MapViewPage /></PageRoute>} />
               <Route path="technicians" element={<PageRoute navItem="technicians"><TechniciansPage /></PageRoute>} />
+        <Route path="optimization" element={<PageRoute navItem="optimization"><OptimizationPage /></PageRoute>} />
 
               <Route path="activity-logs" element={<PageRoute navItem="activity_logs"><ActivityLogs /></PageRoute>} />
               <Route path="quo-monitor" element={<PageRoute navItem="quo_monitor"><QuoMonitorPage /></PageRoute>} />
