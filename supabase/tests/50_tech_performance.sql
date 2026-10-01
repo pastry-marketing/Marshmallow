@@ -19,14 +19,17 @@
 BEGIN;
 
 -- 1. admin - expect 0 failures
+--    Ibraheem, ibraheem@gmail.com. Verified to hold role 'admin' in
+--    public.user_roles; an identity without a role row is rejected by the
+--    function's own check, which is why this matters.
 --    Baseline from the live data on 2026-09-30:
 --      308 distinct technicians, 369 paid leads with a technician,
 --      244 cancelled with a technician. The totals matter more than the row
 --      count: they prove the technicians join did not fan out, which is the
 --      whole reason the function aggregates in SQL.
 SELECT set_config('request.jwt.claims', json_build_object(
-  'sub','1abba3c0-b2e4-4194-9046-3ffd147e0ed0','role','authenticated')::text, true);
-SELECT set_config('request.jwt.claim.sub',  '1abba3c0-b2e4-4194-9046-3ffd147e0ed0', true);
+  'sub','9ac11fa9-72e9-4ac8-8c6f-c1a4f413e203','role','authenticated')::text, true);
+SELECT set_config('request.jwt.claim.sub',  '9ac11fa9-72e9-4ac8-8c6f-c1a4f413e203', true);
 SELECT set_config('request.jwt.claim.role', 'authenticated', true);
 SET LOCAL ROLE authenticated;
 
