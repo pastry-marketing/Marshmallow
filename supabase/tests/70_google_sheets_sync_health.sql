@@ -411,6 +411,7 @@ END $$;
 -- -----------------------------------------------------------------------------
 DO $$
 DECLARE
+  v_expected integer := 0;
   v_health    boolean := false;
   v_errors    boolean := false;
   v_queue     boolean := false;
@@ -433,17 +434,18 @@ BEGIN
 
   -- Layer two: EXECUTE on the SECURITY DEFINER functions. This is the one
   -- that matters, because a grant here overrides every table policy.
+  --
+  -- Matched by pattern rather than a hardcoded list. An earlier version named
+  -- the seven functions that existed at the time, so advance_sheets_sync_
+  -- watermark and the recreated get_sheets_sync_health were never checked and
+  -- both ended up executable by anon. A list cannot stay current; a pattern can.
   SELECT string_agg(fn, ', ' ORDER BY fn) INTO v_fn_public
     FROM (
       SELECT p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' AS fn
         FROM pg_proc p
         JOIN pg_namespace n ON n.oid = p.pronamespace
        WHERE n.nspname = 'public'
-         AND p.proname IN (
-           'record_sheets_sync_success','record_sheets_sync_failure',
-           'claim_sheets_sync_queue','get_sheets_sync_health',
-           'get_sheets_sync_queue_depth','prune_sheets_sync_errors',
-           'raise_sheets_sync_stale_alert')
+         AND p.proname LIKE '%sheets_sync%'
          AND has_function_privilege('anon', p.oid, 'EXECUTE')
     ) leaked;
 
@@ -452,8 +454,22 @@ BEGIN
       v_fn_public;
   END IF;
 
+  -- A SECURITY DEFINER sync function with no client grant is a broken
+  -- migration, not merely a tidiness issue, so assert the expected set is
+  -- still present rather than only asserting nothing leaks.
+  SELECT count(*) INTO v_expected
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public'
+     AND p.proname LIKE '%sheets_sync%'
+     AND p.prosecdef;
+
+  IF v_expected < 9 THEN
+    RAISE EXCEPTION 'expected at least 9 SECURITY DEFINER sync functions, found %', v_expected;
+  END IF;
+
   INSERT INTO _results VALUES (13, 'anon blocked from tables and functions', true,
-                               'no table reads, no function EXECUTE');
+                               format('no table reads, no function EXECUTE (%s functions checked)', v_expected));
 EXCEPTION WHEN OTHERS THEN
   RESET ROLE;
   INSERT INTO _results VALUES (13, 'anon blocked from tables and functions', false, SQLERRM);
@@ -463,10 +479,12 @@ END $$;
 -- -----------------------------------------------------------------------------
 -- 13b authenticated admin must still be able to execute everything
 --      Guards against fixing the anon hole by revoking from everyone.
+--      Pattern-matched for the same reason as check 13.
 -- -----------------------------------------------------------------------------
 DO $$
 DECLARE
   v_missing text;
+  v_granted integer := 0;
 BEGIN
   SELECT string_agg(fn, ', ' ORDER BY fn) INTO v_missing
     FROM (
@@ -474,11 +492,7 @@ BEGIN
         FROM pg_proc p
         JOIN pg_namespace n ON n.oid = p.pronamespace
        WHERE n.nspname = 'public'
-         AND p.proname IN (
-           'record_sheets_sync_success','record_sheets_sync_failure',
-           'claim_sheets_sync_queue','get_sheets_sync_health',
-           'get_sheets_sync_queue_depth','prune_sheets_sync_errors',
-           'raise_sheets_sync_stale_alert')
+         AND p.proname LIKE '%sheets_sync%'
          AND NOT has_function_privilege('authenticated', p.oid, 'EXECUTE')
     ) missing;
 
@@ -486,7 +500,15 @@ BEGIN
     RAISE EXCEPTION 'authenticated cannot execute: %', v_missing;
   END IF;
 
-  INSERT INTO _results VALUES (15, 'authenticated can execute all', true, 'all 7 granted');
+  SELECT count(*) INTO v_granted
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public'
+     AND p.proname LIKE '%sheets_sync%'
+     AND has_function_privilege('authenticated', p.oid, 'EXECUTE');
+
+  INSERT INTO _results VALUES (15, 'authenticated can execute all', true,
+                               format('%s functions granted', v_granted));
 EXCEPTION WHEN OTHERS THEN
   INSERT INTO _results VALUES (15, 'authenticated can execute all', false, SQLERRM);
 END $$;

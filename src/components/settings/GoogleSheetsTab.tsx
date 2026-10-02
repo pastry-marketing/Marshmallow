@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -30,6 +31,7 @@ import {
 } from "@/lib/google-sheets";
 
 export function GoogleSheetsTab() {
+  const queryClient = useQueryClient();
   const [config, setConfig] = useState<GoogleSheetsConfig>({
     webhookUrl: "",
     autoSync: true,
@@ -110,10 +112,15 @@ export function GoogleSheetsTab() {
       toast.success(res.message || `Successfully synced ${res.leadsCount} leads!`);
       const updated = await getGoogleSheetsConfig();
       setConfig(updated);
+      // A full sync advances the watermark, so the panel is now showing stale
+      // numbers. Without this it kept rendering the values fetched before the
+      // sync started, which reads as though nothing happened.
+      void queryClient.invalidateQueries({ queryKey: ["google-sheets-sync-health"] });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Sync failed");
       const updated = await getGoogleSheetsConfig();
       setConfig(updated);
+      void queryClient.invalidateQueries({ queryKey: ["google-sheets-sync-health"] });
     } finally {
       setSyncingAll(false);
       setSyncProgress(null);
@@ -122,16 +129,11 @@ export function GoogleSheetsTab() {
 
   const copyScriptCode = async () => {
     try {
-      const response = await fetch("/google-sheets-sync.gs");
-      let scriptCode = "";
-      if (response.ok) {
-        scriptCode = await response.text();
-      } else {
-        // Fallback: fetch directly or provide inline reference
-        scriptCode = APPS_SCRIPT_SNIPPET;
-      }
-
-      await navigator.clipboard.writeText(scriptCode || APPS_SCRIPT_SNIPPET);
+      // The script is imported directly as raw text. It used to be fetched
+      // from /google-sheets-sync.gs, which was removed when the three drifting
+      // copies were collapsed, so that fetch silently 404'd and only the
+      // fallback below ever produced the right text.
+      await navigator.clipboard.writeText(APPS_SCRIPT_SNIPPET);
       setCopiedScript(true);
       toast.success("Apps Script code copied to clipboard!");
       setTimeout(() => setCopiedScript(false), 2500);
