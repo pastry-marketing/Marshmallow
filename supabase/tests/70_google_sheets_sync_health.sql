@@ -273,7 +273,9 @@ BEGIN
   END IF;
 
   INSERT INTO _results VALUES (8, 'health exposes state', true,
-    format('status %, queue %, errors %', v_h.status, v_h.queue_depth,
+    -- %s placeholders, not bare %: format() reads a comma after % as a type
+    -- specifier and raises "unrecognized format() type specifier".
+    format('status %s, queue %s, errors %s', v_h.status, v_h.queue_depth,
            jsonb_array_length(v_h.recent_errors)));
 EXCEPTION WHEN OTHERS THEN
   INSERT INTO _results VALUES (8, 'health exposes state', false, SQLERRM);
