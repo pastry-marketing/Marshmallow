@@ -117,9 +117,11 @@ export function OptimizedAreasSection() {
               ))}
             </div>
           ) : boardQuery.isError ? (
-            <div className="p-10 text-center text-sm text-destructive">
-              Could not load the area leaderboard. If the leaderboard migration has not
-              been run yet, the <code>area_leaderboard</code> function does not exist.
+            <div className="space-y-2 p-10 text-center text-sm text-destructive">
+              <p>Could not load the area leaderboard.</p>
+              <p className="mt-2 text-[12px] opacity-80">
+                {(boardQuery.error as Error | null)?.message}
+              </p>
             </div>
           ) : !board.length ? (
             <div className="p-12 text-center text-sm text-muted-foreground">
