@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { DollarSign, CheckCircle2, XCircle } from "lucide-react";
-import { ApprovePaymentDialog } from "@/components/payments/ApprovePaymentDialog";
+import { DollarSign, CheckCircle2, XCircle, User, MapPin } from "lucide-react";
+import { InlineSuggestions } from "@/components/payments/InlineSuggestions";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
@@ -35,14 +35,17 @@ const roleLabel: Record<string, string> = {
   admin: "Admin",
 };
 
-/**
- * Which lead the approval dialog is open for. Null means closed.
- *
- * Kept as state rather than reusing the old AlertDialog trigger, because the
- * approval is no longer a single confirmation: it now carries an area decision
- * and a technician flag that have to reset between leads.
- */
-type ApproveTarget = Parameters<typeof ApprovePaymentDialog>[0]["target"];
+interface ApprovedSuggestion {
+  id: string;
+  leadId: string;
+  techName: string | null;
+  techNumber: string | null;
+  city: string | null;
+  state: string | null;
+  zip_code: string | null;
+  address: string | null;
+  customerName: string;
+}
 
 function ScreenshotPreview({ path }: { path: string }) {
   const [url, setUrl] = useState<string | null>(null);
@@ -64,6 +67,7 @@ function ScreenshotPreview({ path }: { path: string }) {
 export default function LeadPaymentRequests() {
   const { role, user, profile } = useAuth();
   const queryClient = useQueryClient();
+  const [approvedSuggestions, setApprovedSuggestions] = useState<ApprovedSuggestion[]>([]);
 
   const { data: requests = [], isLoading } = useQuery<Row[]>({
     queryKey: ["lead-payment-requests-page"],
@@ -110,7 +114,7 @@ export default function LeadPaymentRequests() {
             });
             return;
           }
-          
+
           if (payload.eventType === "UPDATE") {
             const newRow = payload.new as LeadPaymentRequest;
             queryClient.setQueryData<Row[]>(["lead-payment-requests-page"], (old) => {
@@ -124,20 +128,20 @@ export default function LeadPaymentRequests() {
           if (payload.eventType === "INSERT") {
             const newRow = payload.new as LeadPaymentRequest;
             if (newRow.status !== "pending") return;
-            
+
             const { data: leadData } = await supabase.from("leads").select("*").eq("id", newRow.lead_id).single();
             let requesterName = newRow.requested_by_name || null;
             if (newRow.requested_by) {
               const { data: profile } = await supabase.from("profiles_public" as never).select("full_name").eq("id", newRow.requested_by).maybeSingle() as any;
               if (profile) requesterName = profile.full_name;
             }
-            
+
             const enrichedRequest: Row = {
               ...newRow,
               lead: leadData as Lead,
               requester_name: requesterName,
             };
-            
+
             queryClient.setQueryData<Row[]>(["lead-payment-requests-page"], (old) => {
               if (!old) return old;
               return [enrichedRequest, ...old];
@@ -150,8 +154,6 @@ export default function LeadPaymentRequests() {
       void supabase.removeChannel(channel);
     };
   }, [queryClient]);
-
-  const [approveTarget, setApproveTarget] = useState<ApproveTarget>(null);
 
   const handleReview = async (row: Row, action: "approved" | "rejected") => {
     if (!user || !row.lead) return;
@@ -173,6 +175,32 @@ export default function LeadPaymentRequests() {
     }
   };
 
+  const handleApprove = async (row: Row) => {
+    if (!user || !row.lead) return;
+    const lead = row.lead;
+
+    setApprovedSuggestions((prev) => [
+      ...prev,
+      {
+        id: row.id,
+        leadId: lead.id,
+        techName: lead.tech_name ?? null,
+        techNumber: lead.tech_number ?? null,
+        city: lead.city ?? null,
+        state: lead.state ?? null,
+        zip_code: lead.zip_code ?? null,
+        address: lead.address ?? null,
+        customerName: lead.customer_name || "this lead",
+      },
+    ]);
+
+    await handleReview(row, "approved");
+  };
+
+  const dismissSuggestion = (id: string) => {
+    setApprovedSuggestions((prev) => prev.filter((s) => s.id !== id));
+  };
+
   return (
     <div className="mx-auto max-w-[1200px] space-y-5">
       <section className="glass-panel-strong rounded-[28px] px-5 py-5">
@@ -189,9 +217,40 @@ export default function LeadPaymentRequests() {
         </div>
       </section>
 
+      {approvedSuggestions.length > 0 && (
+        <div className="space-y-3">
+          {approvedSuggestions.map((s) => (
+            <Card key={s.id} className="overflow-hidden border-emerald-500/30">
+              <CardContent className="p-4">
+                <div className="mb-3 flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                  <p className="text-sm font-medium text-emerald-600">
+                    {s.customerName} approved
+                  </p>
+                  {s.techName && (
+                    <span className="text-xs text-muted-foreground">
+                      &middot; {s.techName}
+                    </span>
+                  )}
+                </div>
+                <InlineSuggestions
+                  leadId={s.leadId}
+                  techName={s.techName}
+                  city={s.city}
+                  state={s.state}
+                  zip_code={s.zip_code}
+                  address={s.address}
+                  onDismissAll={() => dismissSuggestion(s.id)}
+                />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
       {isLoading ? (
         <div className="h-40 rounded-2xl border border-border/40 skeleton-shimmer" />
-      ) : requests.length === 0 ? (
+      ) : requests.length === 0 && approvedSuggestions.length === 0 ? (
         <Card className="border-dashed">
           <CardContent className="flex min-h-[220px] items-center justify-center text-sm text-muted-foreground">
             No pending Paid requests.
@@ -214,6 +273,26 @@ export default function LeadPaymentRequests() {
                           {lead?.job_id || row.lead_id}
                         </span>
                       </div>
+
+                      {(lead?.tech_name || lead?.city || lead?.state) && (
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+                          {lead?.tech_name && (
+                            <span className="flex items-center gap-1.5 text-foreground">
+                              <User className="h-3.5 w-3.5 text-muted-foreground" />
+                              <span className="font-medium">{lead.tech_name}</span>
+                              {lead.tech_number && (
+                                <span className="text-muted-foreground">#{lead.tech_number}</span>
+                              )}
+                            </span>
+                          )}
+                          {(lead?.city || lead?.state) && (
+                            <span className="flex items-center gap-1.5 text-muted-foreground">
+                              <MapPin className="h-3.5 w-3.5" />
+                              {[lead.city, lead.state].filter(Boolean).join(", ")}
+                            </span>
+                          )}
+                        </div>
+                      )}
 
                       <div className="grid gap-2 text-sm text-muted-foreground sm:grid-cols-2">
                         <p>Requested by {row.requester_name || roleLabel[row.requested_by_role] || row.requested_by_role}</p>
@@ -238,16 +317,7 @@ export default function LeadPaymentRequests() {
                         <>
                           <Button
                             className="gap-1.5"
-                            onClick={() => setApproveTarget({
-                              leadId: lead?.id ?? "",
-                              customerName: lead?.customer_name || "this lead",
-                              amount: Number(row.amount),
-                              techName: lead?.tech_name ?? null,
-                              address: lead?.address ?? null,
-                              city: lead?.city ?? null,
-                              state: lead?.state ?? null,
-                              zip_code: lead?.zip_code ?? null,
-                            })}
+                            onClick={() => handleApprove(row)}
                           >
                             <CheckCircle2 className="h-4 w-4" />
                             Approve & mark paid
@@ -286,18 +356,6 @@ export default function LeadPaymentRequests() {
           })}
         </div>
       )}
-
-      <ApprovePaymentDialog
-        open={approveTarget !== null}
-        target={approveTarget}
-        onOpenChange={(next) => { if (!next) setApproveTarget(null); }}
-        onApprove={async () => {
-          const row = requests.find((r) => r.lead_id === approveTarget?.leadId);
-          if (!row) return;
-          await handleReview(row, "approved");
-          setApproveTarget(null);
-        }}
-      />
-      </div>
-    );
-  }
+    </div>
+  );
+}
