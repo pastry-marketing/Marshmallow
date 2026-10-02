@@ -6,6 +6,8 @@ vi.mock("@/integrations/supabase/client", () => ({
 
 import { supabase } from "@/integrations/supabase/client";
 import {
+  advanceSyncWatermark,
+
   claimSyncQueue,
   describeSyncStatus,
   fetchSyncHealth,
@@ -297,6 +299,41 @@ describe("isSyncAction", () => {
 
   it("is case sensitive, so a renamed action cannot silently start reporting", () => {
     expect(isSyncAction("UPSERT")).toBe(false);
+  });
+});
+
+describe("advanceSyncWatermark", () => {
+  it("calls the RPC that marks the sheet complete", async () => {
+    rpc().mockResolvedValue({ data: "2026-11-02T10:00:00Z", error: null } as never);
+
+    const mark = await advanceSyncWatermark();
+
+    // This one takes no arguments, so the client calls rpc(name) with a
+    // single argument rather than a name plus an empty parameter object.
+    expect(rpc()).toHaveBeenCalledTimes(1);
+    expect(rpc().mock.calls[0][0]).toBe("advance_sheets_sync_watermark");
+    expect(mark).toBe("2026-11-02T10:00:00Z");
+  });
+
+  it("returns null instead of throwing when the RPC fails", async () => {
+    // The sheet is already written by the time this runs, so failing to record
+    // that must not turn a completed sync into an error. The watermark simply
+    // stays put and the panel keeps reporting leads behind.
+    rpc().mockResolvedValue({ data: null, error: new Error("db down") } as never);
+
+    await expect(advanceSyncWatermark()).resolves.toBeNull();
+  });
+
+  it("returns null when rpc itself throws", async () => {
+    rpc().mockRejectedValue(new Error("network"));
+
+    await expect(advanceSyncWatermark()).resolves.toBeNull();
+  });
+
+  it("normalises a null timestamp", async () => {
+    rpc().mockResolvedValue({ data: null, error: null } as never);
+
+    await expect(advanceSyncWatermark()).resolves.toBeNull();
   });
 });
 
