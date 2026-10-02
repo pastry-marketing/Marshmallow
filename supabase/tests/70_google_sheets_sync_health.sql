@@ -395,13 +395,19 @@ END $$;
 
 -- -----------------------------------------------------------------------------
 -- 13  anon cannot reach any of it
+--      Tests BOTH layers. Testing only the tables is not enough: these
+--      functions are SECURITY DEFINER, so they bypass the table policies
+--      entirely. Postgres grants EXECUTE to PUBLIC on a new function by
+--      default, which is exactly how anon reached them once already.
 -- -----------------------------------------------------------------------------
 DO $$
 DECLARE
-  v_health boolean := false;
-  v_errors boolean := false;
-  v_queue  boolean := false;
+  v_health    boolean := false;
+  v_errors    boolean := false;
+  v_queue     boolean := false;
+  v_fn_public text;
 BEGIN
+  -- Layer one: table privileges.
   SET LOCAL ROLE anon;
   BEGIN PERFORM 1 FROM public.google_sheets_sync_health LIMIT 1; v_health := true;
   EXCEPTION WHEN OTHERS THEN NULL; END;
@@ -416,10 +422,64 @@ BEGIN
       v_health, v_errors, v_queue;
   END IF;
 
-  INSERT INTO _results VALUES (13, 'anon blocked from all tables', true, 'all three refused');
+  -- Layer two: EXECUTE on the SECURITY DEFINER functions. This is the one
+  -- that matters, because a grant here overrides every table policy.
+  SELECT string_agg(fn, ', ' ORDER BY fn) INTO v_fn_public
+    FROM (
+      SELECT p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' AS fn
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'public'
+         AND p.proname IN (
+           'record_sheets_sync_success','record_sheets_sync_failure',
+           'claim_sheets_sync_queue','get_sheets_sync_health',
+           'get_sheets_sync_queue_depth','prune_sheets_sync_errors',
+           'raise_sheets_sync_stale_alert')
+         AND has_function_privilege('anon', p.oid, 'EXECUTE')
+    ) leaked;
+
+  IF v_fn_public IS NOT NULL THEN
+    RAISE EXCEPTION 'anon can EXECUTE (they are SECURITY DEFINER, so table RLS is bypassed): %',
+      v_fn_public;
+  END IF;
+
+  INSERT INTO _results VALUES (13, 'anon blocked from tables and functions', true,
+                               'no table reads, no function EXECUTE');
 EXCEPTION WHEN OTHERS THEN
   RESET ROLE;
-  INSERT INTO _results VALUES (13, 'anon blocked from all tables', false, SQLERRM);
+  INSERT INTO _results VALUES (13, 'anon blocked from tables and functions', false, SQLERRM);
+END $$;
+
+
+-- -----------------------------------------------------------------------------
+-- 13b authenticated admin must still be able to execute everything
+--      Guards against fixing the anon hole by revoking from everyone.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE
+  v_missing text;
+BEGIN
+  SELECT string_agg(fn, ', ' ORDER BY fn) INTO v_missing
+    FROM (
+      SELECT p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' AS fn
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'public'
+         AND p.proname IN (
+           'record_sheets_sync_success','record_sheets_sync_failure',
+           'claim_sheets_sync_queue','get_sheets_sync_health',
+           'get_sheets_sync_queue_depth','prune_sheets_sync_errors',
+           'raise_sheets_sync_stale_alert')
+         AND NOT has_function_privilege('authenticated', p.oid, 'EXECUTE')
+    ) missing;
+
+  IF v_missing IS NOT NULL THEN
+    RAISE EXCEPTION 'authenticated cannot execute: %', v_missing;
+  END IF;
+
+  INSERT INTO _results VALUES (15, 'authenticated can execute all', true, 'all 7 granted');
+EXCEPTION WHEN OTHERS THEN
+  INSERT INTO _results VALUES (15, 'authenticated can execute all', false, SQLERRM);
 END $$;
 
 
