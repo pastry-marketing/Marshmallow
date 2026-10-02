@@ -152,8 +152,27 @@ COMMENT ON FUNCTION public.sheets_sync_lag() IS
 
 -- -----------------------------------------------------------------------------
 -- 4. Health now reports records behind, not just a clock reading
+--
+--    Dropped first, because CREATE OR REPLACE cannot change a function's
+--    return type. This version adds three OUT parameters, so replacing the
+--    old one in place fails with:
+--
+--      42P13: cannot change return type of existing function
+--      DETAIL: Row type defined by OUT parameters is different.
+--
+--    A plain DROP is safe here: nothing in the database depends on this
+--    function. It is reached only over PostgREST, which resolves the call by
+--    name at request time and is not a catalog dependency. CASCADE is
+--    deliberately not used, so that if that ever stops being true the
+--    migration fails loudly instead of quietly dropping something.
+--
+--    Reached by clients as get_sheets_sync_health(_p_stale_after_seconds).
+--    sheets_sync_lag() is created above and is called from here, so the order
+--    of these statements matters.
 -- -----------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION public.get_sheets_sync_health(
+DROP FUNCTION IF EXISTS public.get_sheets_sync_health(integer);
+
+CREATE FUNCTION public.get_sheets_sync_health(
   p_stale_after_seconds integer DEFAULT 900
 )
 RETURNS TABLE (
