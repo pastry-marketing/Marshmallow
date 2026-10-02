@@ -86,11 +86,11 @@ END $$;
 -- ===========================================================================
 DO $$
 DECLARE
-  v_admin   uuid;
-  v_tx_closed bigint;
-  v_ca_closed bigint;
-  v_tx_rate  numeric;
-  v_ca_rate  numeric;
+  v_admin        uuid;
+  v_tx_closed    bigint;
+  v_tx_cancelled bigint;
+  v_tx_rate      numeric;
+  v_ca_closed    bigint;
 BEGIN
   SELECT user_id INTO v_admin FROM public.user_roles WHERE role::text = 'admin' LIMIT 1;
   IF v_admin IS NULL THEN
@@ -128,7 +128,6 @@ DO $$
 DECLARE
   v_admin uuid;
   v_id1   uuid;
-  v_id2   uuid;
   v_rows  int;
 BEGIN
   SELECT user_id INTO v_admin FROM public.user_roles WHERE role::text = 'admin' LIMIT 1;
