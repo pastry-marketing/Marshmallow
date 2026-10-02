@@ -456,28 +456,28 @@ const Analytics = () => {
       value: currentStats.totalLeads,
       sub: `${formatDelta(getGrowth(currentStats.totalLeads, prevStats.totalLeads))} vs last period`,
       icon: Users,
-      tone: "bg-blue-500/10 text-blue-400 border-blue-500/20",
+      tone: "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20",
     },
     {
       label: "Scheduled Visits",
       value: currentStats.scheduled,
       sub: `${formatDelta(getGrowth(currentStats.scheduled, prevStats.scheduled))} vs last period`,
       icon: Calendar,
-      tone: "bg-purple-500/10 text-purple-400 border-purple-500/20",
+      tone: "bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20",
     },
     {
       label: "Completed Jobs",
       value: currentStats.completed,
       sub: `${formatDelta(getGrowth(currentStats.completed, prevStats.completed))} vs last period`,
       icon: CheckCircle2,
-      tone: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
+      tone: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
     },
     {
       label: "Conversion Rate",
       value: `${currentStats.conversionRate.toFixed(1)}%`,
       sub: `${formatDelta(getGrowth(currentStats.conversionRate, prevStats.conversionRate))} vs last period`,
       icon: Percent,
-      tone: "bg-amber-500/10 text-amber-400 border-amber-500/20",
+      tone: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20",
     },
   ];
 
@@ -486,25 +486,25 @@ const Analytics = () => {
       label: "Urgent Attention",
       value: summary.urgent,
       icon: AlertTriangle,
-      tone: "bg-red-500/10 text-red-400 border-red-500/20",
+      tone: "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20",
     },
     {
       label: "Scheduled Visits",
       value: summary.scheduled,
       icon: Calendar,
-      tone: "bg-blue-500/10 text-blue-400 border-blue-500/20",
+      tone: "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20",
     },
     {
       label: "Completed Jobs",
       value: summary.done,
       icon: CheckCircle2,
-      tone: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
+      tone: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
     },
     {
       label: "Waiting Response",
       value: summary.waiting,
       icon: Clock3,
-      tone: "bg-amber-500/10 text-amber-400 border-amber-500/20",
+      tone: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20",
     },
   ];
 
@@ -520,9 +520,9 @@ const Analytics = () => {
     if (!active || !payload?.length) return null;
 
     return (
-      <div className="rounded-2xl border border-slate-800 bg-[#16171d] px-4 py-3 shadow-sm">
-        <p className="text-[11px] font-medium text-slate-400">{label}</p>
-        <p className="mt-1 text-sm font-semibold text-slate-100">{payload[0].value} leads</p>
+      <div className="rounded-2xl border border-border bg-popover px-4 py-3 shadow-sm">
+        <p className="text-[11px] font-medium text-muted-foreground">{label}</p>
+        <p className="mt-1 text-sm font-semibold text-foreground">{payload[0].value} leads</p>
       </div>
     );
   };
@@ -530,24 +530,24 @@ const Analytics = () => {
   return (
     <div className="quo-theme analytics-workspace mx-auto max-w-[1450px] space-y-6 text-foreground">
       {/* Header Block */}
-      <div className="relative overflow-hidden rounded-[28px] border border-slate-800 bg-[#15161c] p-6 shadow-[0_22px_60px_-34px_rgba(0,0,0,0.45)]">
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.02),transparent_28%)]" />
+      <div className="relative overflow-hidden rounded-[28px] border border-border bg-card p-6 shadow-[0_22px_60px_-34px_rgba(0,0,0,0.10)] dark:shadow-[0_22px_60px_-34px_rgba(0,0,0,0.45)]">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,hsl(var(--foreground)/0.03),transparent_28%)]" />
 
         <div className="relative flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
           <motion.div variants={heroTitle} initial="initial" animate="animate">
-            <div className="mb-3 inline-flex items-center gap-1 rounded-full border border-blue-500/10 bg-blue-500/5 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-blue-400">
+            <div className="mb-3 inline-flex items-center gap-1 rounded-full border border-blue-500/10 bg-blue-500/5 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-blue-600 dark:text-blue-400">
               <Sparkles className="h-2.5 w-2.5" />
               Advanced Analytics
             </div>
 
-            <h1 className="text-2xl font-bold tracking-[-0.03em] text-slate-100 sm:text-3xl">Operations Performance</h1>
-            <p className="mt-2 text-sm text-slate-400">
+            <h1 className="text-2xl font-bold tracking-[-0.03em] text-foreground sm:text-3xl">Operations Performance</h1>
+            <p className="mt-2 text-sm text-muted-foreground">
               Monitor conversions, stage progressions, response rates, and team assignments.
             </p>
           </motion.div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <div className="inline-flex rounded-2xl border border-slate-800 bg-[#0e0f12] p-1.5 shadow-[0_14px_34px_-28px_rgba(0,0,0,0.35)]">
+            <div className="inline-flex rounded-2xl border border-border bg-muted p-1.5 shadow-[0_14px_34px_-28px_rgba(0,0,0,0.08)] dark:shadow-[0_14px_34px_-28px_rgba(0,0,0,0.35)]">
               {(["7d", "30d", "90d", "all"] as const).map((r) => (
                 <button
                   key={r}
@@ -560,8 +560,8 @@ const Analytics = () => {
                   className={cn(
                     "rounded-xl px-4 py-2 text-[12px] font-semibold transition-all duration-200",
                     dateFilter === r
-                      ? "bg-[#1d1f27] text-slate-100 shadow-sm border border-slate-800/40"
-                      : "text-slate-400 hover:text-slate-200",
+                      ? "bg-card dark:bg-accent text-foreground shadow-sm border border-border/40"
+                      : "text-muted-foreground hover:text-foreground",
                   )}
                 >
                   {r === "all" ? "All Time" : r}
@@ -577,9 +577,9 @@ const Analytics = () => {
                   setCustomStart(e.target.value);
                   setDateFilter("custom");
                 }}
-                className="h-9 w-[130px] rounded-xl border border-slate-800 bg-[#0e0f12] px-3 text-[11px] text-slate-100"
+                className="h-9 w-[130px] rounded-xl border border-border bg-muted px-3 text-[11px] text-foreground"
               />
-              <span className="text-[10px] text-slate-500">to</span>
+              <span className="text-[10px] text-muted-foreground/70">to</span>
               <input
                 type="date"
                 value={customEnd}
@@ -587,14 +587,14 @@ const Analytics = () => {
                   setCustomEnd(e.target.value);
                   setDateFilter("custom");
                 }}
-                className="h-9 w-[130px] rounded-xl border border-slate-800 bg-[#0e0f12] px-3 text-[11px] text-slate-100"
+                className="h-9 w-[130px] rounded-xl border border-border bg-muted px-3 text-[11px] text-foreground"
               />
             </div>
           </div>
         </div>
       </div>
 
-      <div className="flex gap-2 border-b border-slate-800 pb-px" role="tablist" aria-label="Analytics views">
+      <div className="flex gap-2 border-b border-border pb-px" role="tablist" aria-label="Analytics views">
         <button
           type="button"
           role="tab"
@@ -603,8 +603,8 @@ const Analytics = () => {
           className={cn(
             "px-4 py-2.5 text-[13px] font-semibold transition-colors rounded-t-lg",
             activeTab === "overview"
-              ? "bg-[#15161c] text-blue-400 border border-b-0 border-slate-800 relative z-10 -mb-px"
-              : "text-slate-400 hover:text-slate-200"
+              ? "bg-card text-blue-600 dark:text-blue-400 border border-b-0 border-border relative z-10 -mb-px"
+              : "text-muted-foreground hover:text-foreground"
           )}
         >
           Overview
@@ -617,8 +617,8 @@ const Analytics = () => {
           className={cn(
             "px-4 py-2.5 text-[13px] font-semibold transition-colors rounded-t-lg",
             activeTab === "cs_report"
-              ? "bg-[#15161c] text-blue-400 border border-b-0 border-slate-800 relative z-10 -mb-px"
-              : "text-slate-400 hover:text-slate-200"
+              ? "bg-card text-blue-600 dark:text-blue-400 border border-b-0 border-border relative z-10 -mb-px"
+              : "text-muted-foreground hover:text-foreground"
           )}
         >
           CS Team Performance
@@ -631,19 +631,19 @@ const Analytics = () => {
       <div className="flex overflow-x-auto snap-x snap-mandatory gap-4 pb-4 sm:grid sm:grid-cols-2 xl:grid-cols-4 sm:overflow-x-visible sm:pb-0 scrollbar-hide">
         {stats.map((stat) => (
           <div key={stat.label} className="min-w-[85vw] snap-center sm:min-w-0">
-            <Card className="rounded-2xl border border-slate-800 bg-[#15161c] shadow-[0_14px_40px_-28px_rgba(0,0,0,0.35)]">
+            <Card className="rounded-2xl border border-border bg-card shadow-[0_14px_40px_-28px_rgba(0,0,0,0.08)] dark:shadow-[0_14px_40px_-28px_rgba(0,0,0,0.35)]">
               <CardContent className="p-5">
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70">
                       {stat.label}
                     </p>
-                    <p className="mt-2 text-2xl font-bold tracking-[-0.03em] text-slate-100 tabular-nums">
+                    <p className="mt-2 text-2xl font-bold tracking-[-0.03em] text-foreground tabular-nums">
                       {stat.value}
                     </p>
                     <p className={cn(
                       "mt-1 text-[11px] font-medium flex items-center gap-1",
-                      stat.sub.startsWith("-") ? "text-red-400" : stat.sub.startsWith("0") ? "text-slate-500" : "text-emerald-400"
+                      stat.sub.startsWith("-") ? "text-red-600 dark:text-red-400" : stat.sub.startsWith("0") ? "text-muted-foreground/70" : "text-emerald-600 dark:text-emerald-400"
                     )}>
                       {stat.sub}
                     </p>
@@ -663,30 +663,30 @@ const Analytics = () => {
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.5fr_1fr]">
         <div className="space-y-6">
           {/* Urgent leads sharing an area */}
-          <Card className="rounded-[28px] border border-slate-800 bg-[#15161c] shadow-[0_18px_52px_-34px_rgba(0,0,0,0.42)]">
+          <Card className="rounded-[28px] border border-border bg-card shadow-[0_18px_52px_-34px_rgba(0,0,0,0.09)] dark:shadow-[0_18px_52px_-34px_rgba(0,0,0,0.42)]">
             <CardContent className="p-6">
               <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <h3 className="text-[16px] font-semibold tracking-[-0.02em] text-slate-200">
+                  <h3 className="text-[16px] font-semibold tracking-[-0.02em] text-foreground">
                     Urgent Leads Sharing an Area
                   </h3>
-                  <p className="mt-1 text-[12px] text-slate-400">
+                  <p className="mt-1 text-[12px] text-muted-foreground">
                     Urgent jobs in the same city or within {NEARBY_RADIUS_MILES} miles of each other.
                   </p>
                 </div>
 
                 <div className="text-right">
-                  <p className="text-[28px] font-semibold leading-none tabular-nums text-red-400">
+                  <p className="text-[28px] font-semibold leading-none tabular-nums text-red-600 dark:text-red-400">
                     {urgentLeadsInSharedAreas}
                   </p>
-                  <p className="mt-1 text-[11px] text-slate-400">
+                  <p className="mt-1 text-[11px] text-muted-foreground">
                     across {urgentClusters.length === 1 ? "1 area" : `${urgentClusters.length} areas`}
                   </p>
                 </div>
               </div>
 
               {urgentClusters.length === 0 ? (
-                <p className="rounded-2xl border border-slate-800 bg-[#101118] px-4 py-6 text-center text-[12px] text-slate-400">
+                <p className="rounded-2xl border border-border bg-muted/50 px-4 py-6 text-center text-[12px] text-muted-foreground">
                   No urgent leads are sharing an area right now.
                 </p>
               ) : (
@@ -694,18 +694,18 @@ const Analytics = () => {
                   {urgentClusters.map((cluster) => (
                     <div
                       key={cluster.key}
-                      className="flex items-start justify-between gap-3 rounded-2xl border border-slate-800 bg-[#101118] px-4 py-3"
+                      className="flex items-start justify-between gap-3 rounded-2xl border border-border bg-muted/50 px-4 py-3"
                     >
                       <div className="min-w-0">
-                        <p className="truncate text-[13px] font-medium text-slate-200">{cluster.label}</p>
-                        <p className="truncate text-[11px] text-slate-400">
+                        <p className="truncate text-[13px] font-medium text-foreground">{cluster.label}</p>
+                        <p className="truncate text-[11px] text-muted-foreground">
                           {cluster.leads
                             .map((lead) => lead.customer_name || lead.job_id || "Lead")
                             .join(", ")}
                         </p>
                       </div>
 
-                      <span className="shrink-0 rounded-full bg-red-500/15 px-2.5 py-0.5 text-[12px] font-semibold tabular-nums text-red-400">
+                      <span className="shrink-0 rounded-full bg-red-500/15 px-2.5 py-0.5 text-[12px] font-semibold tabular-nums text-red-600 dark:text-red-400">
                         {cluster.leads.length}
                       </span>
                     </div>
@@ -716,17 +716,17 @@ const Analytics = () => {
           </Card>
 
           {/* Daily Leads Volume */}
-          <Card className="rounded-[28px] border border-slate-800 bg-[#15161c] shadow-[0_18px_52px_-34px_rgba(0,0,0,0.42)]">
+          <Card className="rounded-[28px] border border-border bg-card shadow-[0_18px_52px_-34px_rgba(0,0,0,0.09)] dark:shadow-[0_18px_52px_-34px_rgba(0,0,0,0.42)]">
             <CardContent className="p-6">
               <div className="mb-5">
-                <h3 className="text-[16px] font-semibold tracking-[-0.02em] text-slate-200">Daily Leads Intake</h3>
-                <p className="mt-1 text-[12px] text-slate-400">Track the number of leads received daily over the period.</p>
+                <h3 className="text-[16px] font-semibold tracking-[-0.02em] text-foreground">Daily Leads Intake</h3>
+                <p className="mt-1 text-[12px] text-muted-foreground">Track the number of leads received daily over the period.</p>
               </div>
 
               <div className="h-[320px]">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={chartData} barCategoryGap={10}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#22242e" vertical={false} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
                     <XAxis
                       dataKey="date"
                       tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
@@ -739,7 +739,7 @@ const Analytics = () => {
                       tickLine={false}
                       axisLine={false}
                     />
-                    <Tooltip content={<CustomCountTooltip />} cursor={{ fill: "rgba(255,255,255,0.02)" }} />
+                    <Tooltip content={<CustomCountTooltip />} cursor={{ fill: "rgba(120,130,150,0.10)" }} />
                     <Bar dataKey="count" fill="hsl(217, 91%, 60%)" radius={[8, 8, 0, 0]} isAnimationActive={false} />
                   </BarChart>
                 </ResponsiveContainer>
@@ -748,25 +748,25 @@ const Analytics = () => {
           </Card>
 
           {/* Lead Funnel Analysis */}
-          <Card className="rounded-[28px] border border-slate-800 bg-[#15161c] shadow-[0_18px_52px_-34px_rgba(0,0,0,0.42)]">
+          <Card className="rounded-[28px] border border-border bg-card shadow-[0_18px_52px_-34px_rgba(0,0,0,0.09)] dark:shadow-[0_18px_52px_-34px_rgba(0,0,0,0.42)]">
             <CardContent className="p-6">
               <div className="mb-5">
-                <h3 className="text-[16px] font-semibold tracking-[-0.02em] text-slate-200">Operational Conversion Funnel</h3>
-                <p className="mt-1 text-[12px] text-slate-400">Conversion stages of leads captured in range.</p>
+                <h3 className="text-[16px] font-semibold tracking-[-0.02em] text-foreground">Operational Conversion Funnel</h3>
+                <p className="mt-1 text-[12px] text-muted-foreground">Conversion stages of leads captured in range.</p>
               </div>
 
               <div className="space-y-4 py-2">
                 {funnelData.map((step) => (
                   <div key={step.step} className="space-y-2">
                     <div className="flex items-center justify-between text-xs font-semibold">
-                      <span className="text-slate-300">{step.step}</span>
-                      <span className="text-slate-100 flex items-center gap-2">
+                      <span className="text-foreground/80">{step.step}</span>
+                      <span className="text-foreground flex items-center gap-2">
                         <span>{step.count} leads</span>
-                        <span className="text-slate-500">|</span>
-                        <span className="text-blue-400">{step.pct}% conversion</span>
+                        <span className="text-muted-foreground/70">|</span>
+                        <span className="text-blue-600 dark:text-blue-400">{step.pct}% conversion</span>
                       </span>
                     </div>
-                    <div className="relative h-3.5 w-full overflow-hidden rounded-full bg-slate-900 border border-slate-800/80">
+                    <div className="relative h-3.5 w-full overflow-hidden rounded-full bg-muted border border-border/80">
                       <div
                         className={cn("h-full rounded-full transition-all duration-500", step.color)}
                         style={{ width: `${step.pct}%` }}
@@ -779,17 +779,17 @@ const Analytics = () => {
           </Card>
 
           {/* Lead Aging Analysis */}
-          <Card className="rounded-[28px] border border-slate-800 bg-[#15161c] shadow-[0_18px_52px_-34px_rgba(0,0,0,0.42)]">
+          <Card className="rounded-[28px] border border-border bg-card shadow-[0_18px_52px_-34px_rgba(0,0,0,0.09)] dark:shadow-[0_18px_52px_-34px_rgba(0,0,0,0.42)]">
             <CardContent className="p-6">
               <div className="mb-5">
-                <h3 className="text-[16px] font-semibold tracking-[-0.02em] text-slate-200">Active Lead Aging (Unresolved)</h3>
-                <p className="mt-1 text-[12px] text-slate-400">Duration active leads have remained in pipeline.</p>
+                <h3 className="text-[16px] font-semibold tracking-[-0.02em] text-foreground">Active Lead Aging (Unresolved)</h3>
+                <p className="mt-1 text-[12px] text-muted-foreground">Duration active leads have remained in pipeline.</p>
               </div>
 
               <div className="h-[280px]">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={agingData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#22242e" vertical={false} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
                     <XAxis
                       dataKey="name"
                       tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
@@ -818,11 +818,11 @@ const Analytics = () => {
         {/* Right Columns */}
         <div className="space-y-6">
           {/* Pipelines status list */}
-          <Card className="rounded-[28px] border border-slate-800 bg-[#15161c] shadow-[0_18px_52px_-34px_rgba(0,0,0,0.42)]">
+          <Card className="rounded-[28px] border border-border bg-card shadow-[0_18px_52px_-34px_rgba(0,0,0,0.09)] dark:shadow-[0_18px_52px_-34px_rgba(0,0,0,0.42)]">
             <CardContent className="p-6">
               <div className="mb-4">
-                <h3 className="text-[16px] font-semibold tracking-[-0.02em] text-slate-200">CRM Pipelines Status</h3>
-                <p className="mt-1 text-[12px] text-slate-400">
+                <h3 className="text-[16px] font-semibold tracking-[-0.02em] text-foreground">CRM Pipelines Status</h3>
+                <p className="mt-1 text-[12px] text-muted-foreground">
                   Global pipelines summary of all leads in database.
                 </p>
               </div>
@@ -831,20 +831,20 @@ const Analytics = () => {
                 {statusSummary.map((item) => (
                   <div
                     key={item.label}
-                    className="flex items-center justify-between rounded-2xl border border-slate-800/80 bg-[#0e0f12]/50 px-4 py-3"
+                    className="flex items-center justify-between rounded-2xl border border-border/80 bg-muted/50 px-4 py-3"
                   >
                     <div className="flex items-center gap-3">
                       <div className={cn("flex h-10 w-10 items-center justify-center rounded-2xl border", item.tone)}>
                         <item.icon className="h-4 w-4" />
                       </div>
                       <div>
-                        <p className="text-[13px] font-semibold text-slate-200">{item.label}</p>
-                        <p className="text-[11px] text-slate-500">Pipeline active leads</p>
+                        <p className="text-[13px] font-semibold text-foreground">{item.label}</p>
+                        <p className="text-[11px] text-muted-foreground/70">Pipeline active leads</p>
                       </div>
                     </div>
 
                     <div className="text-right">
-                      <p className="text-xl font-bold tracking-[-0.03em] text-slate-100 tabular-nums">
+                      <p className="text-xl font-bold tracking-[-0.03em] text-foreground tabular-nums">
                         {item.value}
                       </p>
                     </div>
@@ -855,27 +855,27 @@ const Analytics = () => {
           </Card>
 
           {/* CS Agent Performance */}
-          <Card className="rounded-[28px] border border-slate-800 bg-[#15161c] shadow-[0_18px_52px_-34px_rgba(0,0,0,0.42)]">
+          <Card className="rounded-[28px] border border-border bg-card shadow-[0_18px_52px_-34px_rgba(0,0,0,0.09)] dark:shadow-[0_18px_52px_-34px_rgba(0,0,0,0.42)]">
             <CardContent className="p-6">
               <div className="mb-4">
-                <h3 className="text-[16px] font-semibold tracking-[-0.02em] text-slate-200">CS Agent Performance</h3>
-                <p className="mt-1 text-[12px] text-slate-400">Leads assigned per CS staff representative.</p>
+                <h3 className="text-[16px] font-semibold tracking-[-0.02em] text-foreground">CS Agent Performance</h3>
+                <p className="mt-1 text-[12px] text-muted-foreground">Leads assigned per CS staff representative.</p>
               </div>
 
               {agentPerformance.length === 0 ? (
-                <div className="py-8 text-center text-xs text-slate-500">No agent assignments recorded yet.</div>
+                <div className="py-8 text-center text-xs text-muted-foreground/70">No agent assignments recorded yet.</div>
               ) : (
                 <div className="space-y-4">
                   {agentPerformance.map((item) => (
                     <div key={item.name} className="space-y-1.5">
                       <div className="flex items-center justify-between text-xs font-semibold">
-                        <span className="truncate text-slate-300 flex items-center gap-1.5">
-                          <UserCheck className="h-3.5 w-3.5 text-slate-500 shrink-0" />
+                        <span className="truncate text-foreground/80 flex items-center gap-1.5">
+                          <UserCheck className="h-3.5 w-3.5 text-muted-foreground/70 shrink-0" />
                           {item.name}
                         </span>
-                        <span className="text-slate-100">{item.count} leads</span>
+                        <span className="text-foreground">{item.count} leads</span>
                       </div>
-                      <div className="relative h-2 w-full overflow-hidden rounded-full bg-slate-900">
+                      <div className="relative h-2 w-full overflow-hidden rounded-full bg-muted">
                         <div
                           className="h-full bg-gradient-to-r from-violet-500 to-indigo-500 rounded-full"
                           style={{
@@ -883,7 +883,7 @@ const Analytics = () => {
                           }}
                         />
                       </div>
-                      <div className="flex items-center justify-between text-[10px] text-slate-500">
+                      <div className="flex items-center justify-between text-[10px] text-muted-foreground/70">
                         <span>Active range</span>
                         <span>
                           {currentStats.totalLeads > 0
@@ -900,27 +900,27 @@ const Analytics = () => {
           </Card>
 
           {/* Service Types Performance */}
-          <Card className="rounded-[28px] border border-slate-800 bg-[#15161c] shadow-[0_18px_52px_-34px_rgba(0,0,0,0.42)]">
+          <Card className="rounded-[28px] border border-border bg-card shadow-[0_18px_52px_-34px_rgba(0,0,0,0.09)] dark:shadow-[0_18px_52px_-34px_rgba(0,0,0,0.42)]">
             <CardContent className="p-6">
               <div className="mb-4">
-                <h3 className="text-[16px] font-semibold tracking-[-0.02em] text-slate-200">Top Service Sectors</h3>
-                <p className="mt-1 text-[12px] text-slate-400">Distribution by lead volume.</p>
+                <h3 className="text-[16px] font-semibold tracking-[-0.02em] text-foreground">Top Service Sectors</h3>
+                <p className="mt-1 text-[12px] text-muted-foreground">Distribution by lead volume.</p>
               </div>
 
               {serviceDistribution.length === 0 ? (
-                <div className="py-8 text-center text-xs text-slate-500">No services metadata recorded yet.</div>
+                <div className="py-8 text-center text-xs text-muted-foreground/70">No services metadata recorded yet.</div>
               ) : (
                 <div className="space-y-4">
                   {serviceDistribution.map((item) => (
                     <div key={item.name} className="space-y-1.5">
                       <div className="flex items-center justify-between text-xs font-semibold">
-                        <span className="truncate text-slate-300 flex items-center gap-1.5">
-                          <Briefcase className="h-3.5 w-3.5 text-slate-500 shrink-0" />
+                        <span className="truncate text-foreground/80 flex items-center gap-1.5">
+                          <Briefcase className="h-3.5 w-3.5 text-muted-foreground/70 shrink-0" />
                           {item.name}
                         </span>
-                        <span className="text-slate-100">{item.count} leads</span>
+                        <span className="text-foreground">{item.count} leads</span>
                       </div>
-                      <div className="relative h-2 w-full overflow-hidden rounded-full bg-slate-900">
+                      <div className="relative h-2 w-full overflow-hidden rounded-full bg-muted">
                         <div
                           className="h-full bg-gradient-to-r from-amber-500 to-orange-400 rounded-full"
                           style={{
@@ -928,7 +928,7 @@ const Analytics = () => {
                           }}
                         />
                       </div>
-                      <div className="flex items-center justify-between text-[10px] text-slate-500">
+                      <div className="flex items-center justify-between text-[10px] text-muted-foreground/70">
                         <span>Active range</span>
                         <span>
                           {currentStats.totalLeads > 0
@@ -945,27 +945,27 @@ const Analytics = () => {
           </Card>
 
           {/* Top Lead Generating Sources */}
-          <Card className="rounded-[28px] border border-slate-800 bg-[#15161c] shadow-[0_18px_52px_-34px_rgba(0,0,0,0.42)]">
+          <Card className="rounded-[28px] border border-border bg-card shadow-[0_18px_52px_-34px_rgba(0,0,0,0.09)] dark:shadow-[0_18px_52px_-34px_rgba(0,0,0,0.42)]">
             <CardContent className="p-6">
               <div className="mb-4">
-                <h3 className="text-[16px] font-semibold tracking-[-0.02em] text-slate-200">Top Ingestion Sources</h3>
-                <p className="mt-1 text-[12px] text-slate-400">Leads grouped by phone line or scraper source.</p>
+                <h3 className="text-[16px] font-semibold tracking-[-0.02em] text-foreground">Top Ingestion Sources</h3>
+                <p className="mt-1 text-[12px] text-muted-foreground">Leads grouped by phone line or scraper source.</p>
               </div>
 
               {sourceDistribution.length === 0 ? (
-                <div className="py-8 text-center text-xs text-slate-500">No lead sources mapped in this range.</div>
+                <div className="py-8 text-center text-xs text-muted-foreground/70">No lead sources mapped in this range.</div>
               ) : (
                 <div className="space-y-4">
                   {sourceDistribution.map((item) => (
                     <div key={item.name} className="space-y-1.5">
                       <div className="flex items-center justify-between text-xs font-semibold">
-                        <span className="truncate text-slate-300 flex items-center gap-1.5">
-                          <Users className="h-3.5 w-3.5 text-slate-500 shrink-0" />
+                        <span className="truncate text-foreground/80 flex items-center gap-1.5">
+                          <Users className="h-3.5 w-3.5 text-muted-foreground/70 shrink-0" />
                           {item.name}
                         </span>
-                        <span className="text-slate-100">{item.count} leads</span>
+                        <span className="text-foreground">{item.count} leads</span>
                       </div>
-                      <div className="relative h-2 w-full overflow-hidden rounded-full bg-slate-900">
+                      <div className="relative h-2 w-full overflow-hidden rounded-full bg-muted">
                         <div
                           className="h-full bg-gradient-to-r from-blue-500 to-cyan-400 rounded-full"
                           style={{
@@ -973,7 +973,7 @@ const Analytics = () => {
                           }}
                         />
                       </div>
-                      <div className="flex items-center justify-between text-[10px] text-slate-500">
+                      <div className="flex items-center justify-between text-[10px] text-muted-foreground/70">
                         <span>Active range</span>
                         <span>
                           {currentStats.totalLeads > 0
@@ -993,63 +993,63 @@ const Analytics = () => {
         </div>
       ) : (
         <div className="space-y-6">
-          <Card className="rounded-[28px] border border-slate-800 bg-[#15161c] shadow-[0_18px_52px_-34px_rgba(0,0,0,0.42)] overflow-hidden">
+          <Card className="rounded-[28px] border border-border bg-card shadow-[0_18px_52px_-34px_rgba(0,0,0,0.09)] dark:shadow-[0_18px_52px_-34px_rgba(0,0,0,0.42)] overflow-hidden">
             <CardContent className="p-0">
-              <div className="p-6 border-b border-slate-800/60">
-                <h3 className="text-[16px] font-semibold tracking-[-0.02em] text-slate-200">CS Team Performance Report</h3>
-                <p className="mt-1 text-[12px] text-slate-400">Detailed breakdown of leads added by each Customer Service and Admin team member for the selected date range.</p>
+              <div className="p-6 border-b border-border/60">
+                <h3 className="text-[16px] font-semibold tracking-[-0.02em] text-foreground">CS Team Performance Report</h3>
+                <p className="mt-1 text-[12px] text-muted-foreground">Detailed breakdown of leads added by each Customer Service and Admin team member for the selected date range.</p>
               </div>
 
               {creatorPerformance.length === 0 ? (
-                <div className="py-12 text-center text-sm text-slate-500">No leads added by CS/Admin in this date range.</div>
+                <div className="py-12 text-center text-sm text-muted-foreground/70">No leads added by CS/Admin in this date range.</div>
               ) : (
                 <div className="overflow-x-auto">
                   <Table>
                     <TableHeader>
-                      <TableRow className="border-slate-800/60 hover:bg-transparent">
-                        <TableHead className="text-slate-400 font-medium">Team Member</TableHead>
-                        <TableHead className="text-slate-400 font-medium">Role</TableHead>
-                        <TableHead className="text-slate-400 font-medium text-right">Total Added</TableHead>
-                        <TableHead className="text-slate-400 font-medium text-right">Engaged</TableHead>
-                        <TableHead className="text-slate-400 font-medium text-right">Scheduled</TableHead>
-                        <TableHead className="text-slate-400 font-medium text-right">Jobs Completed</TableHead>
-                        <TableHead className="text-slate-400 font-medium text-right">Conversion Rate</TableHead>
+                      <TableRow className="border-border/60 hover:bg-transparent">
+                        <TableHead className="text-muted-foreground font-medium">Team Member</TableHead>
+                        <TableHead className="text-muted-foreground font-medium">Role</TableHead>
+                        <TableHead className="text-muted-foreground font-medium text-right">Total Added</TableHead>
+                        <TableHead className="text-muted-foreground font-medium text-right">Engaged</TableHead>
+                        <TableHead className="text-muted-foreground font-medium text-right">Scheduled</TableHead>
+                        <TableHead className="text-muted-foreground font-medium text-right">Jobs Completed</TableHead>
+                        <TableHead className="text-muted-foreground font-medium text-right">Conversion Rate</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {creatorPerformance.map((member) => (
-                        <TableRow key={member.name} className="border-slate-800/60 hover:bg-slate-800/30">
-                          <TableCell className="font-medium text-slate-200 flex items-center gap-2">
-                            <div className="w-6 h-6 rounded-full bg-blue-500/10 text-blue-400 flex items-center justify-center shrink-0">
+                        <TableRow key={member.name} className="border-border/60 hover:bg-muted/50">
+                          <TableCell className="font-medium text-foreground flex items-center gap-2">
+                            <div className="w-6 h-6 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
                               <UserCheck className="w-3.5 h-3.5" />
                             </div>
                             {member.name}
                           </TableCell>
-                          <TableCell className="text-slate-400">
+                          <TableCell className="text-muted-foreground">
                             <span className={cn(
                               "text-[11px] px-2 py-0.5 rounded-full border",
-                              member.role === "CS Admin" ? "bg-purple-500/10 text-purple-400 border-purple-500/20" : "bg-blue-500/10 text-blue-400 border-blue-500/20"
+                              member.role === "CS Admin" ? "bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20" : "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20"
                             )}>
                               {member.role}
                             </span>
                           </TableCell>
-                          <TableCell className="text-right tabular-nums font-medium text-slate-300">
+                          <TableCell className="text-right tabular-nums font-medium text-foreground/80">
                             {member.totalAdded}
                           </TableCell>
-                          <TableCell className="text-right tabular-nums text-slate-400">
+                          <TableCell className="text-right tabular-nums text-muted-foreground">
                             {member.engaged}
                           </TableCell>
-                          <TableCell className="text-right tabular-nums text-slate-400">
+                          <TableCell className="text-right tabular-nums text-muted-foreground">
                             {member.scheduled}
                           </TableCell>
-                          <TableCell className="text-right tabular-nums text-emerald-400/80 font-medium">
+                          <TableCell className="text-right tabular-nums text-emerald-600 dark:text-emerald-400/80 font-medium">
                             {member.completed}
                           </TableCell>
                           <TableCell className="text-right">
                             <div className="inline-flex items-center gap-1.5 justify-end">
                               <span className={cn(
                                 "tabular-nums font-semibold",
-                                parseFloat(member.conversionRate) > 50 ? "text-emerald-400" : parseFloat(member.conversionRate) > 20 ? "text-amber-400" : "text-slate-400"
+                                parseFloat(member.conversionRate) > 50 ? "text-emerald-600 dark:text-emerald-400" : parseFloat(member.conversionRate) > 20 ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"
                               )}>
                                 {member.conversionRate}%
                               </span>
