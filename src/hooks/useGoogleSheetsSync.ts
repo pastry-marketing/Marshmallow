@@ -3,8 +3,18 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { syncLeadUpsertToGoogleSheets, syncLeadDeleteToGoogleSheets, getGoogleSheetsConfig } from "@/lib/google-sheets";
 import { claimSyncQueue, raiseSyncStaleAlert } from "@/lib/sheets-sync-health";
+import {
+  SYNC_TRIGGER_EVENTS,
+  isIgnorableEvent,
+  jobIdFromLeadPayload,
+  leadIdFromChangePayload,
+  leadIdFromLeadPayload,
+} from "@/lib/sheets-sync-triggers";
 import { realtimeBus } from "@/lib/realtime";
 import type { Lead } from "@/types";
+
+/** How long to wait for a lead to stop changing before writing it once. */
+const SYNC_DEBOUNCE_MS = 1200;
 
 /** How often a session with the app open retries leads that previously failed. */
 const QUEUE_DRAIN_INTERVAL_MS = 120_000;
@@ -60,20 +70,62 @@ export function useGoogleSheetsSync() {
         });
     });
 
+    /**
+     * Schedules one upsert for a lead, coalescing with anything already queued.
+     *
+     * A single debounce map is shared by all three source tables on purpose. If
+     * a note is added while the lead form is open, two timers would fire and
+     * the sheet would be written twice with different intermediate states.
+     * Sharing the map means the last change wins and one write carries
+     * everything.
+     */
+    const scheduleUpsert = (leadId: string) => {
+      const existingTimer = pendingSyncsRef.current.get(leadId);
+      if (existingTimer) clearTimeout(existingTimer);
+
+      const timer = setTimeout(async () => {
+        pendingSyncsRef.current.delete(leadId);
+        try {
+          // Re-read rather than trusting the event payload. A note change
+          // carries no lead columns at all, and an event may be stale by the
+          // time the debounce settles.
+          const { data: freshLead } = await supabase
+            .from("leads")
+            .select("*")
+            .eq("id", leadId)
+            .maybeSingle();
+
+          if (freshLead) {
+            await syncLeadUpsertToGoogleSheets(freshLead as Lead);
+          }
+        } catch (err) {
+          console.warn("Failed to sync lead upsert to Google Sheet:", err);
+        }
+      }, SYNC_DEBOUNCE_MS);
+
+      pendingSyncsRef.current.set(leadId, timer);
+    };
+
     const handleLeadChange = (event: Event) => {
       if (!isEnabledRef.current) return;
       const payload = (event as CustomEvent).detail;
       const eventType: string = payload?.eventType;
+      if (isIgnorableEvent(eventType)) return;
 
       if (eventType === "DELETE") {
         const oldRow = payload.old as Partial<Lead> | undefined;
-        const leadId = oldRow?.id;
+        const leadId = leadIdFromLeadPayload(payload);
         const jobId =
-          (oldRow as { job_id?: string } | undefined)?.job_id ||
-          (leadId ? leadIdToJobIdMap.current.get(leadId) : undefined);
+          jobIdFromLeadPayload(payload) || (leadId ? leadIdToJobIdMap.current.get(leadId) : undefined);
 
         if (leadId) {
           leadIdToJobIdMap.current.delete(leadId);
+          // A pending upsert for a lead that no longer exists is pointless.
+          const pending = pendingSyncsRef.current.get(leadId);
+          if (pending) {
+            clearTimeout(pending);
+            pendingSyncsRef.current.delete(leadId);
+          }
           void syncLeadDeleteToGoogleSheets(leadId, jobId).catch((err) => {
             console.warn("Failed to sync lead deletion to Google Sheet:", err);
           });
@@ -81,51 +133,43 @@ export function useGoogleSheetsSync() {
         return;
       }
 
-      if (eventType === "INSERT" || eventType === "UPDATE") {
-        const rawLead = payload.new as Lead | undefined;
-        const leadId = rawLead?.id;
-        if (!leadId) return;
+      const rawLead = payload.new as Lead | undefined;
+      const leadId = leadIdFromLeadPayload(payload);
+      if (!leadId) return;
 
-        if (rawLead.job_id) {
-          leadIdToJobIdMap.current.set(leadId, rawLead.job_id);
-        }
-
-        const oldRow = payload.old as Partial<Lead> | undefined;
-
-        // Debounce rapid changes to the same lead by 1.2 seconds
-        const existingTimer = pendingSyncsRef.current.get(leadId);
-        if (existingTimer) {
-          clearTimeout(existingTimer);
-        }
-
-        const timer = setTimeout(async () => {
-          pendingSyncsRef.current.delete(leadId);
-          try {
-            // Fetch fresh complete lead record so all columns and joins are present
-            const { data: freshLead } = await supabase
-              .from("leads")
-              .select("*")
-              .eq("id", leadId)
-              .maybeSingle();
-
-            const leadToSync = (freshLead as Lead) || rawLead;
-            if (leadToSync) {
-              await syncLeadUpsertToGoogleSheets(
-                leadToSync,
-                oldRow?.status,
-                oldRow?.cs_tag
-              );
-            }
-          } catch (err) {
-            console.warn("Failed to sync lead upsert to Google Sheet:", err);
-          }
-        }, 1200);
-
-        pendingSyncsRef.current.set(leadId, timer);
+      if (rawLead?.job_id) {
+        leadIdToJobIdMap.current.set(leadId, rawLead.job_id);
       }
+
+      scheduleUpsert(leadId);
     };
 
-    realtimeBus.addEventListener("leads", handleLeadChange);
+    /**
+     * Notes and photos are part of the synced row, so a change to either has
+     * to re-sync the lead it belongs to. These events carry only their own
+     * row, so the lead is looked up by lead_id and then re-read in full.
+     *
+     * A delete here cannot be attributed if the table does not carry REPLICA
+     * IDENTITY FULL, because Postgres then sends only the primary key. The
+     * migration sets it for these tables so deletes resync too; where that is
+     * not possible the change is skipped rather than guessed, and the nightly
+     * reconciliation sweep is what catches the difference.
+     */
+    const handleChildChange = (event: Event) => {
+      if (!isEnabledRef.current) return;
+      const payload = (event as CustomEvent).detail;
+      if (isIgnorableEvent(payload?.eventType)) return;
+
+      const leadId = leadIdFromChangePayload(payload);
+      if (!leadId) return;
+
+      scheduleUpsert(leadId);
+    };
+
+realtimeBus.addEventListener("leads", handleLeadChange);
+    SYNC_TRIGGER_EVENTS.filter((name) => name !== "leads").forEach((name) => {
+      realtimeBus.addEventListener(name, handleChildChange);
+    });
 
     /**
      * Works through leads that previously failed to reach the sheet.
@@ -187,6 +231,9 @@ export function useGoogleSheetsSync() {
     return () => {
       isMounted = false;
       realtimeBus.removeEventListener("leads", handleLeadChange);
+      SYNC_TRIGGER_EVENTS.filter((name) => name !== "leads").forEach((name) => {
+        realtimeBus.removeEventListener(name, handleChildChange);
+      });
       clearInterval(drainTimer);
       clearInterval(staleTimer);
       // Clear any pending debounce timers
