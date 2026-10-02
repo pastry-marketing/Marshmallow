@@ -158,13 +158,21 @@ BEGIN
   INSERT INTO _results VALUES
     (9, 'unmark keeps the row', v_rows = 1, 'inactive rows=' || v_rows);
 
-  -- clean up so the harness leaves no residue even before ROLLBACK
-  DELETE FROM public.optimized_areas WHERE state = 'TX';
+  -- Re-activated and deliberately LEFT IN PLACE. The role checks below count
+  -- the rows a caller can see, which only proves anything if a row exists: an
+  -- empty table reads as "nothing visible" to everybody and would pass for the
+  -- wrong reason. It is removed in the cleanup step near the end.
+  UPDATE public.optimized_areas SET is_active = true WHERE id = v_id1;
 END $$;
 
 
 -- ===========================================================================
--- 4. Role gate - processor and customer service must be refused
+-- 4. Role gate - processor must see no rows and cannot reach the aggregate
+--
+--    Row-level security does not raise. A policy that excludes a caller
+--    returns zero rows and the query still succeeds, so this counts rows
+--    rather than expecting 42501. Only the SECURITY DEFINER aggregate is
+--    expected to raise, because it checks the caller's role itself.
 -- ===========================================================================
 SELECT set_config('request.jwt.claim.sub',
   coalesce((SELECT user_id::text FROM public.user_roles WHERE role::text = 'processor' LIMIT 1), ''), true);
@@ -174,14 +182,13 @@ SELECT set_config('request.jwt.claims',
 SET LOCAL ROLE authenticated;
 
 DO $$
+DECLARE
+  v_seen int;
 BEGIN
-  -- direct table read
-  BEGIN
-    PERFORM 1 FROM public.optimized_areas;
-    INSERT INTO _results VALUES (10, 'processor cannot read optimized_areas', false, 'was allowed');
-  EXCEPTION WHEN insufficient_privilege THEN
-    INSERT INTO _results VALUES (10, 'processor cannot read optimized_areas', true, '42501 as expected');
-  END;
+  -- Direct table read. Expect success with zero rows, not an error.
+  SELECT count(*) INTO v_seen FROM public.optimized_areas;
+  INSERT INTO _results VALUES
+    (10, 'processor sees no optimized areas', v_seen = 0, 'rows visible=' || v_seen);
 
   -- and cannot reach the aggregate
   BEGIN
@@ -195,29 +202,57 @@ END $$;
 RESET ROLE;
 
 
--- 5. signed out - expect 42501 on both
+-- 5. signed out - expect no rows, and 42501 from the aggregate
 SELECT set_config('request.jwt.claim.sub', '', true);
 SELECT set_config('request.jwt.claims', '', true);
 SET LOCAL ROLE authenticated;
 
 DO $$
+DECLARE
+  v_seen int;
 BEGIN
+  SELECT count(*) INTO v_seen FROM public.optimized_areas;
+  INSERT INTO _results VALUES
+    (13, 'signed out sees no optimized areas', v_seen = 0, 'rows visible=' || v_seen);
+
   BEGIN
     PERFORM * FROM public.area_performance(NULL, 'TX', NULL);
     INSERT INTO _results VALUES (12, 'signed out denied area_performance', false, 'was allowed');
   EXCEPTION WHEN insufficient_privilege THEN
     INSERT INTO _results VALUES (12, 'signed out denied area_performance', true, '42501 as expected');
   END;
-
-  BEGIN
-    PERFORM 1 FROM public.optimized_areas;
-    INSERT INTO _results VALUES (13, 'signed out cannot read optimized_areas', false, 'was allowed');
-  EXCEPTION WHEN insufficient_privilege THEN
-    INSERT INTO _results VALUES (13, 'signed out cannot read optimized_areas', true, '42501 as expected');
-  END;
 END $$;
 
 RESET ROLE;
+
+
+-- ===========================================================================
+-- 5b. Control - the row really is there and an admin really can see it
+--
+--    Without this the two checks above pass vacuously. "0 rows visible"
+--    proves the caller was blocked only if an admin looking at the same
+--    moment sees the row.
+-- ===========================================================================
+SELECT set_config('request.jwt.claim.sub',
+  coalesce((SELECT user_id::text FROM public.user_roles WHERE role::text = 'admin' LIMIT 1), ''), true);
+SELECT set_config('request.jwt.claims',
+  coalesce((SELECT json_build_object('sub', user_id::text, 'role', 'authenticated')::text
+              FROM public.user_roles WHERE role::text = 'admin' LIMIT 1), ''), true);
+SET LOCAL ROLE authenticated;
+
+DO $$
+DECLARE
+  v_seen int;
+BEGIN
+  SELECT count(*) INTO v_seen FROM public.optimized_areas WHERE state = 'TX';
+  INSERT INTO _results VALUES
+    (22, 'admin sees the marked area', v_seen = 1, 'rows visible=' || v_seen);
+END $$;
+
+RESET ROLE;
+
+-- leave no residue even before the ROLLBACK
+DELETE FROM public.optimized_areas WHERE state = 'TX';
 
 
 -- ===========================================================================
