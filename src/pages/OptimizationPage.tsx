@@ -1,20 +1,15 @@
 import { useAuth } from "@/contexts/AuthContext";
 
-import { TechnicianPerformance } from "@/components/technicians/TechnicianPerformance";
 import { OptimizedAreasSection } from "@/components/optimization/OptimizedAreasSection";
 
 /**
  * The Optimization section.
  *
- * Two parts, in the order a decision gets made: the areas you have already
- * marked as worth optimising and how they have performed since, then the
- * technician and area performance underneath it that tells you where the next
- * one should go.
- *
- * The performance body is the same component the Technicians page renders for
- * its Tech Report tab. They are one report reached two ways, so they are one
- * implementation - a second copy would eventually report different numbers for
- * the same technician.
+ * One job only: decide which areas to push, and track what those areas have
+ * done since. The technician report is deliberately not here - it lives on the
+ * Technicians page, and repeating several hundred rows of it on both pages made
+ * this one do two jobs badly. Good Tech is likewise decided at payment
+ * approval, or on the Technicians page, and is not toggled from here.
  */
 export default function OptimizationPage() {
   const { role } = useAuth();
@@ -32,15 +27,13 @@ export default function OptimizationPage() {
       <header className="flex flex-col gap-2">
         <h1 className="text-2xl font-semibold tracking-[-0.04em] text-foreground">Optimization</h1>
         <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-          Where jobs close, which technicians close them, and which areas are worth pushing
-          more work into. Areas are marked from the payment approval screen, where the
-          evidence for the decision is on the same page.
+          Which areas are worth pushing more work into, and what they have done since. Areas
+          can be marked here from the evidence below, or while approving a payment where the
+          evidence for that job is on the same page.
         </p>
       </header>
 
       <OptimizedAreasSection />
-
-      <TechnicianPerformance />
     </div>
   );
 }
