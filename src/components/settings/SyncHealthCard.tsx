@@ -114,6 +114,12 @@ export function SyncHealthCard() {
   const StatusIcon = STATUS_ICON[status];
   const { label } = describeSyncStatus(status);
 
+  // Before the first response there is nothing to report, and rendering the
+  // defaults would claim Idle with zero leads behind and zero synced, which is
+  // a reassuring answer built from no data at all.
+  const isPending = healthQuery.isPending;
+  const isUnavailable = healthQuery.isError;
+
   // Null means the watermark migration has not been applied, which is not the
   // same as zero outstanding. It is shown as unknown rather than as "current".
   const currencyKnown = typeof behind === "number";
@@ -151,13 +157,13 @@ export function SyncHealthCard() {
               </svg>
               <div className="absolute inset-0 flex flex-col items-center justify-center">
                 <motion.span
-                  key={String(behind)}
+                  key={isPending || isUnavailable ? "none" : String(behind)}
                   initial={reduceMotion ? false : { opacity: 0, y: 6, scale: 0.9 }}
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   transition={{ ...silkySpring }}
-                  className={`text-lg font-bold tabular-nums ${TONE_TEXT[status]}`}
+                  className={`text-lg font-bold tabular-nums ${isPending || isUnavailable ? "text-muted-foreground/50" : TONE_TEXT[status]}`}
                 >
-                  {currencyKnown ? behind : "—"}
+                  {isPending || isUnavailable ? "·" : behind}
                 </motion.span>
                 <span className="text-[9px] uppercase tracking-wider text-muted-foreground">
                   behind
@@ -182,19 +188,25 @@ export function SyncHealthCard() {
                 </h3>
               </div>
               <p className="max-w-xs text-xs leading-relaxed text-muted-foreground">
-                {!currencyKnown
-                  ? "Lead counts appear once the sync watermark migration is applied."
-                  : isCurrent
-                    ? "Every lead change is in the sheet."
-                    : `${behind} lead${behind === 1 ? "" : "s"} changed after the last reconcile, the oldest ${formatSyncAge(health?.behind_seconds ?? null)}.`}
+                {isUnavailable
+                  ? "Could not read sync health. If the sync health migration has not been applied, get_sheets_sync_health does not exist."
+                  : isPending
+                    ? "Checking the backup against the database."
+                    : !currencyKnown
+                      ? "Lead counts appear once the sync watermark migration is applied."
+                      : isCurrent
+                        ? "Every lead change is in the sheet."
+                        : `${behind} lead${behind === 1 ? "" : "s"} changed after the last reconcile, the oldest ${formatSyncAge(health?.behind_seconds ?? null)}.`}
               </p>
-              <Badge
-                variant="outline"
-                className={`gap-1.5 border-border/50 bg-muted/40 ${TONE_TEXT[status]}`}
-              >
-                <StatusIcon className="h-3 w-3" />
-                {label}
-              </Badge>
+              {isPending || isUnavailable ? null : (
+                <Badge
+                  variant="outline"
+                  className={`gap-1.5 border-border/50 bg-muted/40 ${TONE_TEXT[status]}`}
+                >
+                  <StatusIcon className="h-3 w-3" />
+                  {label}
+                </Badge>
+              )}
             </div>
           </div>
 
