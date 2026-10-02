@@ -36,23 +36,30 @@ CREATE TEMP TABLE _results (
 -- 01  Objects exist
 -- -----------------------------------------------------------------------------
 DO $$
+DECLARE
+  v_missing text;
 BEGIN
-  PERFORM 1 FROM unnest(ARRAY[
-    'public.google_sheets_sync_health','public.google_sheets_sync_errors',
-    'public.google_sheets_sync_queue','public.record_sheets_sync_success',
-    'public.record_sheets_sync_failure','public.claim_sheets_sync_queue',
-    'public.get_sheets_sync_health','public.raise_sheets_sync_stale_alert',
-    'public.prune_sheets_sync_errors','public.get_sheets_sync_queue_depth'
-  ]) AS t WHERE to_regclass(t) IS NOT NULL;
+  -- to_regclass resolves relations only. Functions need to_regprocedure with
+  -- their full argument signature, otherwise every function reads as missing
+  -- and this check fails for the wrong reason.
+  SELECT string_agg(obj, ', ' ORDER BY obj) INTO v_missing
+    FROM unnest(ARRAY[
+      'public.google_sheets_sync_health',
+      'public.google_sheets_sync_errors',
+      'public.google_sheets_sync_queue',
+      'public.record_sheets_sync_success(uuid)',
+      'public.record_sheets_sync_failure(text,uuid,text,jsonb)',
+      'public.claim_sheets_sync_queue(integer)',
+      'public.get_sheets_sync_health(integer)',
+      'public.get_sheets_sync_queue_depth()',
+      'public.prune_sheets_sync_errors(integer)',
+      'public.raise_sheets_sync_stale_alert(integer,integer)'
+    ]) AS obj
+   WHERE to_regclass(obj) IS NULL
+     AND to_regprocedure(obj) IS NULL;
 
-  IF (SELECT count(*) FROM unnest(ARRAY[
-       'public.google_sheets_sync_health','public.google_sheets_sync_errors',
-       'public.google_sheets_sync_queue','public.record_sheets_sync_success',
-       'public.record_sheets_sync_failure','public.claim_sheets_sync_queue',
-       'public.get_sheets_sync_health','public.raise_sheets_sync_stale_alert',
-       'public.prune_sheets_sync_errors','public.get_sheets_sync_queue_depth'
-     ]) AS t WHERE to_regclass(t) IS NOT NULL) <> 10 THEN
-    RAISE EXCEPTION 'one or more objects are missing - has the migration been applied?';
+  IF v_missing IS NOT NULL THEN
+    RAISE EXCEPTION 'missing: % - has the migration been applied?', v_missing;
   END IF;
 
   INSERT INTO _results VALUES (1, 'objects exist', true, 'all 10 present');
@@ -489,7 +496,9 @@ END $$;
 DO $$
 DECLARE v_kept integer;
 BEGIN
-  SELECT public.prune_sheets_sync_errors(5);
+  -- PERFORM discards the result. A bare SELECT here raises
+  -- "query has no destination for result data".
+  PERFORM public.prune_sheets_sync_errors(5);
   SELECT count(*) INTO v_kept FROM public.google_sheets_sync_errors;
   IF v_kept > 5 THEN
     RAISE EXCEPTION 'kept % rows, expected at most 5', v_kept;
