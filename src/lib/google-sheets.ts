@@ -1,6 +1,7 @@
 import { supabase } from "@/integrations/supabase/client";
 import { LEAD_STATUS_CONFIG, CS_TAG_LABELS, type Lead, type LeadStatus, type CsTag } from "@/types";
 import { formatUSPhone } from "@/lib/phone";
+import { recordSyncOutcome } from "@/lib/sheets-sync-health";
 
 export const TARGET_SPREADSHEET_URL =
   "https://docs.google.com/spreadsheets/d/1zGnzG0ovA2ICiUNoOVgVjleVt0CDeN1yCfHEx83ucxs/edit?gid=0#gid=0";
@@ -312,8 +313,11 @@ export async function fetchAllLeadsWithDetails(): Promise<GoogleSheetLeadRow[]> 
  * Dispatch payload to Google Sheets Webhook
  * First tries Supabase Edge Function to bypass CORS.
  * If edge function is not deployed, sends direct fetch with mode: 'no-cors' fallback.
+ *
+ * Every dispatch goes through here, so health recording wraps this function
+ * rather than each of its five call sites.
  */
-async function dispatchToWebhook(
+async function dispatchToWebhookInner(
   payload: Record<string, unknown>,
   explicitWebhookUrl?: string
 ): Promise<{ success: boolean; message?: string; [key: string]: unknown }> {
@@ -373,6 +377,59 @@ async function dispatchToWebhook(
     } catch (finalErr) {
       throw new Error(`Failed to contact Google Sheets Webhook: ${finalErr instanceof Error ? finalErr.message : String(finalErr)}`);
     }
+  }
+}
+
+/** A dispatch is only a real lead if it carries a lead row id. */
+const LEAD_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Pulls the database lead id out of a dispatch payload.
+ *
+ * Deletes carry db_id as the lead and lead_id as the job id, so db_id is
+ * preferred. A delete that only has a job id must not be queued, which is why
+ * the value is shape-checked rather than cast: a non-uuid would fail the
+ * insert and lose the failure report entirely.
+ */
+function leadIdFromPayload(payload: Record<string, unknown>): string | null {
+  for (const key of ["db_id", "lead_id"]) {
+    const value = payload[key];
+    if (typeof value === "string" && LEAD_ID_PATTERN.test(value)) return value;
+  }
+  return null;
+}
+
+/**
+ * Dispatch and report the outcome.
+ *
+ * Previously the response from Apps Script was returned to callers that threw
+ * the value away, so a script answering {success:false} looked identical to a
+ * successful write. Both that soft failure and a thrown error are now recorded.
+ *
+ * Recording is fire-and-forget: a sync must not fail because the bookkeeping
+ * call did, and vice versa.
+ */
+async function dispatchToWebhook(
+  payload: Record<string, unknown>,
+  explicitWebhookUrl?: string
+): Promise<{ success: boolean; message?: string; [key: string]: unknown }> {
+  const leadId = leadIdFromPayload(payload);
+  const action = typeof payload.action === "string" ? payload.action : "sync";
+
+  try {
+    const result = await dispatchToWebhookInner(payload, explicitWebhookUrl);
+    const ok = result?.success !== false;
+    void recordSyncOutcome(
+      ok,
+      leadId,
+      action,
+      ok ? undefined : String(result?.message ?? "Google Sheets reported a failure"),
+    );
+    return result;
+  } catch (err) {
+    void recordSyncOutcome(false, leadId, action, err instanceof Error ? err.message : String(err));
+    throw err;
   }
 }
 
