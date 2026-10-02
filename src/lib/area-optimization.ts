@@ -117,7 +117,17 @@ export async function fetchAreaLeaderboard(
     _limit: limit,
   } as never);
 
-  if (error) throw error;
+  // Rethrown rather than swallowed: the message below has to name the real
+  // cause. A missing function, a stale schema cache and a denied grant all
+  // look identical from the page, and guessing wrong sends whoever is
+  // debugging it after the wrong problem.
+  if (error) {
+    throw new Error(
+      error.code === "PGRST202"
+        ? "area_leaderboard is not known to the API yet - run the migration, then reload the schema cache."
+        : `${error.code ?? "error"}: ${error.message}`,
+    );
+  }
   return (data as unknown as AreaLeaderboardRow[]) ?? [];
 }
 
