@@ -1,7 +1,7 @@
 import { supabase } from "@/integrations/supabase/client";
 import { LEAD_STATUS_CONFIG, CS_TAG_LABELS, type Lead, type LeadStatus, type CsTag } from "@/types";
 import { formatUSPhone } from "@/lib/phone";
-import { recordSyncOutcome } from "@/lib/sheets-sync-health";
+import { recordSyncOutcome, isSyncAction } from "@/lib/sheets-sync-health";
 
 export const TARGET_SPREADSHEET_URL =
   "https://docs.google.com/spreadsheets/d/1zGnzG0ovA2ICiUNoOVgVjleVt0CDeN1yCfHEx83ucxs/edit?gid=0#gid=0";
@@ -416,6 +416,12 @@ async function dispatchToWebhook(
 ): Promise<{ success: boolean; message?: string; [key: string]: unknown }> {
   const leadId = leadIdFromPayload(payload);
   const action = typeof payload.action === "string" ? payload.action : "sync";
+
+  // A connectivity test or a sheet reset is not a sync. Recording either would
+  // report the pipeline healthy without a single lead being written.
+  if (!isSyncAction(action)) {
+    return dispatchToWebhookInner(payload, explicitWebhookUrl);
+  }
 
   try {
     const result = await dispatchToWebhookInner(payload, explicitWebhookUrl);

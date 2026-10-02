@@ -16,6 +16,26 @@ import { supabase } from "@/integrations/supabase/client";
 
 export type SyncStatus = "healthy" | "degraded" | "down" | "idle";
 
+/**
+ * Dispatch actions that actually move lead data into the sheet.
+ *
+ * Two actions go through the same dispatcher but are not a sync: "ping" is the
+ * connectivity test behind the Test Connection button, and "clear_all" resets
+ * the sheet during a bulk sync.
+ *
+ * Reporting either of those as a success would mark the sync healthy and
+ * increment "leads synced" without a single lead being written, which is
+ * precisely the false all-clear this layer exists to prevent. A failed ping is
+ * also not worth recording, because a real lead sync will record its own
+ * failure and queue the lead.
+ */
+const SYNC_ACTIONS = new Set(["upsert", "delete", "sync_batch", "sync_all"]);
+
+/** True when an action represents a real write of lead data. */
+export function isSyncAction(action: string): boolean {
+  return SYNC_ACTIONS.has(action);
+}
+
 export interface SyncErrorEntry {
   occurred_at: string;
   message: string;
