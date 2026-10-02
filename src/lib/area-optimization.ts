@@ -90,6 +90,37 @@ export async function fetchAreaPerformance(
   return row ?? null;
 }
 
+/** A state ranked on the jobs that closed in it. */
+export interface AreaLeaderboardRow {
+  state: string | null;
+  cities: string | null;
+  technicians: number;
+  closed_count: number;
+  cancelled_count: number;
+  scheduled_count: number;
+  closed_rate_pct: number | null;
+  is_optimised: boolean;
+  last_closed_at: string | null;
+}
+
+/**
+ * Areas ranked by the jobs that closed in them.
+ *
+ * State is the grain because that is where the evidence is: CA carries 92
+ * closed jobs while the busiest single zip carries 3, so ranking any finer
+ * would list places with one job and call it a signal.
+ */
+export async function fetchAreaLeaderboard(
+  limit = 25,
+): Promise<AreaLeaderboardRow[]> {
+  const { data, error } = await supabase.rpc("area_leaderboard" as never, {
+    _limit: limit,
+  } as never);
+
+  if (error) throw error;
+  return (data as unknown as AreaLeaderboardRow[]) ?? [];
+}
+
 export async function fetchOptimizedAreas(): Promise<OptimizedArea[]> {
   const { data, error } = await supabase.rpc("optimized_areas_with_performance" as never);
   if (error) throw error;
