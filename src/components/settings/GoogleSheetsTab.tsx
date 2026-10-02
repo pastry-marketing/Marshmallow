@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { SyncHealthCard } from "@/components/settings/SyncHealthCard";
 import { toast } from "sonner";
 import {
   FileSpreadsheet,
@@ -153,6 +154,9 @@ export function GoogleSheetsTab() {
 
   return (
     <div className="space-y-6">
+      {/* Live health first: before anything else, is the sync actually working? */}
+      <SyncHealthCard />
+
       {/* Overview Card */}
       <Card className="glass-panel border-border/60 shadow-premium-sm">
         <CardHeader className="pb-4">

@@ -2,8 +2,14 @@ import { useEffect, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { syncLeadUpsertToGoogleSheets, syncLeadDeleteToGoogleSheets, getGoogleSheetsConfig } from "@/lib/google-sheets";
+import { claimSyncQueue, raiseSyncStaleAlert } from "@/lib/sheets-sync-health";
 import { realtimeBus } from "@/lib/realtime";
 import type { Lead } from "@/types";
+
+/** How often a session with the app open retries leads that previously failed. */
+const QUEUE_DRAIN_INTERVAL_MS = 120_000;
+/** How often to nudge the database to alert admins if sync has gone stale. */
+const STALE_ALERT_INTERVAL_MS = 300_000;
 
 /**
  * Hook to automatically synchronize lead changes in Supabase with Google Sheets.
@@ -13,6 +19,12 @@ import type { Lead } from "@/types";
  * us within Supabase's realtime channel limits.
  *
  * Only runs when the viewer is an admin AND autoSync is enabled.
+ *
+ * Failures are recorded in the database rather than only in the console, so a
+ * lead that failed to sync is not lost when the tab closes. This hook also
+ * drains that queue while it is running: the queue is durable, but something
+ * still has to work through it, and an open admin session is the cheapest place
+ * that can happen without duplicating the row formatter on the server.
  */
 export function useGoogleSheetsSync() {
   const { role } = useAuth();
@@ -115,9 +127,68 @@ export function useGoogleSheetsSync() {
 
     realtimeBus.addEventListener("leads", handleLeadChange);
 
+    /**
+     * Works through leads that previously failed to reach the sheet.
+     *
+     * Claiming happens in SQL with FOR UPDATE SKIP LOCKED, so two admins open
+     * at once cannot process the same lead. A lead still failing after five
+     * attempts is left alone: the backoff has grown to eight minutes by then,
+     * and hammering a script that is already failing makes it worse.
+     */
+    const drainFailedQueue = async () => {
+      if (!isMounted || !isEnabledRef.current) return;
+      let items: Awaited<ReturnType<typeof claimSyncQueue>>;
+      try {
+        items = await claimSyncQueue(25);
+      } catch {
+        return;
+      }
+      if (!items?.length) return;
+
+      for (const item of items) {
+        if (!isMounted) return;
+        if (item.attempts > 5) continue;
+
+        try {
+          if (item.op === "delete") {
+            await syncLeadDeleteToGoogleSheets(item.lead_id, item.job_id ?? undefined);
+          } else {
+            const { data: freshLead } = await supabase
+              .from("leads")
+              .select("*")
+              .eq("id", item.lead_id)
+              .maybeSingle();
+            if (freshLead) {
+              await syncLeadUpsertToGoogleSheets(freshLead as Lead);
+            }
+          }
+        } catch (err) {
+          // Already recorded by dispatchToWebhook, which also re-queues it.
+          console.warn("Queued lead sync failed again:", err);
+        }
+      }
+    };
+
+    const drainTimer = setInterval(() => void drainFailedQueue(), QUEUE_DRAIN_INTERVAL_MS);
+
+    /**
+     * Asks the database to alert admins when the sync has gone stale.
+     *
+     * The write happens in SQL, so the alert reaches admins who are not looking
+     * at this tab. Throttling is server-side, so this can run freely.
+     */
+    const staleTimer = setInterval(() => {
+      void raiseSyncStaleAlert().catch(() => undefined);
+    }, STALE_ALERT_INTERVAL_MS);
+
+    // Check once on mount rather than waiting a full interval for the first look.
+    void raiseSyncStaleAlert().catch(() => undefined);
+
     return () => {
       isMounted = false;
       realtimeBus.removeEventListener("leads", handleLeadChange);
+      clearInterval(drainTimer);
+      clearInterval(staleTimer);
       // Clear any pending debounce timers
       pendingSyncsRef.current.forEach((timer) => clearTimeout(timer));
       pendingSyncsRef.current.clear();
