@@ -300,6 +300,64 @@ describe("isSyncAction", () => {
   });
 });
 
+describe("backup currency fields", () => {
+  it("reports how many leads are behind", async () => {
+    rpc().mockResolvedValue({
+      data: healthRow({ leads_behind: 37, behind_seconds: 7200, watermark_at: "2026-11-02T09:00:00Z" }),
+      error: null,
+    } as never);
+
+    const h = await fetchSyncHealth();
+
+    expect(h.leads_behind).toBe(37);
+    expect(h.behind_seconds).toBe(7200);
+    expect(h.watermark_at).toBe("2026-11-02T09:00:00Z");
+  });
+
+  it("keeps leads_behind null when the column does not exist yet", async () => {
+    // An unreconciled backup must never render as "0 behind", which would
+    // read as fully current when nothing has actually been checked.
+    rpc().mockResolvedValue({ data: healthRow(), error: null } as never);
+
+    const h = await fetchSyncHealth();
+
+    expect(h.leads_behind).toBeNull();
+    expect(h.behind_seconds).toBeNull();
+  });
+
+  it("distinguishes a null count from a real zero", async () => {
+    rpc().mockResolvedValue({ data: healthRow({ leads_behind: 0 }), error: null } as never);
+
+    const h = await fetchSyncHealth();
+
+    expect(h.leads_behind).toBe(0);
+  });
+
+  it("treats zero behind with no age as current, not stale", async () => {
+    rpc().mockResolvedValue({
+      data: healthRow({ leads_behind: 0, behind_seconds: null }),
+      error: null,
+    } as never);
+
+    const h = await fetchSyncHealth();
+
+    expect(h.leads_behind).toBe(0);
+    expect(h.behind_seconds).toBeNull();
+  });
+
+  it("coerces numeric strings from the jsonb fields", async () => {
+    rpc().mockResolvedValue({
+      data: healthRow({ leads_behind: "12", behind_seconds: "600" }),
+      error: null,
+    } as never);
+
+    const h = await fetchSyncHealth();
+
+    expect(h.leads_behind).toBe(12);
+    expect(h.behind_seconds).toBe(600);
+  });
+});
+
 describe("formatSyncAge", () => {
   it("says never rather than showing a misleading zero", () => {
     expect(formatSyncAge(null)).toBe("never");

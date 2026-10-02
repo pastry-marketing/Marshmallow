@@ -54,6 +54,18 @@ export interface SyncHealth {
   queue_depth: number;
   seconds_since_success: number | null;
   recent_errors: SyncErrorEntry[];
+  /**
+   * How many leads changed after the watermark, i.e. how many records the
+   * backup is actually missing. Null on databases that have not applied the
+   * watermark migration yet.
+   *
+   * This is the number that matters for a backup. Wall-clock freshness would
+   * report an idle system as stale and a system with three thousand unsynced
+   * leads as fresh if anything had synced in the last fifteen minutes.
+   */
+  leads_behind: number | null;
+  behind_seconds: number | null;
+  watermark_at: string | null;
 }
 
 export interface QueuedSyncItem {
@@ -104,6 +116,17 @@ export async function fetchSyncHealth(
         ? null
         : Number(row.seconds_since_success),
     recent_errors: normaliseErrors(row.recent_errors),
+    // Absent rather than zero when the watermark columns do not exist yet, so
+    // an unreconciled backup is never mistaken for a current one.
+    leads_behind:
+      row.leads_behind === null || row.leads_behind === undefined
+        ? null
+        : Number(row.leads_behind),
+    behind_seconds:
+      row.behind_seconds === null || row.behind_seconds === undefined
+        ? null
+        : Number(row.behind_seconds),
+    watermark_at: (row.watermark_at as string | null) ?? null,
   };
 }
 
