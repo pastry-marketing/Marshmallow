@@ -171,7 +171,7 @@ BEGIN
       (SELECT string_agg(DISTINCT up.city, ', ')
          FROM (SELECT DISTINCT s2.r_city AS city FROM scoped s2
                 WHERE s2.r_state = s.r_state AND s2.r_city IS NOT NULL
-                ORDER BY 1 LIMIT 3) up)
+                ORDER BY 1 LIMIT 3) up) AS cities
     FROM scoped s
     WHERE s.r_state IS NOT NULL
     GROUP BY s.r_state
