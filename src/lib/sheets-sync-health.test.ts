@@ -10,6 +10,7 @@ import {
   describeSyncStatus,
   fetchSyncHealth,
   formatSyncAge,
+  isSyncAction,
   pruneSyncErrorLog,
   raiseSyncStaleAlert,
   recordSyncFailure,
@@ -268,6 +269,34 @@ describe("raiseSyncStaleAlert", () => {
       p_stale_after_seconds: 900,
       p_throttle_minutes: 15,
     });
+  });
+});
+
+describe("isSyncAction", () => {
+  it("counts the actions that actually write lead data", () => {
+    expect(isSyncAction("upsert")).toBe(true);
+    expect(isSyncAction("delete")).toBe(true);
+    expect(isSyncAction("sync_batch")).toBe(true);
+    expect(isSyncAction("sync_all")).toBe(true);
+  });
+
+  it("does not count the connectivity test as a sync", () => {
+    // Otherwise Test Connection would mark the pipeline healthy and bump
+    // "leads synced" without writing a single lead.
+    expect(isSyncAction("ping")).toBe(false);
+  });
+
+  it("does not count a sheet reset as a sync", () => {
+    expect(isSyncAction("clear_all")).toBe(false);
+  });
+
+  it("does not count an unknown action as a sync", () => {
+    expect(isSyncAction("something_new")).toBe(false);
+    expect(isSyncAction("")).toBe(false);
+  });
+
+  it("is case sensitive, so a renamed action cannot silently start reporting", () => {
+    expect(isSyncAction("UPSERT")).toBe(false);
   });
 });
 
