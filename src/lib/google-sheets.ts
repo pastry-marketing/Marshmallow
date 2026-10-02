@@ -1,7 +1,7 @@
 import { supabase } from "@/integrations/supabase/client";
 import { LEAD_STATUS_CONFIG, CS_TAG_LABELS, type Lead, type LeadStatus, type CsTag } from "@/types";
 import { formatUSPhone } from "@/lib/phone";
-import { recordSyncOutcome, isSyncAction } from "@/lib/sheets-sync-health";
+import { recordSyncOutcome, isSyncAction, advanceSyncWatermark } from "@/lib/sheets-sync-health";
 
 export const TARGET_SPREADSHEET_URL =
   "https://docs.google.com/spreadsheets/d/1zGnzG0ovA2ICiUNoOVgVjleVt0CDeN1yCfHEx83ucxs/edit?gid=0#gid=0";
@@ -499,6 +499,17 @@ export async function syncAllLeadsToGoogleSheets(
     lastSyncedCount: total,
   };
   await saveGoogleSheetsConfig(updatedConfig);
+
+  // Only now is the sheet known to be complete, so only now may the watermark
+  // move. A full sync covers every lead that existed when it started, which is
+  // what makes this safe: single-lead upserts deliberately do not advance it,
+  // because one lead syncing says nothing about the other three thousand.
+  //
+  // If this call fails the watermark stays put and the panel keeps reporting
+  // leads behind, which is the correct outcome - the sheet was written but we
+  // cannot prove it is complete, and claiming otherwise would silence the
+  // alarm on a backup that is actually incomplete.
+  await advanceSyncWatermark().catch(() => undefined);
 
   return {
     success: true,

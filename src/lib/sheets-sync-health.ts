@@ -187,6 +187,29 @@ export async function recordSyncOutcome(
   await recordSyncFailure({ message: message ?? "Unknown sync failure", leadId, action });
 }
 
+/**
+ * Marks the sheet complete up to now.
+ *
+ * Call after a full or delta sync, never after a single-lead upsert. Until
+ * this has been called at least once the backup has never been reconciled and
+ * every lead counts as missing, which is why the panel shows the whole table
+ * rather than a reassuring zero.
+ *
+ * Never throws. The sheet has already been written by the time this runs, and
+ * failing to record that must not turn a completed sync into an error. If it
+ * does fail the watermark simply stays where it was, so the panel keeps
+ * reporting leads behind until the next successful reconcile.
+ */
+export async function advanceSyncWatermark(): Promise<string | null> {
+  try {
+    const { data, error } = await supabase.rpc("advance_sheets_sync_watermark" as never);
+    if (error) throw error;
+    return (data as string | null) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** Claims due retries for this browser session. Respects the backoff window. */
 export async function claimSyncQueue(limit = 25): Promise<QueuedSyncItem[]> {
   const { data, error } = await supabase.rpc("claim_sheets_sync_queue" as never, {
