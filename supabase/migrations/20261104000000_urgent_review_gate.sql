@@ -747,10 +747,16 @@ END $$;
 
 -- -----------------------------------------------------------------------------
 -- 10. Grants
---     RESET ALL rather than REVOKE FROM PUBLIC: the default world grant is not
---     a PUBLIC group entry on this database and REVOKE silently does nothing.
+--
+--     RESET ALL is function-only syntax. On a table it is a parse error, so the
+--     table is handled with REVOKE and an explicit grant.
+--
+--     The functions still use RESET ALL rather than REVOKE ... FROM PUBLIC. An
+--     earlier migration here used REVOKE, reported success, and changed nothing,
+--     because the functions carried Postgres's default world grant rather than a
+--     PUBLIC group entry that REVOKE could see.
 -- -----------------------------------------------------------------------------
-ALTER TABLE public.lead_urgent_review_requests RESET ALL;
+REVOKE ALL ON TABLE public.lead_urgent_review_requests FROM anon, authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.lead_urgent_review_requests
   TO authenticated;
 
