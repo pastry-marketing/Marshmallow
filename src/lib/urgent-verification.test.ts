@@ -12,6 +12,8 @@ import {
   runUrgentVerification,
   submitUrgentReviewRequest,
   showsUrgentCheck,
+  showsUrgentCheckRole,
+  URGENT_CHECK_ENABLED,
 } from "./urgent-verification";
 
 const invoke = () => vi.mocked(supabase.functions.invoke);
@@ -22,29 +24,43 @@ beforeEach(() => {
 });
 
 describe("showsUrgentCheck", () => {
+  // The check is temporarily switched off, so nobody is asked whatever their
+  // role. The role rules themselves are still covered below, through
+  // showsUrgentCheckRole, so turning the feature back on is a one-line change
+  // against tests that never stopped describing the intended behaviour.
+  it("asks nobody while the check is switched off", () => {
+    expect(URGENT_CHECK_ENABLED).toBe(false);
+
+    for (const role of ["customer_service", "admin", "cs_admin", "processor", "opr", "opr_admin"]) {
+      expect(showsUrgentCheck(role)).toBe(false);
+    }
+  });
+});
+
+describe("showsUrgentCheckRole", () => {
   // Who is asked is separate from what the database permits. processor sets
   // urgent directly and is never asked; customer_service, admin and cs_admin all
   // see the same advisory check and nobody is queued for review.
   it("asks customer_service, admin and cs_admin", () => {
-    expect(showsUrgentCheck("customer_service")).toBe(true);
-    expect(showsUrgentCheck("admin")).toBe(true);
-    expect(showsUrgentCheck("cs_admin")).toBe(true);
+    expect(showsUrgentCheckRole("customer_service")).toBe(true);
+    expect(showsUrgentCheckRole("admin")).toBe(true);
+    expect(showsUrgentCheckRole("cs_admin")).toBe(true);
   });
 
   it("does not ask processor", () => {
-    expect(showsUrgentCheck("processor")).toBe(false);
+    expect(showsUrgentCheckRole("processor")).toBe(false);
   });
 
   it("does not ask the read-only roles", () => {
-    expect(showsUrgentCheck("opr")).toBe(false);
-    expect(showsUrgentCheck("opr_admin")).toBe(false);
+    expect(showsUrgentCheckRole("opr")).toBe(false);
+    expect(showsUrgentCheckRole("opr_admin")).toBe(false);
   });
 
   it("does not ask an unknown or absent role", () => {
-    expect(showsUrgentCheck(null)).toBe(false);
-    expect(showsUrgentCheck(undefined)).toBe(false);
-    expect(showsUrgentCheck("")).toBe(false);
-    expect(showsUrgentCheck("superuser")).toBe(false);
+    expect(showsUrgentCheckRole(null)).toBe(false);
+    expect(showsUrgentCheckRole(undefined)).toBe(false);
+    expect(showsUrgentCheckRole("")).toBe(false);
+    expect(showsUrgentCheckRole("superuser")).toBe(false);
   });
 
   it("keeps the asked list distinct from the database's exempt list", () => {
@@ -52,11 +68,11 @@ describe("showsUrgentCheck", () => {
     // were collapsed into one, processor would either start seeing the dialog or
     // lose the ability to set urgent directly. They are meant to disagree here.
     expect(bypassesUrgentGate("processor")).toBe(true);
-    expect(showsUrgentCheck("processor")).toBe(false);
+    expect(showsUrgentCheckRole("processor")).toBe(false);
 
     // customer_service is the mirror image: gated in the database, and asked.
     expect(bypassesUrgentGate("customer_service")).toBe(false);
-    expect(showsUrgentCheck("customer_service")).toBe(true);
+    expect(showsUrgentCheckRole("customer_service")).toBe(true);
   });
 });
 

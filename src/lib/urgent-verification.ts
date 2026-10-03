@@ -58,9 +58,33 @@ export function bypassesUrgentGate(role: string | null | undefined): boolean {
   return role === "admin" || role === "processor" || role === "cs_admin";
 }
 
-export function showsUrgentCheck(role: string | null | undefined): boolean {
+/**
+ * TEMPORARY: the urgent AI check is switched off.
+ *
+ * Urgent work cannot wait on a check that is not reliable yet, so the front end
+ * stops intercepting the status change and the database trigger is dropped by
+ * 20261104004000_temporarily_disable_urgent_gate.sql. Both have to be on for
+ * the feature to be on.
+ *
+ * To switch it back on: set this to true and recreate the leads_urgent_gate
+ * trigger, as that migration's header describes. Nothing else was removed.
+ */
+export const URGENT_CHECK_ENABLED = false;
+
+/**
+ * Roles the check is shown to when it is enabled.
+ *
+ * Who is asked is separate from what the database permits: processor sets
+ * urgent directly and is never asked. Kept as its own function so the role
+ * rules stay under test while the feature is off.
+ */
+export function showsUrgentCheckRole(role: string | null | undefined): boolean {
   const r = role ?? "";
   return r === "customer_service" || r === "admin" || r === "cs_admin";
+}
+
+export function showsUrgentCheck(role: string | null | undefined): boolean {
+  return URGENT_CHECK_ENABLED && showsUrgentCheckRole(role);
 }
 
 export type UrgentIssue = {
