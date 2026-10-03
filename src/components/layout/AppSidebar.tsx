@@ -18,7 +18,8 @@ import {
   FileWarning,
   ClipboardCheck,
 Shield,
-  ShieldCheck,
+ShieldCheck,
+  ShieldAlert,
   AlertTriangle,
   TrendingUp,
 } from "lucide-react";
@@ -66,6 +67,7 @@ const getNavItems = (role: string) => [
   { title: "Quote Approval", url: "/quote-approval", icon: ClipboardCheck, navKey: "quote_approval_requests", group: "Review" },
   { title: "Quotes to send", url: "/quote-pending", icon: FileWarning, navKey: "quote_pending_requests", group: "Review" },
     { title: "Tech Approvals", url: "/tech-approvals", icon: ShieldCheck, navKey: "technician_change_requests", group: "Review" },
+    { title: "Urgent review", url: "/urgent-review-requests", icon: ShieldAlert, navKey: "urgent_review_requests", group: "Review" },
 { title: "Technicians", url: "/technicians", icon: Contact, navKey: "technicians", group: "Manage" },
     { title: "Area Insights", url: "/areas", icon: MapPin, navKey: "areas", group: "Manage" },
   { title: "Optimization", url: "/optimization", icon: TrendingUp, navKey: "optimization", group: "Manage" },
@@ -185,6 +187,27 @@ export default function AppSidebar() {
         return 0;
       }
       return count || 0;
+    },
+    refetchInterval: 30000,
+  });
+
+  // Pending urgent review requests. CS Admin and Admin only, matching the queue
+  // page. Counted through the same SECURITY DEFINER list function the page uses
+  // rather than counting the table directly, so the badge cannot disagree with
+  // what is actually reviewable.
+  const canSeeUrgentReview = role === "admin" || role === "cs_admin";
+  const { data: pendingUrgentReviewCount = 0 } = useQuery({
+    queryKey: ["pending-urgent-review-count"],
+    enabled: canSeeUrgentReview,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("list_urgent_review_requests", {
+        p_status: "pending",
+      });
+      if (error) {
+        console.error("Error fetching pending urgent review count:", error.message);
+        return 0;
+      }
+      return Array.isArray(data) ? data.length : 0;
     },
     refetchInterval: 30000,
   });
@@ -515,13 +538,19 @@ export default function AppSidebar() {
                                   <span className="relative inline-flex rounded-full h-2 w-2 bg-violet-500 shadow-[0_0_6px_#8b5cf6]"></span>
                                 </span>
                               )}
-                              {item.navKey === "quote_pending_requests" && pendingQuoteCount > 0 && collapsed && (
-                                <span className="absolute -top-1.5 -right-1.5 flex h-2 w-2 z-20">
-                                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-                                  <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500 shadow-[0_0_6px_#f59e0b]"></span>
-                                </span>
-                              )}
-                              {isNeedAttention && needAttentionCount > 0 && collapsed && (
+{item.navKey === "quote_pending_requests" && pendingQuoteCount > 0 && collapsed && (
+                                  <span className="absolute -top-1.5 -right-1.5 flex h-2 w-2 z-20">
+                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                                    <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500 shadow-[0_0_6px_#f59e0b]"></span>
+                                  </span>
+                                )}
+                                {item.navKey === "urgent_review_requests" && pendingUrgentReviewCount > 0 && collapsed && (
+                                  <span className="absolute -top-1.5 -right-1.5 flex h-2 w-2 z-20">
+                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                                    <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500 shadow-[0_0_6px_#f43f5e]"></span>
+                                  </span>
+                                )}
+                                {isNeedAttention && needAttentionCount > 0 && collapsed && (
                                 <span className="absolute -top-1.5 -right-1.5 flex h-2 w-2 z-20">
                                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
                                   <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500 shadow-[0_0_6px_#f43f5e]"></span>
@@ -550,12 +579,18 @@ export default function AppSidebar() {
                                       <span className="relative inline-flex rounded-full h-2 w-2 bg-violet-500 shadow-[0_0_8px_#8b5cf6]"></span>
                                     </span>
                                   )}
-                                  {item.navKey === "quote_pending_requests" && pendingQuoteCount > 0 && (
-                                    <span className="relative flex h-2 w-2 shrink-0">
-                                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-                                      <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500 shadow-[0_0_8px_#f59e0b]"></span>
-                                    </span>
-                                  )}
+{item.navKey === "quote_pending_requests" && pendingQuoteCount > 0 && (
+                                      <span className="relative flex h-2 w-2 shrink-0">
+                                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                                        <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500 shadow-[0_0_8px_#f59e0b]"></span>
+                                      </span>
+                                    )}
+                                    {item.navKey === "urgent_review_requests" && pendingUrgentReviewCount > 0 && (
+                                      <span className="relative flex h-2 w-2 shrink-0">
+                                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                                        <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500 shadow-[0_0_8px_#f43f5e]"></span>
+                                      </span>
+                                    )}
                                   {isNeedAttention && needAttentionCount > 0 && (
                                     <span className="relative flex h-2 w-2 shrink-0">
                                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>

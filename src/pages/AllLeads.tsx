@@ -13,6 +13,7 @@ import { useNotepad } from "@/contexts/NotepadContext";
 import StatusBadge from "@/components/leads/StatusBadge";
 import AddLeadDialog from "@/components/leads/AddLeadDialog";
 import LeadDetailPanel from "@/components/leads/LeadDetailPanel";
+import UrgentAICheckDialog from "@/components/leads/UrgentAICheckDialog";
 import type { Lead } from "@/types";
 import { LEAD_STATUS_CONFIG } from "@/types";
 import { format } from "date-fns";
@@ -48,6 +49,11 @@ const AllLeads = () => {
   const { toggleNotepad, activeUserIds } = useNotepad();
   const isAnyNotepadOpen = activeUserIds.length > 0;
   const [addOpen, setAddOpen] = useState(false);
+  // Set when a lead is created in a safe status because the user asked for it to
+  // be urgent. The check needs a saved row to read, so it runs after the insert.
+  const [urgentCheckFor, setUrgentCheckFor] = useState<{
+    leadId: string; jobId: string; customerName: string; previousStatus: string;
+  } | null>(null);
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -318,7 +324,25 @@ const AllLeads = () => {
         </div>
       )}
 
-      <AddLeadDialog open={addOpen} onOpenChange={setAddOpen} onSuccess={refetch} />
+      <AddLeadDialog
+          open={addOpen}
+          onOpenChange={setAddOpen}
+          onSuccess={refetch}
+          onUrgentCheckCreated={setUrgentCheckFor}
+        />
+
+        <UrgentAICheckDialog
+          open={!!urgentCheckFor}
+          onOpenChange={(next) => { if (!next) setUrgentCheckFor(null); }}
+          leadId={urgentCheckFor?.leadId ?? ""}
+          jobId={urgentCheckFor?.jobId}
+          customerName={urgentCheckFor?.customerName}
+          previousStatus={urgentCheckFor?.previousStatus}
+          onProceed={() => {
+            void queryClient.invalidateQueries({ queryKey: ["leads"] });
+            refetch();
+          }}
+        />
 
       {selectedLeadId && (
         <LeadDetailPanel leadId={selectedLeadId} onClose={() => setSelectedLeadId(null)} onUpdate={refetch} />
