@@ -17,7 +17,8 @@ import {
   KeyRound,
   FileWarning,
   ClipboardCheck,
-  Shield,
+Shield,
+  ShieldCheck,
   AlertTriangle,
   TrendingUp,
 } from "lucide-react";
@@ -64,6 +65,7 @@ const getNavItems = (role: string) => [
   { title: "Payment approvals", url: "/lead-payment-requests", icon: DollarSign, navKey: "payment_requests", group: "Review" },
   { title: "Quote Approval", url: "/quote-approval", icon: ClipboardCheck, navKey: "quote_approval_requests", group: "Review" },
   { title: "Quotes to send", url: "/quote-pending", icon: FileWarning, navKey: "quote_pending_requests", group: "Review" },
+    { title: "Tech Approvals", url: "/tech-approvals", icon: ShieldCheck, navKey: "technician_change_requests", group: "Review" },
 { title: "Technicians", url: "/technicians", icon: Contact, navKey: "technicians", group: "Manage" },
     { title: "Area Insights", url: "/areas", icon: MapPin, navKey: "areas", group: "Manage" },
   { title: "Optimization", url: "/optimization", icon: TrendingUp, navKey: "optimization", group: "Manage" },
