@@ -9,6 +9,7 @@ import {
   applyUrgentAcknowledgement,
   applyUrgentVerification,
   submitUrgentReviewRequest,
+  type UrgentCheckMode,
   type UrgentIssue,
   type UrgentVerificationResult,
 } from "@/lib/urgent-verification";
@@ -43,13 +44,23 @@ interface Props {
   customerName?: string | null;
   previousStatus?: string | null;
   onProceed: () => void;
+  /**
+   * Advisory for admin, processor and cs_admin: the comparison runs and the
+   * findings are shown, but the person making the call decides. Enforced for
+   * customer_service, where findings block and a CS Admin has to sign off.
+   *
+   * Defaults to enforced, so a caller that forgets to pass it gets the stricter
+   * behaviour rather than the looser one.
+   */
+  mode?: UrgentCheckMode;
 }
 
 const SEVERITY_ORDER: Record<UrgentIssue["severity"], number> = { high: 0, medium: 1, low: 2 };
 
 export default function UrgentAICheckDialog({
-  open, onOpenChange, leadId, jobId, customerName, previousStatus, onProceed,
+  open, onOpenChange, leadId, jobId, customerName, previousStatus, onProceed, mode = "enforced",
 }: Props) {
+  const advisory = mode === "advisory";
   const [result, setResult] = useState<UrgentVerificationResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -94,11 +105,27 @@ export default function UrgentAICheckDialog({
     }
   }
 
-  async function proceedClean() {
+  // One path for both "it came back clean" and "I have read the findings and I am
+  // proceeding anyway". They differ only in what gets written down.
+  //
+  // The summary is passed explicitly in both cases. approve_urgent_verification
+  // falls back to 'All verification checks passed' when it is given nothing, so
+  // proceeding over findings without a summary would put a clean check into the
+  // activity log for a check that found problems.
+  async function applyUrgent(overridden: boolean) {
     setSubmitting(true);
+    const summary = overridden
+      ? `Proceeded over ${issues.length} finding${issues.length === 1 ? "" : "s"}: ${
+          result?.summary || "reviewed and accepted"
+        }`
+      : result?.summary || "";
     try {
-      await applyUrgentVerification(leadId, result?.summary ?? "");
-      toast.success("Checked against the conversation. Marked urgent.");
+      await applyUrgentVerification(leadId, summary);
+      toast.success(
+        overridden
+          ? "Marked urgent. The findings were recorded as reviewed."
+          : "Checked against the conversation. Marked urgent.",
+      );
       onProceed();
       onOpenChange(false);
     } catch (err: unknown) {
@@ -161,10 +188,12 @@ export default function UrgentAICheckDialog({
             ) : (
               <ShieldAlert className="h-5 w-5 text-amber-600" />
             )}
-            Check before marking urgent
+            {advisory ? "Worth a look before dispatch" : "Check before marking urgent"}
           </DialogTitle>
           <DialogDescription>
-            Comparing this record against what the customer actually agreed to.
+            {advisory
+              ? "Comparing this record against what the customer actually agreed to. You can mark it urgent either way."
+              : "Comparing this record against what the customer actually agreed to."}
           </DialogDescription>
         </DialogHeader>
 
@@ -254,13 +283,20 @@ export default function UrgentAICheckDialog({
                     “{issue.evidence}”
                   </blockquote>
                 )}
-                {issue.suggestion && <p className="text-sm text-muted-foreground">{issue.suggestion}</p>}
+                {issue.suggestion && (
+                  <p className="text-sm">
+                    <span className="text-muted-foreground">Suggested fix: </span>
+                    {issue.suggestion}
+                  </p>
+                )}
               </div>
             ))}
 
             <p className="text-xs text-muted-foreground">
-              Compared {result.messageCount} message{result.messageCount === 1 ? "" : "s"}. Fix what is
-              wrong, or send it to a CS Admin. It will not become urgent either way without a decision.
+              Compared {result.messageCount} message{result.messageCount === 1 ? "" : "s"}.{" "}
+              {advisory
+                ? "These are for you to weigh. Marking it urgent is your call."
+                : "Fix what is wrong, or send it to a CS Admin. It will not become urgent either way without a decision."}
             </p>
           </div>
         )}
@@ -276,7 +312,7 @@ export default function UrgentAICheckDialog({
           </Button>
 
           {clean && (
-            <Button onClick={proceedClean} disabled={submitting}>
+            <Button onClick={() => applyUrgent(false)} disabled={submitting}>
               {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Mark urgent"}
             </Button>
           )}
@@ -292,9 +328,18 @@ export default function UrgentAICheckDialog({
               <Button variant="outline" onClick={() => { onOpenChange(false); setEditLead(true); }} disabled={submitting}>
                 Fix it first
               </Button>
-              <Button onClick={sendForReview} disabled={submitting}>
-                {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Send to CS Admin"}
-              </Button>
+              {advisory ? (
+                // Same RPC the clean path uses, so the status change and the queue
+                // are settled in one transaction exactly as they are for a clean
+                // result. Nothing here records a passed check.
+                <Button onClick={() => applyUrgent(true)} disabled={submitting}>
+                  {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Mark urgent anyway"}
+                </Button>
+              ) : (
+                <Button onClick={sendForReview} disabled={submitting}>
+                  {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Send to CS Admin"}
+                </Button>
+              )}
             </>
           )}
         </DialogFooter>

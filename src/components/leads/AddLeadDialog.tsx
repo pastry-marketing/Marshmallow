@@ -29,7 +29,6 @@ import { useDuplicatePhoneCheck } from "@/hooks/useDuplicatePhoneCheck";
 import { formatUSPhone, hasContactNumber } from "@/lib/phone";
 import { logActivity } from "@/lib/activity";
 import { dispatchLeadStatusNotification } from "@/lib/lead-notifications";
-import { bypassesUrgentGate } from "@/lib/urgent-verification";
 import { optimizeImageForUpload } from "@/lib/image-upload";
 import { requestQuoteApproval } from "@/lib/quote-approval-requests";
 import { motion, AnimatePresence } from "framer-motion";
@@ -253,13 +252,16 @@ const AddLeadDialog = ({ open, onOpenChange, onSuccess, initialData, onUrgentChe
     const currentUserName = profile?.full_name || user.email || "Unknown user";
     const requestsQuoteApproval = role === "customer_service" && form.status === "pending_to_send";
     // A new lead cannot be verified before it exists, since the check reads the
-    // stored record and the function looks it up by id. So a customer_service
-    // member asking for urgent gets the lead created in its ordinary starting
-    // status, and the check runs against the row that now exists. Same shape as
-    // the quote approval request just above: ask for the thing, land somewhere
-    // safe, let a second step decide.
-    const requestsUrgentCheck =
-      role === "customer_service" && form.status === "urgent_job" && !bypassesUrgentGate(creationRole);
+    // stored record and the function looks it up by id. So a lead asked for as
+    // urgent is always created in its ordinary starting status and the check runs
+    // against the row that now exists.
+    //
+    // This applies to every role, not just customer_service. Admin, processor and
+    // cs_admin are allowed by the database to insert urgent_job directly, but
+    // routing them through the same dialog means they get the same comparison and
+    // the same suggested fixes. One path, one set of wording, and the role only
+    // decides whether the result is advisory or enforcing.
+    const requestsUrgentCheck = form.status === "urgent_job";
     const createdStatus: LeadStatus =
       requestsQuoteApproval || requestsUrgentCheck ? "waiting_complete_details" : form.status;
 

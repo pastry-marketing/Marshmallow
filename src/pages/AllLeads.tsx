@@ -14,6 +14,7 @@ import StatusBadge from "@/components/leads/StatusBadge";
 import AddLeadDialog from "@/components/leads/AddLeadDialog";
 import LeadDetailPanel from "@/components/leads/LeadDetailPanel";
 import UrgentAICheckDialog from "@/components/leads/UrgentAICheckDialog";
+import { urgentCheckModeForRole } from "@/lib/urgent-verification";
 import type { Lead } from "@/types";
 import { LEAD_STATUS_CONFIG } from "@/types";
 import { format } from "date-fns";
@@ -338,7 +339,8 @@ const AllLeads = () => {
           jobId={urgentCheckFor?.jobId}
           customerName={urgentCheckFor?.customerName}
           previousStatus={urgentCheckFor?.previousStatus}
-          onProceed={() => {
+          mode={urgentCheckModeForRole(role)}
+            onProceed={() => {
             void queryClient.invalidateQueries({ queryKey: ["leads"] });
             refetch();
           }}

@@ -19,6 +19,31 @@ import { supabase } from "@/integrations/supabase/client";
 
 export type UrgentVerificationState = "idle" | "running" | "checked" | "unavailable" | "error";
 
+/**
+ * Who is asking, and therefore what the check is for.
+ *
+ *   enforced  customer_service. Findings block, and anything other than a clean
+ *             result needs a CS Admin before the lead goes urgent.
+ *
+ *   advisory  admin, processor, cs_admin. The same comparison runs and the same
+ *             findings are shown, because the person making the call is the one
+ *             who benefits from knowing the record disagrees with the customer.
+ *             But they can proceed regardless, and nothing needs a second pair of
+ *             eyes.
+ *
+ * This is presentation only. enforce_urgent_gate() in the database exempts these
+ * three roles regardless, so this governs what someone is shown, never what they
+ * are permitted to do. That separation is deliberate: if the front end were the
+ * thing enforcing the rule it could be bypassed with one request, and if the
+ * database started blocking these roles then a dispatch workflow or a direct API
+ * call could jam on work that genuinely cannot wait.
+ */
+export type UrgentCheckMode = "enforced" | "advisory";
+
+export function urgentCheckModeForRole(role: string | null | undefined): UrgentCheckMode {
+  return bypassesUrgentGate(role) ? "advisory" : "enforced";
+}
+
 export type UrgentIssue = {
   check: string;
   field: string;
@@ -157,9 +182,9 @@ export async function submitUrgentReviewRequest(input: {
 /**
  * Roles the database gate lets straight through.
  *
- * Kept in step with enforce_urgent_gate() in
- * 20261104000000_urgent_review_gate.sql. This is only here to spare those users
- * a pointless dialog; it is not what enforces anything. The trigger is.
+ * Kept in step with the bypass list in enforce_urgent_gate() in
+ * 20261104000000_urgent_review_gate.sql. It decides whether the dialog is
+ * advisory or enforcing, not what anyone is allowed to do.
  */
 export function bypassesUrgentGate(role: string | null | undefined): boolean {
   return role === "admin" || role === "processor" || role === "cs_admin";
