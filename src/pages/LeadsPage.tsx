@@ -37,6 +37,7 @@ import OprLeadCard from "@/components/leads/OprLeadCard";
 import LeadTable from "@/components/leads/LeadTable";
 import type { LeadCancellationRequest } from "@/types";
 import AddLeadDialog from "@/components/leads/AddLeadDialog";
+import UrgentAICheckDialog from "@/components/leads/UrgentAICheckDialog";
 import LeadReportDialog from "@/components/leads/LeadReportDialog";
 import ExportLeadsDialog, { ExportOptions } from "@/components/leads/ExportLeadsDialog";
 import InstallExtensionDialog from "@/components/leads/InstallExtensionDialog";
@@ -185,6 +186,12 @@ export default function LeadsPage() {
   const [profiles, setProfiles] = useState<Record<string, string>>({});
   const [activeTab, setActiveTab] = useState<"my" | "shared">("my");
   const [showAddDialog, setShowAddDialog] = useState(false);
+  // A lead created as urgent lands in its ordinary starting status first, because
+  // the check reads the saved row. The verification dialog then opens against the
+  // new lead's id.
+  const [urgentCheckFor, setUrgentCheckFor] = useState<{
+    leadId: string; jobId: string; customerName: string; previousStatus: string;
+  } | null>(null);
   const [showReportDialog, setShowReportDialog] = useState(false);
   const [showInstallDialog, setShowInstallDialog] = useState(false);
   const [showExportDialog, setShowExportDialog] = useState(false);
@@ -1321,16 +1328,32 @@ export default function LeadsPage() {
             leads={leads}
           />
 
-          <AddLeadDialog
-            open={showAddDialog}
-            onOpenChange={setShowAddDialog}
-            onSuccess={() => {
-              fetchLeads();
-              if (role === "customer_service") {
-                fetchSharedLeads();
-              }
-            }}
-          />
+<AddLeadDialog
+              open={showAddDialog}
+              onOpenChange={setShowAddDialog}
+              onSuccess={() => {
+                fetchLeads();
+                if (role === "customer_service") {
+                  fetchSharedLeads();
+                }
+              }}
+              onUrgentCheckCreated={setUrgentCheckFor}
+            />
+
+            <UrgentAICheckDialog
+              open={!!urgentCheckFor}
+              onOpenChange={(next) => { if (!next) setUrgentCheckFor(null); }}
+              leadId={urgentCheckFor?.leadId ?? ""}
+              jobId={urgentCheckFor?.jobId}
+              customerName={urgentCheckFor?.customerName}
+              previousStatus={urgentCheckFor?.previousStatus}
+              onProceed={() => {
+                fetchLeads();
+                if (role === "customer_service") {
+                  fetchSharedLeads();
+                }
+              }}
+            />
 
           <LeadReportDialog
             open={showReportDialog}

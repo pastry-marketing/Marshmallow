@@ -29,6 +29,7 @@ import { useDuplicatePhoneCheck } from "@/hooks/useDuplicatePhoneCheck";
 import { formatUSPhone, hasContactNumber } from "@/lib/phone";
 import { logActivity } from "@/lib/activity";
 import { dispatchLeadStatusNotification } from "@/lib/lead-notifications";
+import { bypassesUrgentGate } from "@/lib/urgent-verification";
 import { optimizeImageForUpload } from "@/lib/image-upload";
 import { requestQuoteApproval } from "@/lib/quote-approval-requests";
 import { motion, AnimatePresence } from "framer-motion";
@@ -44,6 +45,17 @@ interface Props {
     customer_phone?: string;
     direction?: "incoming" | "outgoing" | "";
   };
+  /**
+   * Called after a lead is created in a safe status because the user asked for
+   * it to be urgent. The parent opens the verification dialog against the new
+   * lead, which now has an id and can be read back from the database.
+   */
+  onUrgentCheckCreated?: (lead: {
+    leadId: string;
+    jobId: string;
+    customerName: string;
+    previousStatus: string;
+  }) => void;
 }
 
 const initialFormState = {
@@ -113,7 +125,7 @@ const SectionHeader = ({
   </div>
 );
 
-const AddLeadDialog = ({ open, onOpenChange, onSuccess, initialData }: Props) => {
+const AddLeadDialog = ({ open, onOpenChange, onSuccess, initialData, onUrgentCheckCreated }: Props) => {
   const { user, role, profile } = useAuth();
   const [loading, setLoading] = useState(false);
   const [shouldResetOnClose, setShouldResetOnClose] = useState(true);
@@ -240,7 +252,16 @@ const AddLeadDialog = ({ open, onOpenChange, onSuccess, initialData }: Props) =>
     const jobId = generateJobId();
     const currentUserName = profile?.full_name || user.email || "Unknown user";
     const requestsQuoteApproval = role === "customer_service" && form.status === "pending_to_send";
-    const createdStatus: LeadStatus = requestsQuoteApproval ? "waiting_complete_details" : form.status;
+    // A new lead cannot be verified before it exists, since the check reads the
+    // stored record and the function looks it up by id. So a customer_service
+    // member asking for urgent gets the lead created in its ordinary starting
+    // status, and the check runs against the row that now exists. Same shape as
+    // the quote approval request just above: ask for the thing, land somewhere
+    // safe, let a second step decide.
+    const requestsUrgentCheck =
+      role === "customer_service" && form.status === "urgent_job" && !bypassesUrgentGate(creationRole);
+    const createdStatus: LeadStatus =
+      requestsQuoteApproval || requestsUrgentCheck ? "waiting_complete_details" : form.status;
 
     let scheduled_time_start: string | null = null;
     let scheduled_time_end: string | null = null;
@@ -314,6 +335,18 @@ const AddLeadDialog = ({ open, onOpenChange, onSuccess, initialData }: Props) =>
               : "Lead created, but approval request failed",
           );
         }
+      }
+
+      // The lead has an id now, so the check can read the real record. Opening
+      // the same dialog used for existing leads keeps one set of wording and one
+      // set of outcomes rather than a second implementation for new leads.
+      if (requestsUrgentCheck) {
+        onUrgentCheckCreated?.({
+          leadId: data.id,
+          jobId: data.job_id,
+          customerName: data.customer_name,
+          previousStatus: createdStatus,
+        });
       }
 
       for (const photo of photos) {
