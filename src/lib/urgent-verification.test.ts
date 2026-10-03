@@ -11,7 +11,7 @@ import {
   bypassesUrgentGate,
   runUrgentVerification,
   submitUrgentReviewRequest,
-  urgentCheckModeForRole,
+  showsUrgentCheck,
 } from "./urgent-verification";
 
 const invoke = () => vi.mocked(supabase.functions.invoke);
@@ -21,42 +21,42 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("urgentCheckModeForRole", () => {
-  // The whole point of the advisory split is that everybody who can set urgent_job
-  // sees the comparison, and only customer_service is bound by it. Getting this
-  // backwards either locks admins out of urgent dispatch or silently exempts CS,
-  // so it is pinned per role rather than inferred.
-  it("binds customer_service", () => {
-    expect(urgentCheckModeForRole("customer_service")).toBe("enforced");
+describe("showsUrgentCheck", () => {
+  // Who is asked is separate from what the database permits. processor sets
+  // urgent directly and is never asked; customer_service, admin and cs_admin all
+  // see the same advisory check and nobody is queued for review.
+  it("asks customer_service, admin and cs_admin", () => {
+    expect(showsUrgentCheck("customer_service")).toBe(true);
+    expect(showsUrgentCheck("admin")).toBe(true);
+    expect(showsUrgentCheck("cs_admin")).toBe(true);
   });
 
-  it("treats the operational roles as advisory", () => {
-    expect(urgentCheckModeForRole("admin")).toBe("advisory");
-    expect(urgentCheckModeForRole("processor")).toBe("advisory");
-    expect(urgentCheckModeForRole("cs_admin")).toBe("advisory");
+  it("does not ask processor", () => {
+    expect(showsUrgentCheck("processor")).toBe(false);
   });
 
-  it("treats read-only roles as enforced rather than exempt", () => {
-    // opr and opr_admin cannot set urgent_job at all, so the mode is academic.
-    // What matters is that they are not given advisory, which would imply they
-    // have a choice.
-    expect(urgentCheckModeForRole("opr")).toBe("enforced");
-    expect(urgentCheckModeForRole("opr_admin")).toBe("enforced");
+  it("does not ask the read-only roles", () => {
+    expect(showsUrgentCheck("opr")).toBe(false);
+    expect(showsUrgentCheck("opr_admin")).toBe(false);
   });
 
-  it("falls back to enforced for an unknown or absent role", () => {
-    // The stricter default. An unrecognised role must not be handed the advisory
-    // path, which is the one that lets someone proceed over findings.
-    expect(urgentCheckModeForRole(null)).toBe("enforced");
-    expect(urgentCheckModeForRole(undefined)).toBe("enforced");
-    expect(urgentCheckModeForRole("")).toBe("enforced");
-    expect(urgentCheckModeForRole("superuser")).toBe("enforced");
+  it("does not ask an unknown or absent role", () => {
+    expect(showsUrgentCheck(null)).toBe(false);
+    expect(showsUrgentCheck(undefined)).toBe(false);
+    expect(showsUrgentCheck("")).toBe(false);
+    expect(showsUrgentCheck("superuser")).toBe(false);
   });
 
-  it("agrees with bypassesUrgentGate for every role", () => {
-    for (const role of ["admin", "processor", "cs_admin", "customer_service", "opr", null]) {
-      expect(urgentCheckModeForRole(role) === "advisory").toBe(bypassesUrgentGate(role));
-    }
+  it("keeps the asked list distinct from the database's exempt list", () => {
+    // processor is exempt in the database and never asked. If these two lists
+    // were collapsed into one, processor would either start seeing the dialog or
+    // lose the ability to set urgent directly. They are meant to disagree here.
+    expect(bypassesUrgentGate("processor")).toBe(true);
+    expect(showsUrgentCheck("processor")).toBe(false);
+
+    // customer_service is the mirror image: gated in the database, and asked.
+    expect(bypassesUrgentGate("customer_service")).toBe(false);
+    expect(showsUrgentCheck("customer_service")).toBe(true);
   });
 });
 
@@ -160,6 +160,40 @@ describe("runUrgentVerification", () => {
 
     expect(result.state).toBe("error");
     expect(result.issues).toHaveLength(0);
+  });
+
+  it("surfaces the function's own reason from the response body", async () => {
+    // supabase-js puts the edge function's JSON body in error.context, and
+    // error.message stays the generic "non-2xx status code". Reading only the
+    // message is why a quota failure and a revoked key looked identical.
+    const response = new Response(
+      JSON.stringify({ error: "The AI key has no quota left.", reason: "ai_out_of_quota" }),
+      { status: 502 },
+    );
+    invoke().mockResolvedValue({
+      data: null,
+      error: Object.assign(new Error("Edge Function returned a non-2xx status code"), { context: response }),
+    } as never);
+
+    const result = await runUrgentVerification("lead-quota");
+
+    expect(result.state).toBe("error");
+    expect(result.reason).toBe("ai_out_of_quota");
+    expect(result.notice).toContain("no quota left");
+  });
+
+  it("still reports something useful when the body is not JSON", async () => {
+    const response = new Response("<html>502</html>", { status: 502 });
+    invoke().mockResolvedValue({
+      data: null,
+      error: Object.assign(new Error("Edge Function returned a non-2xx status code"), { context: response }),
+    } as never);
+
+    const result = await runUrgentVerification("lead-html");
+
+    expect(result.state).toBe("error");
+    expect(result.reason).toBe("unknown");
+    expect(result.notice).toBeTruthy();
   });
 
   it("does not trust a missing verification flag", async () => {

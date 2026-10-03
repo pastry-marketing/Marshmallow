@@ -34,7 +34,7 @@ import {
 import StatusBadge from "./StatusBadge";
 import LeadStatusHistoryDialog from "./LeadStatusHistoryDialog";
 import UrgentAICheckDialog from "./UrgentAICheckDialog";
-import { urgentCheckModeForRole } from "@/lib/urgent-verification";
+import { showsUrgentCheck } from "@/lib/urgent-verification";
 import LeadUpdatesSection from "./LeadUpdatesSection";
 import PaymentDialog from "./PaymentDialog";
 import CopyLeadButton from "./CopyLeadButton";
@@ -324,7 +324,7 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
 // decides what someone is shown, the trigger decides what they are permitted to
 // do, and a dispatch workflow or a direct API call can never be blocked on a gate
 // that urgent work cannot wait for.
-if (key === "status" && value === "urgent_job") {
+if (key === "status" && value === "urgent_job" && showsUrgentCheck(role)) {
   setUrgentCheckOpen(true);
   return;
 }
@@ -1375,11 +1375,7 @@ if (key === "status" && value === "urgent_job") {
             open={urgentCheckOpen}
             onOpenChange={setUrgentCheckOpen}
             leadId={leadId}
-            jobId={lead?.job_id}
-            customerName={lead?.customer_name}
-            previousStatus={lead?.status}
             onProceed={handleUrgentProceed}
-            mode={urgentCheckModeForRole(role)}
           />
       </motion.div>
     </div>

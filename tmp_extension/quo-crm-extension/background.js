@@ -522,10 +522,10 @@ async function createLead() {
   // for a request that did not happen.
   let urgentAfterInsert = false;
   // Carried back to the caller so the panel can say whether the check that follows
-  // is advisory or enforcing. Kept in step with urgentCheckModeForRole() in
-  // src/lib/urgent-verification.ts and with the bypass list in
-  // enforce_urgent_gate().
-  let urgentCheckMode = "advisory";
+  // Whether the conversation check applies to the user creating this lead. Kept in
+  // step with showsUrgentCheck() in src/lib/urgent-verification.ts and with the
+  // bypass list in enforce_urgent_gate().
+  let urgentCheckApplies = false;
 
   const insertData = {
     job_id: jobId,
@@ -556,10 +556,16 @@ if (leadStatus !== "default") {
       // database error surfaced inside the side panel.
       if (leadStatus === "urgent_job") {
         urgentAfterInsert = true;
-        // customer_service is the only role the check binds. Everything else sees
-        // it as advice.
+        // Mirrors showsUrgentCheck() in src/lib/urgent-verification.ts. processor
+        // is absent on purpose: they are not asked, and the database still lets
+        // them insert urgent_job directly, so this block must not fire for them.
         const profile = await getUserProfile(user.id);
-        urgentCheckMode = ["admin", "processor", "cs_admin"].includes(profile.role) ? "advisory" : "enforced";
+        urgentCheckApplies = ["customer_service", "admin", "cs_admin"].includes(profile.role);
+        if (!urgentCheckApplies) {
+          // Not asked. Put the status back the way they asked for it.
+          insertData.status = "urgent_job";
+          urgentAfterInsert = false;
+        }
       } else {
         insertData.status = leadStatus;
       }
@@ -639,7 +645,7 @@ if (leadStatus !== "default") {
       // panel reads this to say what is outstanding rather than reporting a plain
       // success for a request that did not happen.
       urgentCheckRequired: urgentAfterInsert,
-      urgentCheckMode: urgentCheckMode
+
     }
   };
 }

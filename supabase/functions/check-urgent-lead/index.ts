@@ -247,7 +247,7 @@ Deno.serve(async (req) => {
 
   const apiKey = Deno.env.get("OPENAI_API_KEY");
   if (!apiKey) {
-    return jsonResponse({ error: "AI verification is not configured on this project." }, 503);
+    return jsonResponse({ error: "AI verification is not configured on this project.", reason: "not_configured" }, 503);
   }
 
   // The caller's own token, not the service key, so auth.uid() and the database
@@ -449,9 +449,38 @@ Deno.serve(async (req) => {
     if (!openaiResponse.ok) {
       const detail = await openaiResponse.text();
       console.error("openai_error", openaiResponse.status, detail.slice(0, 500));
-      // Not logged to the client beyond the fact of it: the detail can contain
-      // key material or prompt text that has no business in the browser.
-      return jsonResponse({ error: "The AI check could not be completed. Please try again." }, 502);
+
+      // A failure here used to be indistinguishable from "no conversation found",
+      // which made it undiagnosable from the browser: the dialog said the same
+      // thing either way. The status is mapped to a reason so the UI can say
+      // which of the very different problems it was.
+      //
+      //   401/403  the project secret is wrong or revoked
+      //   429      out of quota or out of spend, which is the common one on a
+      //            freshly created key with no billing attached
+      //   400      the request or the response schema was rejected
+      //
+      // Not logged to the client beyond the reason: the raw detail can contain
+      // key material or prompt text that has no business in a browser.
+      const reason =
+        openaiResponse.status === 401 || openaiResponse.status === 403
+          ? "ai_unauthorised"
+          : openaiResponse.status === 429
+            ? "ai_out_of_quota"
+            : openaiResponse.status === 400
+              ? "ai_bad_request"
+              : "ai_unavailable";
+
+      const message =
+        reason === "ai_unauthorised"
+          ? "The AI key on this project was rejected. Check the OPENAI_API_KEY secret."
+          : reason === "ai_out_of_quota"
+            ? "The AI key has no quota left. Add credit to the OpenAI account, or mark the lead urgent without a check."
+            : reason === "ai_bad_request"
+              ? "The AI request was rejected. Nothing was compared."
+              : "The AI check could not be completed. Please try again.";
+
+      return jsonResponse({ error: message, reason }, 502);
     }
 
     const payload = await openaiResponse.json();

@@ -8,8 +8,6 @@ import {
   runUrgentVerification,
   applyUrgentAcknowledgement,
   applyUrgentVerification,
-  submitUrgentReviewRequest,
-  type UrgentCheckMode,
   type UrgentIssue,
   type UrgentVerificationResult,
 } from "@/lib/urgent-verification";
@@ -40,27 +38,14 @@ interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   leadId: string;
-  jobId?: string | null;
-  customerName?: string | null;
-  previousStatus?: string | null;
   onProceed: () => void;
-  /**
-   * Advisory for admin, processor and cs_admin: the comparison runs and the
-   * findings are shown, but the person making the call decides. Enforced for
-   * customer_service, where findings block and a CS Admin has to sign off.
-   *
-   * Defaults to enforced, so a caller that forgets to pass it gets the stricter
-   * behaviour rather than the looser one.
-   */
-  mode?: UrgentCheckMode;
 }
 
 const SEVERITY_ORDER: Record<UrgentIssue["severity"], number> = { high: 0, medium: 1, low: 2 };
 
 export default function UrgentAICheckDialog({
-  open, onOpenChange, leadId, jobId, customerName, previousStatus, onProceed, mode = "enforced",
+  open, onOpenChange, leadId, onProceed,
 }: Props) {
-  const advisory = mode === "advisory";
   const [result, setResult] = useState<UrgentVerificationResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -149,26 +134,6 @@ export default function UrgentAICheckDialog({
     }
   }
 
-  async function sendForReview() {
-    if (!result) return;
-    setSubmitting(true);
-    try {
-      await submitUrgentReviewRequest({
-        leadId,
-        issues: result.issues,
-        summary: result.summary,
-        jobId,
-        customerName,
-        previousStatus,
-      });
-      toast.success("Sent to a CS Admin for review.");
-      onOpenChange(false);
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Could not send this for review.");
-    } finally {
-      setSubmitting(false);
-    }
-  }
 
   const issues = [...(result?.issues ?? [])].sort(
     (a, b) => (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9),
@@ -188,12 +153,10 @@ export default function UrgentAICheckDialog({
             ) : (
               <ShieldAlert className="h-5 w-5 text-amber-600" />
             )}
-            {advisory ? "Worth a look before dispatch" : "Check before marking urgent"}
+            Worth a look before dispatch
           </DialogTitle>
           <DialogDescription>
-            {advisory
-              ? "Comparing this record against what the customer actually agreed to. You can mark it urgent either way."
-              : "Comparing this record against what the customer actually agreed to."}
+            Comparing this record against what the customer actually agreed to. You can mark it urgent either way.
           </DialogDescription>
         </DialogHeader>
 
@@ -235,6 +198,11 @@ export default function UrgentAICheckDialog({
               Nothing was found wrong, because nothing was compared. Marking this urgent will be recorded
               as an acknowledgement, not as a passed check.
             </p>
+            {result.state === "error" && result.reason && result.reason !== "unknown" && (
+              <p className="text-xs text-muted-foreground">
+                Reason: <code className="bg-muted px-1.5 py-0.5 rounded">{result.reason}</code>
+              </p>
+            )}
             <div className="flex items-center justify-between rounded-lg border p-3">
               <p className="text-sm">Fix the record first, then check again.</p>
               <Button variant="outline" size="sm" onClick={() => setEditLead(true)}>
@@ -294,9 +262,7 @@ export default function UrgentAICheckDialog({
 
             <p className="text-xs text-muted-foreground">
               Compared {result.messageCount} message{result.messageCount === 1 ? "" : "s"}.{" "}
-              {advisory
-                ? "These are for you to weigh. Marking it urgent is your call."
-                : "Fix what is wrong, or send it to a CS Admin. It will not become urgent either way without a decision."}
+              These are for you to weigh. Marking it urgent is your call.
             </p>
           </div>
         )}
@@ -328,18 +294,14 @@ export default function UrgentAICheckDialog({
               <Button variant="outline" onClick={() => { onOpenChange(false); setEditLead(true); }} disabled={submitting}>
                 Fix it first
               </Button>
-              {advisory ? (
-                // Same RPC the clean path uses, so the status change and the queue
-                // are settled in one transaction exactly as they are for a clean
-                // result. Nothing here records a passed check.
-                <Button onClick={() => applyUrgent(true)} disabled={submitting}>
-                  {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Mark urgent anyway"}
-                </Button>
-              ) : (
-                <Button onClick={sendForReview} disabled={submitting}>
-                  {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Send to CS Admin"}
-                </Button>
-              )}
+              {/* Same RPC the clean path uses, so the status change and any open
+                  request settle in one transaction exactly as they do for a clean
+                  result. The explicit summary on the override path is what stops
+                  this writing "all checks passed" for a check that found
+                  problems. */}
+              <Button onClick={() => applyUrgent(true)} disabled={submitting}>
+                {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Mark urgent anyway"}
+              </Button>
             </>
           )}
         </DialogFooter>

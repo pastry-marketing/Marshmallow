@@ -29,6 +29,7 @@ import { useDuplicatePhoneCheck } from "@/hooks/useDuplicatePhoneCheck";
 import { formatUSPhone, hasContactNumber } from "@/lib/phone";
 import { logActivity } from "@/lib/activity";
 import { dispatchLeadStatusNotification } from "@/lib/lead-notifications";
+import { showsUrgentCheck } from "@/lib/urgent-verification";
 import { optimizeImageForUpload } from "@/lib/image-upload";
 import { requestQuoteApproval } from "@/lib/quote-approval-requests";
 import { motion, AnimatePresence } from "framer-motion";
@@ -261,7 +262,7 @@ const AddLeadDialog = ({ open, onOpenChange, onSuccess, initialData, onUrgentChe
     // routing them through the same dialog means they get the same comparison and
     // the same suggested fixes. One path, one set of wording, and the role only
     // decides whether the result is advisory or enforcing.
-    const requestsUrgentCheck = form.status === "urgent_job";
+    const requestsUrgentCheck = form.status === "urgent_job" && showsUrgentCheck(role);
     const createdStatus: LeadStatus =
       requestsQuoteApproval || requestsUrgentCheck ? "waiting_complete_details" : form.status;
 
