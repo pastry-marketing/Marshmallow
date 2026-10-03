@@ -324,36 +324,36 @@ Deno.serve(async (req) => {
   // ---------------------------------------------------------------------------
   // No conversation.
   //
-  // This happens for 44% of leads, so it is worth being explicit that it is a
-  // decision rather than an oversight. It is returned as a finding rather than a
-  // pass: a record cannot be verified against a conversation that does not
-  // exist, and quietly returning "clean" would let 44% of urgent work through
-  // an unchecked door while the UI implied it had been checked.
+  // This applies to 44% of leads, so the handling is a real decision rather than
+  // an edge case.
   //
-  // It stays a normal finding, so the CS member can correct the phone number,
-  // link the conversation, or send it for review. Nothing here is unrecoverable.
+  // It is reported as "could not verify", which is deliberately a different
+  // thing from "found problems". A record cannot be checked against a
+  // conversation that does not exist, but nothing has been found wrong either.
+  //
+  // Returning it as a finding would send 44% of urgent work to a human queue
+  // forever, and a queue that is mostly noise stops being read, which costs more
+  // than it protects. Returning it as clean would be worse: it would report a
+  // check that never happened.
+  //
+  // So it asks for an acknowledgement instead of a review. Someone looks, sees
+  // that there is no conversation, and decides on purpose. The click is the
+  // record that a human knew.
   // ---------------------------------------------------------------------------
   if (!conversationId) {
     return jsonResponse({
+      verification: "unavailable",
       clean: false,
+      issues: [],
+      notice:
+        "No conversation was found for this lead, so it could not be compared against what the customer agreed to.",
+      requires_acknowledgement: true,
+      requires_review: false,
       conversation_found: false,
       matched_by: null,
       message_count: 0,
       model: MODEL,
       elapsed_ms: Date.now() - startedAt,
-      summary: "No conversation was found for this lead, so it could not be checked.",
-      issues: [
-        {
-          check: "conversation",
-          field: "customer_phone",
-          severity: "medium",
-          problem:
-            "No Quo conversation could be matched to this lead, so nothing could be compared against what the customer agreed to.",
-          evidence: "",
-          suggestion:
-            "Check the customer phone number, or link the conversation to this lead, then run the check again.",
-        },
-      ],
     });
   }
 
@@ -375,23 +375,17 @@ Deno.serve(async (req) => {
 
   if (!lines.length) {
     return jsonResponse({
+      verification: "unavailable",
       clean: false,
+      issues: [],
+      notice: "The linked conversation exists but has no message text to check.",
+      requires_acknowledgement: true,
+      requires_review: false,
       conversation_found: true,
       matched_by: matchedBy,
       message_count: 0,
       model: MODEL,
       elapsed_ms: Date.now() - startedAt,
-      summary: "The linked conversation has no message text to check.",
-      issues: [
-        {
-          check: "conversation",
-          field: "",
-          severity: "low",
-          problem: "The conversation exists but contains no message text to compare against.",
-          evidence: "",
-          suggestion: "Confirm the right conversation is linked, or review this lead manually.",
-        },
-      ],
     });
   }
 
@@ -466,44 +460,43 @@ Deno.serve(async (req) => {
 
     const issues: Issue[] = Array.isArray(parsed.issues) ? parsed.issues.slice(0, MAX_ISSUES) : [];
 
+    // A model that found nothing is a genuine pass, and it is the only outcome
+    // that lets the lead through without a human.
     return jsonResponse({
+      verification: "checked",
       clean: issues.length === 0,
+      issues,
+      notice: null,
+      requires_acknowledgement: false,
+      requires_review: issues.length > 0,
+      summary: typeof parsed.summary === "string" ? parsed.summary : "",
       conversation_found: true,
       matched_by: matchedBy,
       message_count: lines.length,
       model: MODEL,
       elapsed_ms: Date.now() - startedAt,
-      summary: typeof parsed.summary === "string" ? parsed.summary : "",
-      issues,
     });
   } catch (error) {
-    // A timeout must not read as a pass. If the check cannot complete, the
-    // honest answer is that it did not complete, and a person decides.
+    // A timeout must not read as a pass, and it is not a finding either. Nothing
+    // was discovered, so the honest answer is that nothing could be learned, and
+    // that an acknowledgement is needed before going ahead.
     const aborted = error instanceof DOMException && error.name === "AbortError";
     console.error("check_failed", aborted ? "timeout" : "exception");
     return jsonResponse(
       {
+        verification: "unavailable",
         clean: false,
+        issues: [],
+        notice: aborted
+          ? "The check timed out before it could finish, so nothing was compared."
+          : "The check could not be completed, so nothing was compared.",
+        requires_acknowledgement: true,
+        requires_review: false,
         conversation_found: true,
         matched_by: matchedBy,
         message_count: lines.length,
         model: MODEL,
         elapsed_ms: Date.now() - startedAt,
-        summary: aborted
-          ? "The AI check timed out before it could finish."
-          : "The AI check could not be completed.",
-        issues: [
-          {
-            check: "system",
-            field: "",
-            severity: "low",
-            problem: aborted
-              ? "The check did not finish in time, so the record was not compared against the conversation."
-              : "The check could not run, so the record was not compared against the conversation.",
-            evidence: "",
-            suggestion: "Run the check again, or send this lead for review.",
-          },
-        ],
       },
       200,
     );

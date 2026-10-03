@@ -282,6 +282,85 @@ COMMENT ON FUNCTION public.approve_urgent_verification(uuid, text, text) IS
 
 
 -- -----------------------------------------------------------------------------
+-- 4b. Acknowledge that verification was not possible
+--     Separate from approve_urgent_verification on purpose.
+--
+--     44% of leads have no matched conversation, and those cannot be checked at
+--     all. Blocking them would send nearly half of urgent work to a human queue
+--     permanently, and a queue that is mostly noise is a queue nobody reads.
+--     Letting them through unchecked would be worse: the activity log would claim
+--     a check passed when none ran.
+--
+--     So the gate admits them only after a person has been shown "this could not
+--     be checked" and has said yes on purpose. The activity trail records it as
+--     an acknowledgement, never as a passed check, so the distinction survives
+--     into reporting.
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.approve_urgent_acknowledgement(
+  p_lead_id uuid,
+  p_reason  text DEFAULT NULL
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $fn$
+DECLARE
+  v_uid  uuid := auth.uid();
+  v_name text;
+BEGIN
+  IF v_uid IS NULL THEN
+    RAISE EXCEPTION 'Not signed in' USING ERRCODE = '42501';
+  END IF;
+
+  IF NOT (
+       public.has_role(v_uid, 'admin'::app_role)
+    OR public.has_role(v_uid, 'cs_admin'::app_role)
+    OR public.has_role(v_uid, 'processor'::app_role)
+    OR EXISTS (
+      SELECT 1 FROM public.leads l
+       WHERE l.id = p_lead_id
+         AND (l.created_by = v_uid OR l.assigned_cs = v_uid)
+    )
+  ) THEN
+    RAISE EXCEPTION 'You cannot approve a lead you do not have access to'
+      USING ERRCODE = '42501';
+  END IF;
+
+  v_name := COALESCE((SELECT full_name FROM public.profiles WHERE id = v_uid), 'Customer Service');
+
+  PERFORM set_config('app.urgent_verified', 'on', true);
+  UPDATE public.leads
+     SET status              = 'urgent_job',
+         last_edited_by      = v_uid,
+         last_edited_by_name = v_name,
+         last_edited_at      = now(),
+         updated_at          = now()
+   WHERE id = p_lead_id;
+  PERFORM set_config('app.urgent_verified', 'off', true);
+
+  INSERT INTO public.activity_logs (
+    user_id, user_name, action, target_type, target_id, details
+  )
+  VALUES (
+    v_uid, v_name, 'urgent_unverified_acknowledged', 'lead', p_lead_id,
+    jsonb_build_object(
+      'verified', false,
+      'reason',   left(coalesce(p_reason, 'No conversation available to check'), 300)
+    )
+  );
+EXCEPTION WHEN OTHERS THEN
+  PERFORM set_config('app.urgent_verified', 'off', true);
+  RAISE;
+END;
+$fn$;
+
+COMMENT ON FUNCTION public.approve_urgent_acknowledgement(uuid, text) IS
+  'Applies urgent_job after a person explicitly accepted that no verification '
+  'was possible. Logs an acknowledgement, never a passed check.';
+
+
+-- -----------------------------------------------------------------------------
 -- 5. Raise a review request
 --    Used when the AI found something. The lead stays where it is.
 -- -----------------------------------------------------------------------------
@@ -653,6 +732,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON public.lead_urgent_review_requests
 
 ALTER FUNCTION public.enforce_urgent_gate()             RESET ALL;
 ALTER FUNCTION public.approve_urgent_verification(uuid, text, text) RESET ALL;
+ALTER FUNCTION public.approve_urgent_acknowledgement(uuid, text) RESET ALL;
 ALTER FUNCTION public.request_urgent_review(uuid, jsonb, text, text, text, text, text) RESET ALL;
 ALTER FUNCTION public.review_urgent_request(uuid, boolean, text) RESET ALL;
 ALTER FUNCTION public.list_urgent_review_requests(text) RESET ALL;
@@ -660,6 +740,7 @@ ALTER FUNCTION public.set_urgent_review_updated_at()   RESET ALL;
 
 GRANT EXECUTE ON FUNCTION public.enforce_urgent_gate() TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.approve_urgent_verification(uuid, text, text) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.approve_urgent_acknowledgement(uuid, text) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.request_urgent_review(uuid, jsonb, text, text, text, text, text) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.review_urgent_request(uuid, boolean, text) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.list_urgent_review_requests(text) TO authenticated;
@@ -677,6 +758,7 @@ GRANT EXECUTE ON FUNCTION public.set_urgent_review_updated_at() TO authenticated
 --   DROP FUNCTION IF EXISTS public.list_urgent_review_requests(text);
 --   DROP FUNCTION IF EXISTS public.review_urgent_request(uuid, boolean, text);
 --   DROP FUNCTION IF EXISTS public.request_urgent_review(uuid, jsonb, text, text, text, text, text);
+--   DROP FUNCTION IF EXISTS public.approve_urgent_acknowledgement(uuid, text);
 --   DROP FUNCTION IF EXISTS public.approve_urgent_verification(uuid, text, text);
 --   DROP TABLE IF EXISTS public.lead_urgent_review_requests;
 --

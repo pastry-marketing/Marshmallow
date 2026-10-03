@@ -33,6 +33,8 @@ import {
 } from "lucide-react";
 import StatusBadge from "./StatusBadge";
 import LeadStatusHistoryDialog from "./LeadStatusHistoryDialog";
+import UrgentAICheckDialog from "./UrgentAICheckDialog";
+import { bypassesUrgentGate } from "@/lib/urgent-verification";
 import LeadUpdatesSection from "./LeadUpdatesSection";
 import PaymentDialog from "./PaymentDialog";
 import CopyLeadButton from "./CopyLeadButton";
@@ -172,6 +174,7 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
   const [cancelRequestLoading, setCancelRequestLoading] = useState(false);
   const [adminCancelOpen, setAdminCancelOpen] = useState(false);
   const [statusHistoryOpen, setStatusHistoryOpen] = useState(false);
+  const [urgentCheckOpen, setUrgentCheckOpen] = useState(false);
   const [adminCancelLoading, setAdminCancelLoading] = useState(false);
   const [cancelReviewLoading, setCancelReviewLoading] = useState(false);
 
@@ -305,7 +308,28 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
       }
       return;
     }
+    // Urgent is the one status a customer_service user cannot simply set. The
+    // dialog compares the record against the conversation first.
+    //
+    // Form state is deliberately left alone when it opens. If it were set here,
+    // the lead would look urgent in the panel while the database still had not
+    // accepted it, and the next save would try to write that unaccepted status
+    // and be refused by the gate.
+    if (key === "status" && value === "urgent_job" && !bypassesUrgentGate(role)) {
+      setUrgentCheckOpen(true);
+      return;
+    }
     setForm((prev) => ({ ...prev, [key]: value }));
+  };
+
+  // The database has already moved the lead to urgent by the time this runs.
+  // Form state is synced here so the next save does not write the old status and
+  // quietly take the lead back out of urgent.
+  const handleUrgentProceed = () => {
+    setForm((prev) => ({ ...prev, status: "urgent_job" as LeadStatus }));
+    queryClient.invalidateQueries({ queryKey: ["lead", leadId] });
+    queryClient.invalidateQueries({ queryKey: ["leads"] });
+    onUpdate();
   };
 
   const jobCompletionState = useMemo(() => {
@@ -1331,12 +1355,22 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
           mode="direct"
         />
 
-        <LeadStatusHistoryDialog
-          open={statusHistoryOpen}
-          onOpenChange={setStatusHistoryOpen}
-          leadId={leadId}
-          currentStatus={form.status}
-        />
+<LeadStatusHistoryDialog
+            open={statusHistoryOpen}
+            onOpenChange={setStatusHistoryOpen}
+            leadId={leadId}
+            currentStatus={form.status}
+          />
+
+          <UrgentAICheckDialog
+            open={urgentCheckOpen}
+            onOpenChange={setUrgentCheckOpen}
+            leadId={leadId}
+            jobId={lead?.job_id}
+            customerName={lead?.customer_name}
+            previousStatus={lead?.status}
+            onProceed={handleUrgentProceed}
+          />
       </motion.div>
     </div>
   );
