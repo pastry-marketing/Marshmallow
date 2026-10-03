@@ -21,6 +21,7 @@ import LeadPaymentRequests from "@/pages/LeadPaymentRequests";
 import QuotePendingRequests from "@/pages/QuotePendingRequests";
 import QuoteApprovalRequests from "@/pages/QuoteApprovalRequests";
 import TechnicianChangeApprovals from "@/pages/TechnicianChangeApprovals";
+import UrgentReviewRequests from "@/pages/UrgentReviewRequests";
 import QuoMonitorPage from "@/pages/quo-monitor/QuoMonitorPage";
 import CrmUpdates from "@/pages/CrmUpdates";
 import MapViewPage from "@/pages/MapViewPage";
@@ -136,6 +137,7 @@ const App = () => (
               <Route path="quote-approval" element={<PageRoute navItem="quote_approval_requests"><QuoteApprovalRequests /></PageRoute>} />
               <Route path="quote-pending" element={<PageRoute navItem="quote_pending_requests"><QuotePendingRequests /></PageRoute>} />
       <Route path="tech-approvals" element={<PageRoute navItem="technician_change_requests"><TechnicianChangeApprovals /></PageRoute>} />
+      <Route path="urgent-review-requests" element={<PageRoute navItem="urgent_review_requests"><UrgentReviewRequests /></PageRoute>} />
               <Route path="crm-updates" element={<PageRoute navItem="crm_updates"><CrmUpdates /></PageRoute>} />
               <Route path="settings" element={<PageRoute navItem="settings"><Settings /></PageRoute>} />
             </Route>

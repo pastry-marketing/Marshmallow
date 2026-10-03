@@ -143,3 +143,70 @@ export async function submitUrgentReviewRequest(input: {
 export function bypassesUrgentGate(role: string | null | undefined): boolean {
   return role === "admin" || role === "processor" || role === "cs_admin";
 }
+
+// =============================================================================
+// The review queue.
+//
+// Only exists when the check found problems. A clean lead never reaches it, and
+// a lead that could not be checked never reaches it either, which is the point:
+// the queue is a short list of genuine disagreements rather than everything that
+// touched an urgent check.
+// =============================================================================
+
+export type UrgentReviewStatus = "pending" | "approved" | "declined";
+
+export type UrgentReviewRequest = {
+  id: string;
+  lead_id: string;
+  previous_status: string | null;
+  lead_job_id: string | null;
+  lead_customer_name: string | null;
+  requested_by: string | null;
+  requested_by_name: string | null;
+  ai_issues: UrgentIssue[];
+  ai_summary: string | null;
+  ai_model: string | null;
+  status: UrgentReviewStatus;
+  reviewed_by_name: string | null;
+  reviewed_at: string | null;
+  review_note: string | null;
+  created_at: string;
+  // Live values from the lead, so a reviewer can see what it says now as well
+  // as what it said when the request was raised.
+  current_status: string | null;
+  current_service_details: string | null;
+  current_customer_schedule_requirements: string | null;
+  current_quote: string | null;
+  current_terms: string | null;
+};
+
+export async function listUrgentReviewRequests(status: UrgentReviewStatus): Promise<UrgentReviewRequest[]> {
+  const { data, error } = await supabase.rpc("list_urgent_review_requests", { p_status: status });
+
+  if (error) throw new Error(error.message);
+
+  const rows = (data ?? []) as Record<string, unknown>[];
+  return rows.map((row) => ({
+    ...(row as unknown as UrgentReviewRequest),
+    ai_issues: Array.isArray(row.ai_issues) ? (row.ai_issues as UrgentIssue[]) : [],
+  }));
+}
+
+export async function reviewUrgentRequest(input: {
+  requestId: string;
+  approve: boolean;
+  note?: string | null;
+}): Promise<string> {
+  const { data, error } = await supabase.rpc("review_urgent_request", {
+    p_request_id: input.requestId,
+    p_approve: input.approve,
+    p_review_note: input.note?.trim() || null,
+  });
+
+  if (error) throw new Error(error.message);
+  return typeof data === "string" ? data : "Done.";
+}
+
+export function canReviewUrgentRequests(role: string | null | undefined): boolean {
+  return role === "admin" || role === "cs_admin";
+}

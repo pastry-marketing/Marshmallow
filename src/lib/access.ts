@@ -6,7 +6,10 @@ const DEFAULT_NAV_ACCESS: Record<AppRole, Set<NavItem>> = {
   processor: new Set(["leads", "schedule", "cancellation_requests", "map_view", "technicians"]),
   customer_service: new Set(["leads", "schedule", "quote_approval_requests"]),
   opr: new Set(["leads"]),
-  cs_admin: new Set(["leads", "schedule", "quote_approval_requests"]),
+  // The urgent review queue is the CS Admin side of the AI check. customer_service
+    // is left out on purpose: they raise requests, they do not clear them, and a
+    // CS Admin cannot approve a request they raised themselves.
+    cs_admin: new Set(["leads", "schedule", "quote_approval_requests", "urgent_review_requests"]),
   // opr_admin mirrors opr's default access; the Technicians tab is granted per
   // user via navigation permissions, and unlocks add/import for this role.
   opr_admin: new Set(["leads"]),
