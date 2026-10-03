@@ -146,9 +146,9 @@ export async function fetchTechniciansPage(params: {
     if (rows.length > 0) {
       try {
         const ids = rows.map((r) => r.id);
-        const { data: ex } = await supabase.from("technicians").select("id, code, opr_code, is_active, created_by, created_at, updated_at").in("id", ids);
+        const { data: ex } = await supabase.from("technicians").select("id, code, opr_code, is_active, is_good_tech, created_by, created_at, updated_at").in("id", ids);
         const exRows = (ex ?? []) as Array<{ id: string; code: string | null; opr_code: string | null; is_active: boolean; created_by: string | null; created_at: string | null; updated_at: string | null }>;
-        extra = new Map(exRows.map((c) => [c.id, { code: c.code ?? null, opr_code: c.opr_code ?? null, is_active: c.is_active, created_by: c.created_by ?? null, created_at: c.created_at ?? null, updated_at: c.updated_at ?? null }]));
+        extra = new Map(exRows.map((c) => [c.id, { code: c.code ?? null, opr_code: c.opr_code ?? null, is_active: c.is_active, is_good_tech: c.is_good_tech, created_by: c.created_by ?? null, created_at: c.created_at ?? null, updated_at: c.updated_at ?? null }]));
       } catch {
         // ignore if columns missing
       }
@@ -165,6 +165,10 @@ export async function fetchTechniciansPage(params: {
       latitude: r.latitude,
       longitude: r.longitude,
       is_active: extra.get(r.id)?.is_active ?? true,
+      // search_technicians does not return this column and it was missing from
+      // the supplementary select as well, so on the search path every row
+      // arrived with it undefined and the Good Tech star never rendered filled.
+      is_good_tech: extra.get(r.id)?.is_good_tech ?? false,
       created_by: extra.get(r.id)?.created_by ?? null,
       code: extra.get(r.id)?.code ?? null,
       opr_code: extra.get(r.id)?.opr_code ?? null,
