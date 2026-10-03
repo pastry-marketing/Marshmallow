@@ -290,16 +290,38 @@ END $$;
 --     Sets the same transaction-local flag approve_urgent_verification uses and
 --     confirms the write is admitted. If this fails, a clean AI result can never
 --     become urgent and the feature is unusable.
+--
+--     The source status is an allowlist, not "any lead that is not urgent".
+--     The first version picked one at random and landed on a lead whose status was
+--     paid, so enforce_paid_status_rules -- an unrelated BEFORE UPDATE trigger that
+--     makes paid immutable -- rejected the write first. The check reported that
+--     the flag had failed, when the flag had in fact worked and a pre-existing rule
+--     had objected. That is the worst shape of harness failure: it points at the
+--     wrong component.
+--
+--     The error text is now reported rather than swallowed, so a genuine failure
+--     here names its cause instead of just saying the write was refused.
 -- -----------------------------------------------------------------------------
 DO $$
 DECLARE
   v_id     uuid;
   v_status text;
   v_blocked boolean := false;
+  v_message text := '';
 BEGIN
-  SELECT id INTO v_id FROM public.leads WHERE status <> 'urgent_job' LIMIT 1;
+  -- Transition-friendly sources only. paid, cancelled and scammed are governed
+  -- by their own rules and would raise for reasons that have nothing to do with
+  -- this gate.
+  SELECT id INTO v_id
+    FROM public.leads
+   WHERE status IN (
+     'waiting_complete_details', 'need_tech', 'quote_sent_waiting',
+     'needs_quote', 'quote_change', 'scheduled', 'waiting_customer_response'
+   )
+   LIMIT 1;
+
   IF v_id IS NULL THEN
-    INSERT INTO _results VALUES (6, 'flag admits a verified write', true, 'skipped, no candidate lead');
+    INSERT INTO _results VALUES (6, 'flag admits a verified write', true, 'skipped, no transition-friendly lead');
     RETURN;
   END IF;
 
@@ -308,12 +330,13 @@ BEGIN
     UPDATE public.leads SET status = 'urgent_job' WHERE id = v_id;
   EXCEPTION WHEN OTHERS THEN
     v_blocked := true;
+    v_message := SQLERRM;
   END;
 
   PERFORM set_config('app.urgent_verified', 'off', true);
 
   IF v_blocked THEN
-    RAISE EXCEPTION 'the flag did not admit the write';
+    RAISE EXCEPTION 'the flag did not admit the write: %', left(v_message, 200);
   END IF;
 
   SELECT status INTO v_status FROM public.leads WHERE id = v_id;
@@ -413,6 +436,16 @@ END $$;
 --     very evidence it was asked to protect.
 --
 --     Verified by reading the function source rather than trusting review.
+--
+--     The match is anchored: the column name must be followed immediately by an
+--     equals sign, allowing whitespace. The first version used
+--     ILIKE '%column% =%', which is wrong twice over. The % spans newlines, so a
+--     mention of scheduled_date in the comment "deliberately untouched" paired up
+--     with the equals sign in a completely unrelated SET status = line two
+--     statements below, and the check reported that the approval path rewrites the
+--     schedule when it does not. Anchoring removes the cross-statement pairing,
+--     and an assignment inside a comment would have to be written as
+--     "scheduled_date =" to be caught.
 -- -----------------------------------------------------------------------------
 DO $$
 DECLARE
@@ -421,11 +454,11 @@ DECLARE
 BEGIN
   SELECT prosrc INTO v_src
     FROM pg_proc
-   WHERE oid = 'public.approve_urgent_verification(uuid,text,text)'::regprocedure;
+   WHERE oid = to_regprocedure('public.approve_urgent_verification(uuid,text,text)');
 
   SELECT string_agg(DISTINCT col, ', ') INTO v_bad
     FROM unnest(ARRAY['scheduled_date', 'scheduled_time_start', 'customer_schedule_requirements']) AS col
-   WHERE v_src ILIKE '%' || col || '% =%';
+   WHERE v_src ~* col || '\s*=';
 
   IF v_bad IS NOT NULL THEN
     RAISE EXCEPTION 'these schedule columns are assigned: %', v_bad;
@@ -447,11 +480,12 @@ DECLARE
 BEGIN
   SELECT prosrc INTO v_src
     FROM pg_proc
-   WHERE oid = 'public.review_urgent_request(uuid,boolean,text)'::regprocedure;
+   WHERE oid = to_regprocedure('public.review_urgent_request(uuid,boolean,text)');
 
+  -- Anchored, for the same reason as check 8.
   SELECT string_agg(DISTINCT col, ', ') INTO v_bad
     FROM unnest(ARRAY['scheduled_date', 'scheduled_time_start', 'customer_schedule_requirements']) AS col
-   WHERE v_src ILIKE '%' || col || '% =%';
+   WHERE v_src ~* col || '\s*=';
 
   IF v_bad IS NOT NULL THEN
     RAISE EXCEPTION 'these schedule columns are assigned: %', v_bad;
