@@ -665,12 +665,25 @@ async function handleCreateLead(event) {
     renderDraft(currentDraft);
     resetTransientFormState();
 
-    const leadUrl = response.response?.leadUrl;
-    const successHtml = leadUrl
-      ? `Lead created successfully. <a href="${escapeHtml(leadUrl)}" target="_blank" rel="noreferrer">Open Lead</a>`
-      : "Lead created successfully.";
+const leadUrl = response.response?.leadUrl;
+      // The lead was created in its normal status because urgent was asked for.
+      // Saying "created successfully" here would report a request that did not
+      // happen, so the message states what is outstanding and what to do.
+      const urgentPending = response.response?.urgentCheckRequired === true;
+      const successHtml = leadUrl
+        ? `Lead created successfully. <a href="${escapeHtml(leadUrl)}" target="_blank" rel="noreferrer">Open Lead</a>`
+        : "Lead created successfully.";
 
-    showFeedback(successHtml, "success", true);
+      showFeedback(
+        urgentPending
+          ? `${successHtml}<br><br>This lead was not marked urgent. Open it to run the conversation check first.`
+          : successHtml,
+        // "info" is the neutral-but-notable kind here. There is no
+        // feedback--warning class in the stylesheet, so passing one would leave
+        // the toast unstyled.
+        urgentPending ? "info" : "success",
+        true,
+      );
     
     // Refresh stats and history list!
     loadReports();

@@ -145,9 +145,37 @@ DECLARE
   v_uid     uuid := auth.uid();
   v_bypass  boolean;
 BEGIN
-  -- Not a transition into urgent: nothing to police. Both conditions must
-  -- fail for the gate to apply, so an edit to a lead that is already urgent is
-  -- not blocked.
+  -- Roles that dispatch work and can be asked directly.
+  v_bypass := public.has_role(v_uid, 'admin'::app_role)
+           OR public.has_role(v_uid, 'processor'::app_role)
+           OR public.has_role(v_uid, 'cs_admin'::app_role);
+
+  IF TG_OP = 'INSERT' THEN
+    -- A lead created straight into urgent_job.
+    --
+    -- This arm exists because the trigger was originally BEFORE UPDATE only,
+    -- which left the creation path open: the Chrome extension posts a draft with
+    -- a status field, and one direct insert with status urgent_job skipped the
+    -- gate entirely. An UPDATE-only trigger protects an existing row and nothing
+    -- else.
+    --
+    -- The verification flag is deliberately not honoured here. Verifying a record
+    -- means reading it back from the database, so there is nothing to verify at
+    -- the moment of the insert. The way through is to create the lead in its
+    -- ordinary status and then run the check against it, which is what the add
+    -- dialog and the extension both do.
+    IF NEW.status = 'urgent_job' AND NOT v_bypass THEN
+      RAISE EXCEPTION
+        'A new lead cannot be created as urgent. Create it first, then run the AI check before making it urgent.'
+        USING ERRCODE = '42501',
+              HINT = 'Create the lead in its normal status, then use the urgent check.';
+    END IF;
+
+    RETURN NEW;
+  END IF;
+
+  -- Not a transition into urgent. Both conditions must fail for the gate to
+  -- apply, so an edit to a lead that is already urgent is not blocked.
   IF NEW.status IS NOT DISTINCT FROM OLD.status THEN
     RETURN NEW;
   END IF;
@@ -155,11 +183,6 @@ BEGIN
   IF NEW.status IS DISTINCT FROM 'urgent_job' THEN
     RETURN NEW;
   END IF;
-
-  -- Roles that dispatch work and can be asked directly.
-  v_bypass := public.has_role(v_uid, 'admin'::app_role)
-           OR public.has_role(v_uid, 'processor'::app_role)
-           OR public.has_role(v_uid, 'cs_admin'::app_role);
 
   IF v_bypass THEN
     RETURN NEW;
@@ -180,14 +203,15 @@ END;
 $fn$;
 
 COMMENT ON FUNCTION public.enforce_urgent_gate() IS
-  'Blocks customer_service from setting leads.status to urgent_job without a '
-  'verified AI check or a human review. Row level security cannot do this, '
-  'because it filters rows and not columns.';
+  'Blocks customer_service from creating a lead as urgent_job, and from moving '
+  'one into urgent_job without a verified AI check or a human review. Covers '
+  'INSERT as well as UPDATE: row level security filters rows, not columns, so '
+  'the creation path needs the same protection as the update path.';
 
 DROP TRIGGER IF EXISTS leads_urgent_gate ON public.leads;
 
 CREATE TRIGGER leads_urgent_gate
-  BEFORE UPDATE OF status ON public.leads
+  BEFORE INSERT OR UPDATE OF status ON public.leads
   FOR EACH ROW
   EXECUTE FUNCTION public.enforce_urgent_gate();
 

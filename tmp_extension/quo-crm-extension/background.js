@@ -517,6 +517,11 @@ async function createLead() {
 
   const jobId = generateJobId();
 
+  // Set when the draft asked for urgent and the insert was therefore written in
+  // its ordinary status. Returned to the caller so the side panel can run the
+  // check against the new lead instead of quietly losing the request.
+  let urgentAfterInsert = false;
+
   const insertData = {
     job_id: jobId,
     customer_name: draft.customerName.trim(),
@@ -534,7 +539,20 @@ async function createLead() {
 
   const leadStatus = normalizeLeadStatus(draft.leadStatus);
   if (leadStatus !== "default") {
-    insertData.status = leadStatus;
+    // A new lead is never inserted as urgent_job.
+    //
+    // The database rejects that insert for a customer_service user, and it should:
+    // the AI check reads the stored record and looks it up by id, so there is
+    // nothing to check at insert time. Create it in its normal status here, then
+    // let the caller run the check against the lead that now exists.
+    //
+    // Sending the status through anyway would only turn a clear message into a
+    // raw database error surfaced inside the side panel.
+    if (leadStatus === "urgent_job") {
+      urgentAfterInsert = true;
+    } else {
+      insertData.status = leadStatus;
+    }
   }
 
   const leadTerms = normalizeLeadTerms(draft.terms);
@@ -605,7 +623,11 @@ async function createLead() {
     payload: insertData,
     response: {
       leadUrl,
-      lead: data
+      lead: data,
+      // True when urgent was asked for and was not applied on insert. The side
+      // panel reads this to open the AI check against the new lead rather than
+      // reporting a plain success for a request that did not happen.
+      urgentCheckRequired: urgentAfterInsert
     }
   };
 }

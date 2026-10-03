@@ -328,6 +328,64 @@ END $$;
 
 
 -- -----------------------------------------------------------------------------
+-- 06b  A lead cannot be CREATED as urgent either
+--
+--     The gate was originally BEFORE UPDATE only, which left this wide open. The
+--     Chrome extension posts a draft with a status field, and one insert with
+--     urgent_job skipped the trigger completely. This check is the reason the
+--     trigger covers INSERT.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE
+  v_id      uuid;
+  v_user    uuid;
+  v_blocked boolean := false;
+BEGIN
+  SELECT user_id INTO v_user FROM public.user_roles WHERE role = 'customer_service' LIMIT 1;
+  IF v_user IS NULL THEN
+    INSERT INTO _results VALUES (15, 'cannot CREATE a lead as urgent', true, 'skipped, no customer_service user');
+    RETURN;
+  END IF;
+
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_user, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_user::text, true);
+  PERFORM set_config('request.jwt.claim.role', 'authenticated', true);
+
+  BEGIN
+    INSERT INTO public.leads (job_id, customer_name, customer_phone, status, created_by)
+    VALUES ('ZZ-HARNESS', 'Harness Probe', '9990000000', 'urgent_job', v_user)
+    RETURNING id INTO v_id;
+  EXCEPTION WHEN OTHERS THEN
+    v_blocked := true;
+  END;
+
+  IF NOT v_blocked THEN
+    DELETE FROM public.leads WHERE id = v_id;
+    RAISE EXCEPTION 'an urgent lead was created directly';
+  END IF;
+
+  -- The flag must not admit an insert either. There is nothing to have verified
+  -- before the row exists, so honouring it here would be a way around the gate.
+  PERFORM set_config('app.urgent_verified', 'on', true);
+  BEGIN
+    INSERT INTO public.leads (job_id, customer_name, customer_phone, status, created_by)
+    VALUES ('ZZ-HARNESS2', 'Harness Probe', '9990000001', 'urgent_job', v_user)
+    RETURNING id INTO v_id;
+    PERFORM set_config('app.urgent_verified', 'off', true);
+    DELETE FROM public.leads WHERE id = v_id;
+    RAISE EXCEPTION 'the flag admitted an urgent insert';
+  EXCEPTION WHEN OTHERS THEN
+    PERFORM set_config('app.urgent_verified', 'off', true);
+    NULL;
+  END;
+
+  INSERT INTO _results VALUES (15, 'cannot CREATE a lead as urgent', true, 'blocked, and the flag does not admit it');
+EXCEPTION WHEN OTHERS THEN
+  INSERT INTO _results VALUES (15, 'cannot CREATE a lead as urgent', false, SQLERRM);
+END $$;
+
+
+-- -----------------------------------------------------------------------------
 -- 07  The flag does not leak past the transaction-local scope
 --     A plain SET inside the function is the failure mode: it would stay on for
 --     the rest of the connection and let the next write through unchecked.
