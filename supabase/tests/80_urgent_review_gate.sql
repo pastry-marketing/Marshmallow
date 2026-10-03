@@ -495,48 +495,124 @@ BEGIN
 EXCEPTION WHEN OTHERS THEN
   INSERT INTO _results VALUES (9, 'approval path leaves the schedule alone', false, SQLERRM);
 END $$;
-
-
 -- -----------------------------------------------------------------------------
 -- 10  A cs_admin cannot approve their own request
+--
+--     The first version of this check skipped itself whenever the queue was
+--     empty, which is exactly the state a new deployment is in. A check that
+--     reports "skipped" on an empty queue is a check that never runs before the
+--     feature has been used, which is when it is worth most.
+--
+--     It now creates its own pending request, as a customer_service user against
+--     a lead that user can actually reach, so it is exercised on a fresh
+--     database. Everything is inside the transaction that is rolled back.
 -- -----------------------------------------------------------------------------
 DO $$
 DECLARE
-  v_id    uuid;
-  v_user  uuid;
+  v_cs     uuid;
+  v_reviewer uuid;
+  v_reviewer_is_admin boolean := false;
+  v_lead   uuid;
+  v_req    uuid;
   v_blocked boolean := false;
   v_message text;
 BEGIN
-  SELECT id INTO v_id FROM public.lead_urgent_review_requests LIMIT 1;
-  SELECT user_id INTO v_user FROM public.user_roles WHERE role = 'cs_admin' LIMIT 1;
+  SELECT user_id INTO v_cs
+    FROM public.user_roles WHERE role = 'customer_service' LIMIT 1;
 
-  IF v_id IS NULL OR v_user IS NULL THEN
-    INSERT INTO _results VALUES (10, 'cs_admin cannot self-approve', true, 'skipped, no request or no cs_admin');
+  SELECT user_id INTO v_reviewer
+    FROM public.user_roles WHERE role = 'cs_admin' LIMIT 1;
+
+  IF v_cs IS NULL OR v_reviewer IS NULL THEN
+    INSERT INTO _results VALUES (10, 'cs_admin cannot self-approve', true,
+      format('skipped, cs=%s reviewer=%s', v_cs IS NULL, v_reviewer IS NULL));
     RETURN;
   END IF;
 
-  -- Point the request at the reviewing user, then have them review it.
-  UPDATE public.lead_urgent_review_requests
-     SET requested_by = v_user, status = 'pending'
-   WHERE id = v_id;
+  -- An admin is exempt from the self-approval rule by design, because they can
+  -- already set urgent directly and are the escalation when no second CS Admin is
+  -- free. Pick a reviewer who is not also an admin, or there is nothing to prove.
+  IF public.has_role(v_reviewer, 'admin'::app_role) THEN
+    SELECT ur.user_id INTO v_reviewer
+      FROM public.user_roles ur
+     WHERE ur.role = 'cs_admin'
+       AND NOT public.has_role(ur.user_id, 'admin'::app_role)
+     LIMIT 1;
+  END IF;
 
-  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_user, 'role', 'authenticated')::text, true);
-  PERFORM set_config('request.jwt.claim.sub', v_user::text, true);
+  IF v_reviewer IS NULL THEN
+    INSERT INTO _results VALUES (10, 'cs_admin cannot self-approve', true,
+      'skipped, every cs_admin is also an admin');
+    RETURN;
+  END IF;
+
+  -- A lead the requesting CS user can reach.
+  SELECT l.id INTO v_lead
+    FROM public.leads l
+   WHERE l.status NOT IN ('urgent_job', 'paid', 'cancelled', 'scammed')
+     AND (l.created_by = v_cs OR l.assigned_cs = v_cs)
+   LIMIT 1;
+
+  IF v_lead IS NULL THEN
+    SELECT l.id INTO v_lead
+      FROM public.leads l
+     WHERE l.status NOT IN ('urgent_job', 'paid', 'cancelled', 'scammed')
+     LIMIT 1;
+  END IF;
+
+  IF v_lead IS NULL THEN
+    INSERT INTO _results VALUES (10, 'cs_admin cannot self-approve', true,
+      'skipped, no usable lead');
+    RETURN;
+  END IF;
+
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_cs, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_cs::text, true);
   PERFORM set_config('request.jwt.claim.role', 'authenticated', true);
+
+  -- Raise it as the CS user, so the request is genuine rather than hand-inserted.
   BEGIN
-    PERFORM public.review_urgent_request(v_id, true, 'self review');
+    v_req := public.request_urgent_review(
+      v_lead,
+      '[{"check":"schedule","field":"","severity":"low","problem":"harness","evidence":"","suggestion":"s"}]'::jsonb,
+      'harness fixture', 'gpt-4o-mini', NULL, NULL, NULL);
+  EXCEPTION WHEN OTHERS THEN
+    INSERT INTO _results VALUES (10, 'cs_admin cannot self-approve', false,
+      'could not raise the fixture request: ' || left(SQLERRM, 160));
+    RETURN;
+  END;
+
+  IF v_req IS NULL THEN
+    INSERT INTO _results VALUES (10, 'cs_admin cannot self-approve', false,
+      'request_urgent_review returned no id');
+    RETURN;
+  END IF;
+
+  -- Now hand it to the reviewer so the request appears to be their own.
+  UPDATE public.lead_urgent_review_requests
+     SET requested_by = v_reviewer, status = 'pending'
+   WHERE id = v_req;
+
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_reviewer, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_reviewer::text, true);
+  PERFORM set_config('request.jwt.claim.role', 'authenticated', true);
+
+  BEGIN
+    PERFORM public.review_urgent_request(v_req, true, 'self review');
   EXCEPTION WHEN OTHERS THEN
     v_blocked := true;
     v_message := SQLERRM;
   END;
 
   IF NOT v_blocked THEN
-    RAISE EXCEPTION 'a cs_admin approved their own request';
+    INSERT INTO _results VALUES (10, 'cs_admin cannot self-approve', false,
+      'a cs_admin approved their own request');
+    RETURN;
   END IF;
 
   INSERT INTO _results VALUES (
     10, 'cs_admin cannot self-approve', true,
-    'raised ' || left(coalesce(v_message, ''), 60)
+    'raised ' || left(coalesce(v_message, ''), 70)
   );
 EXCEPTION WHEN OTHERS THEN
   INSERT INTO _results VALUES (10, 'cs_admin cannot self-approve', false, SQLERRM);
@@ -546,35 +622,80 @@ END $$;
 -- -----------------------------------------------------------------------------
 -- 11  customer_service cannot review at all
 --     They raise requests. Only cs_admin and admin clear them.
+--     Raises its own fixture, for the same reason as check 10.
 -- -----------------------------------------------------------------------------
 DO $$
 DECLARE
-  v_id      uuid;
-  v_user    uuid;
+  v_cs   uuid;
+  v_lead uuid;
+  v_req  uuid;
   v_blocked boolean := false;
+  v_message text;
 BEGIN
-  SELECT id INTO v_id FROM public.lead_urgent_review_requests LIMIT 1;
-  SELECT user_id INTO v_user FROM public.user_roles WHERE role = 'customer_service' LIMIT 1;
+  SELECT user_id INTO v_cs
+    FROM public.user_roles WHERE role = 'customer_service' LIMIT 1;
 
-  IF v_id IS NULL OR v_user IS NULL THEN
-    INSERT INTO _results VALUES (11, 'CS cannot review requests', true, 'skipped, no request or no CS user');
+  IF v_cs IS NULL THEN
+    INSERT INTO _results VALUES (11, 'CS cannot review requests', true, 'skipped, no customer_service user');
     RETURN;
   END IF;
 
-  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_user, 'role', 'authenticated')::text, true);
-  PERFORM set_config('request.jwt.claim.sub', v_user::text, true);
+  SELECT l.id INTO v_lead
+    FROM public.leads l
+   WHERE l.status NOT IN ('urgent_job', 'paid', 'cancelled', 'scammed')
+     AND (l.created_by = v_cs OR l.assigned_cs = v_cs)
+   LIMIT 1;
+
+  IF v_lead IS NULL THEN
+    SELECT l.id INTO v_lead
+      FROM public.leads l
+     WHERE l.status NOT IN ('urgent_job', 'paid', 'cancelled', 'scammed')
+     LIMIT 1;
+  END IF;
+
+  IF v_lead IS NULL THEN
+    INSERT INTO _results VALUES (11, 'CS cannot review requests', true, 'skipped, no usable lead');
+    RETURN;
+  END IF;
+
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_cs, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_cs::text, true);
   PERFORM set_config('request.jwt.claim.role', 'authenticated', true);
+
   BEGIN
-    PERFORM public.review_urgent_request(v_id, true, null);
+    v_req := public.request_urgent_review(
+      v_lead,
+      '[]'::jsonb, 'harness fixture', 'gpt-4o-mini', NULL, NULL, NULL);
+  EXCEPTION WHEN OTHERS THEN
+    INSERT INTO _results VALUES (11, 'CS cannot review requests', false,
+      'could not raise the fixture request: ' || left(SQLERRM, 160));
+    RETURN;
+  END IF;
+
+  IF v_req IS NULL THEN
+    INSERT INTO _results VALUES (11, 'CS cannot review requests', false,
+      'request_urgent_review returned no id');
+    RETURN;
+  END IF;
+
+  -- Still acting as the CS user who raised it. They must not be able to clear it.
+  BEGIN
+    PERFORM public.review_urgent_request(v_req, true, null);
   EXCEPTION WHEN OTHERS THEN
     v_blocked := true;
+    v_message := SQLERRM;
   END;
 
   IF NOT v_blocked THEN
-    RAISE EXCEPTION 'customer_service was allowed to review';
+    INSERT INTO _results VALUES (11, 'CS cannot review requests', false,
+      'customer_service was allowed to review');
+    RETURN;
   END IF;
 
-  INSERT INTO _results VALUES (11, 'CS cannot review requests', true, 'raised as expected');
+  INSERT INTO _results VALUES (
+    11, 'CS cannot review requests', true,
+    'raised ' || left(coalesce(v_message, ''), 70)
+  );
 EXCEPTION WHEN OTHERS THEN
   INSERT INTO _results VALUES (11, 'CS cannot review requests', false, SQLERRM);
 END $$;
