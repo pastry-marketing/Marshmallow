@@ -431,6 +431,36 @@ export default function TechniciansPage() {
     await qc.invalidateQueries({ queryKey: TECHNICIANS_ROOT_KEY });
   };
 
+  /**
+   * Keep the list live when someone else changes a technician.
+   *
+   * An approval is applied by an admin, usually in a different tab or a
+   * different session from the person watching this list. Invalidating from the
+   * page that performed the write only reaches that page, so a processor would
+   * keep seeing the old Good Tech star until the query went stale. The event is
+   * used only as a signal to refetch rather than to patch from, so nothing is
+   * read out of the payload and the table policies still decide what the
+   * refetch can see.
+   */
+  useEffect(() => {
+    if (!role) return;
+
+    const channel = supabase
+      .channel("technicians-realtime-page")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "technicians" },
+        () => {
+          void qc.invalidateQueries({ queryKey: TECHNICIANS_ROOT_KEY });
+        },
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [role, qc]);
+
   const handleSaved = async (saved: TechnicianRecord) => {
     // If a currently-selected technician was edited, refresh its cached snapshot
     // so the copied output uses the latest values.
