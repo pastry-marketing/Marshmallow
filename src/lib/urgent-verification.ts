@@ -20,28 +20,47 @@ import { supabase } from "@/integrations/supabase/client";
 export type UrgentVerificationState = "idle" | "running" | "checked" | "unavailable" | "error";
 
 /**
- * Who is asking, and therefore what the check is for.
+ * Who gets asked before a lead goes urgent.
  *
- *   enforced  customer_service. Findings block, and anything other than a clean
- *             result needs a CS Admin before the lead goes urgent.
+ *   customer_service, admin, cs_admin   the check runs and the findings are shown
+ *   processor                          not asked
  *
- *   advisory  admin, processor, cs_admin. The same comparison runs and the same
- *             findings are shown, because the person making the call is the one
- *             who benefits from knowing the record disagrees with the customer.
- *             But they can proceed regardless, and nothing needs a second pair of
- *             eyes.
+ * Processor dispatch, they set urgent directly, and the database still exempts
+ * them. Putting a two second check in front of the people whose job is moving the
+ * queue would slow the one path that must not slow.
  *
- * This is presentation only. enforce_urgent_gate() in the database exempts these
- * three roles regardless, so this governs what someone is shown, never what they
- * are permitted to do. That separation is deliberate: if the front end were the
- * thing enforcing the rule it could be bypassed with one request, and if the
- * database started blocking these roles then a dispatch workflow or a direct API
- * call could jam on work that genuinely cannot wait.
+ * Nobody is blocked by a finding and nobody is queued for review. The check tells
+ * the person making the call whether the record disagrees with the customer, and
+ * they decide. That is a deliberate change from routing customer_service to a CS
+ * Admin: a queue that carries most of the urgent work stops being read within a
+ * week, and a review step that gets rubber-stamped is worse than none because it
+ * still looks like a control.
+ *
+ * What still holds is the database trigger. It refuses a raw write that carries
+ * no verification at all, so the check cannot be skipped by calling the API
+ * directly or from the extension. The dialog is how you satisfy it; it is not
+ * what makes it true.
+ *
+ * This is presentation only. enforce_urgent_gate() exempts admin, processor and
+ * cs_admin in the database regardless, so this governs what someone is shown,
+ * never what they are permitted to do. If the front end were the thing enforcing
+ * the rule it could be bypassed with one request, and if the database started
+ * blocking those roles a dispatch workflow could jam on work that cannot wait.
  */
-export type UrgentCheckMode = "enforced" | "advisory";
 
-export function urgentCheckModeForRole(role: string | null | undefined): UrgentCheckMode {
-  return bypassesUrgentGate(role) ? "advisory" : "enforced";
+/**
+ * Roles the database gate lets straight through.
+ *
+ * Kept in step with the bypass list in enforce_urgent_gate(). Note it includes
+ * processor, who is never asked, because the database still exempts them.
+ */
+export function bypassesUrgentGate(role: string | null | undefined): boolean {
+  return role === "admin" || role === "processor" || role === "cs_admin";
+}
+
+export function showsUrgentCheck(role: string | null | undefined): boolean {
+  const r = role ?? "";
+  return r === "customer_service" || r === "admin" || r === "cs_admin";
 }
 
 export type UrgentIssue = {
@@ -60,6 +79,7 @@ export type UrgentVerificationResult = {
   notice: string;
   conversationFound: boolean;
   messageCount: number;
+  reason: string;
   elapsedMs: number;
 };
 
@@ -71,6 +91,7 @@ const UNAVAILABLE: UrgentVerificationResult = {
   conversationFound: false,
   messageCount: 0,
   elapsedMs: 0,
+  reason: "",
 };
 
 // Generous next to the function's own eight second abort on the model call,
@@ -96,15 +117,34 @@ export async function runUrgentVerification(leadId: string): Promise<UrgentVerif
     } as never);
 
     if (error) {
-      // A network failure or a 401/500 is not a pass and not a finding. It is an
-      // unknown, and the caller decides what to do about it.
+      // supabase-js does not put the edge function's body in error.message. It
+      // puts the Response in error.context, and error.message is a generic
+      // "returned a non-2xx status code". Reading only the message therefore
+      // discards whatever the function actually said, which is why a quota
+      // failure and a misconfigured key looked identical from here.
+      let notice = "";
+      let reason = "unknown";
+      const context = (error as { context?: unknown }).context;
+
+      if (context && typeof Response !== "undefined" && context instanceof Response) {
+        try {
+          const body = (await context.clone().json()) as Record<string, unknown>;
+          if (typeof body?.error === "string") notice = body.error;
+          if (typeof body?.reason === "string") reason = body.reason;
+        } catch {
+          // A non-JSON body. Nothing to add.
+        }
+      }
+
       return {
         ...UNAVAILABLE,
         state: "error",
+        reason,
         notice:
-          error.name === "AbortError"
+          notice ||
+          (error.name === "AbortError"
             ? "The check did not respond in time. Check your connection, or mark the lead urgent without a check."
-            : error.message || "The check could not be reached. Check your connection and try again.",
+            : error.message || "The check could not be reached. Check your connection and try again."),
       };
     }
 
@@ -118,8 +158,9 @@ export async function runUrgentVerification(leadId: string): Promise<UrgentVerif
       summary: typeof raw.summary === "string" ? raw.summary : "",
       notice: typeof raw.notice === "string" ? raw.notice : "",
       conversationFound: raw.conversation_found === true,
-      messageCount: typeof raw.message_count === "number" ? raw.message_count : 0,
-      elapsedMs: typeof raw.elapsed_ms === "number" ? raw.elapsed_ms : 0,
+messageCount: typeof raw.message_count === "number" ? raw.message_count : 0,
+        reason: "",
+        elapsedMs: typeof raw.elapsed_ms === "number" ? raw.elapsed_ms : 0,
     };
   } finally {
     clearTimeout(timer);
@@ -179,16 +220,6 @@ export async function submitUrgentReviewRequest(input: {
   return data as string | null;
 }
 
-/**
- * Roles the database gate lets straight through.
- *
- * Kept in step with the bypass list in enforce_urgent_gate() in
- * 20261104000000_urgent_review_gate.sql. It decides whether the dialog is
- * advisory or enforcing, not what anyone is allowed to do.
- */
-export function bypassesUrgentGate(role: string | null | undefined): boolean {
-  return role === "admin" || role === "processor" || role === "cs_admin";
-}
 
 // =============================================================================
 // The review queue.

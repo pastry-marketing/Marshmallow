@@ -1037,6 +1037,76 @@ END $$;
 
 
 -- -----------------------------------------------------------------------------
+-- 21  approve_urgent_verification must WRITE, for every role it accepts
+--
+--     This is the bug that made "mark urgent" look broken for admin and cs_admin.
+--     The function opened with
+--
+--       IF v_role <> 'customer_service' THEN RETURN; END IF;
+--
+--     on the reasoning that only customer_service would ever call it, because
+--     they were the only ones the dialog was shown to. When the dialog was
+--     extended to admin and cs_admin the function still returned immediately and
+--     wrote nothing.
+--
+--     The failure was silent and compound: the dialog reported success, set the
+--     status in local form state, invalidated the lead query, and the refetch
+--     returned the unchanged row, which useEffect(() => setForm(lead)) then
+--     wrote over the form. The status snapped back with nothing in the console.
+--
+--     Asserts the function actually writes for each role it accepts, rather than
+--     merely returning without raising.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE
+  v_role text;
+  v_user uuid;
+  v_lead uuid;
+  v_status text;
+  v_results text := '';
+BEGIN
+  FOREACH v_role IN ARRAY ARRAY['customer_service', 'admin', 'cs_admin', 'processor'] LOOP
+    SELECT user_id INTO v_user FROM public.user_roles WHERE role = v_role::app_role LIMIT 1;
+    CONTINUE WHEN v_user IS NULL;
+
+    SELECT l.id INTO v_lead
+      FROM public.leads l
+     WHERE l.status NOT IN ('urgent_job', 'paid', 'cancelled', 'scammed')
+       AND (l.created_by = v_user OR l.assigned_cs = v_user OR v_role <> 'customer_service')
+     LIMIT 1;
+    CONTINUE WHEN v_lead IS NULL;
+
+    PERFORM set_config('request.jwt.claims', json_build_object('sub', v_user, 'role', 'authenticated')::text, true);
+    PERFORM set_config('request.jwt.claim.sub', v_user::text, true);
+    PERFORM set_config('request.jwt.claim.role', 'authenticated', true);
+
+    PERFORM public.approve_urgent_verification(v_lead, 'harness', 'gpt-4o-mini');
+
+    SELECT status INTO v_status FROM public.leads WHERE id = v_lead;
+
+    IF v_status IS DISTINCT FROM 'urgent_job' THEN
+      RAISE EXCEPTION '% called it but the lead is still %', v_role, coalesce(v_status, 'null');
+    END IF;
+
+    v_results := v_results || v_role || ' ';
+
+    -- Put it back so the next role starts from a clean state and so check 6,
+    -- which runs earlier, is unaffected by ordering.
+    UPDATE public.leads SET status = 'waiting_complete_details' WHERE id = v_lead;
+  END LOOP;
+
+  IF v_results = '' THEN
+    INSERT INTO _results VALUES (21, 'verification actually writes, per role', true, 'skipped, no usable users or leads');
+    RETURN;
+  END IF;
+
+  INSERT INTO _results VALUES (21, 'verification actually writes, per role', true, 'wrote for: ' || v_results);
+EXCEPTION WHEN OTHERS THEN
+  INSERT INTO _results VALUES (21, 'verification actually writes, per role', false, SQLERRM);
+END $$;
+
+
+-- -----------------------------------------------------------------------------
 -- Results
 -- -----------------------------------------------------------------------------
 SELECT

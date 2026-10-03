@@ -38,7 +38,7 @@ import LeadTable from "@/components/leads/LeadTable";
 import type { LeadCancellationRequest } from "@/types";
 import AddLeadDialog from "@/components/leads/AddLeadDialog";
 import UrgentAICheckDialog from "@/components/leads/UrgentAICheckDialog";
-import { urgentCheckModeForRole } from "@/lib/urgent-verification";
+import { showsUrgentCheck } from "@/lib/urgent-verification";
 import LeadReportDialog from "@/components/leads/LeadReportDialog";
 import ExportLeadsDialog, { ExportOptions } from "@/components/leads/ExportLeadsDialog";
 import InstallExtensionDialog from "@/components/leads/InstallExtensionDialog";
@@ -1342,13 +1342,9 @@ export default function LeadsPage() {
             />
 
             <UrgentAICheckDialog
-              open={!!urgentCheckFor}
+              open={!!urgentCheckFor && showsUrgentCheck(role)}
               onOpenChange={(next) => { if (!next) setUrgentCheckFor(null); }}
               leadId={urgentCheckFor?.leadId ?? ""}
-              jobId={urgentCheckFor?.jobId}
-              customerName={urgentCheckFor?.customerName}
-              previousStatus={urgentCheckFor?.previousStatus}
-              mode={urgentCheckModeForRole(role)}
             onProceed={() => {
                 fetchLeads();
                 if (role === "customer_service") {
