@@ -591,6 +591,103 @@ END $$;
 
 
 -- -----------------------------------------------------------------------------
+-- 12b  No function may rely on its grant alone
+--
+--      This check exists because of a leak that shipped. list_urgent_review_requests
+--      was SECURITY DEFINER with no check on the caller, the world grant survived
+--      because ALTER FUNCTION ... RESET ALL does not touch privileges, and the
+--      owner bypasses row level security. The anon key could read every review
+--      request in the table.
+--
+--      Grants are now correct, so this would not fail on the grant alone. It
+--      checks the other half: a SECURITY DEFINER function that reads a table must
+--      decide for itself who may call it. That is the property a future GRANT
+--      slip cannot take away.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE
+  v_unchecked text;
+BEGIN
+  SELECT string_agg(proname, ', ') INTO v_unchecked
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public'
+     AND p.prosecdef
+     AND p.proname IN (
+       'enforce_urgent_gate', 'approve_urgent_verification',
+       'approve_urgent_acknowledgement', 'request_urgent_review',
+       'review_urgent_request', 'list_urgent_review_requests'
+     )
+     -- enforce_urgent_gate is a trigger function. It never runs on a caller's
+     -- request, so an auth check inside it would be meaningless.
+     AND p.proname <> 'enforce_urgent_gate'
+     AND p.prosrc NOT ILIKE '%auth.uid()%';
+
+  IF v_unchecked IS NOT NULL THEN
+    RAISE EXCEPTION 'these definer functions never check the caller: %', v_unchecked;
+  END IF;
+
+  INSERT INTO _results VALUES (16, 'definer functions authorise internally', true, 'all check auth.uid()');
+EXCEPTION WHEN OTHERS THEN
+  INSERT INTO _results VALUES (16, 'definer functions authorise internally', false, SQLERRM);
+END $$;
+
+
+-- -----------------------------------------------------------------------------
+-- 12c  PUBLIC must hold nothing on the workflow functions
+--
+--      Checked separately from the anon check above because the two arrive
+--      differently: the default world grant is a PUBLIC entry, so revoking from
+--      anon alone leaves it in place and the function still looks correctly
+--      locked out on the anon check.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE
+  v_public_execute text;
+BEGIN
+  SELECT string_agg(routine_name, ', ') INTO v_public_execute
+    FROM information_schema.routine_privileges
+   WHERE routine_schema = 'public'
+     AND grantee = 'PUBLIC'
+     AND routine_name IN (
+       'enforce_urgent_gate', 'approve_urgent_verification',
+       'approve_urgent_acknowledgement', 'request_urgent_review',
+       'review_urgent_request', 'list_urgent_review_requests',
+       'set_urgent_review_updated_at'
+     );
+
+  IF v_public_execute IS NOT NULL THEN
+    RAISE EXCEPTION 'PUBLIC can execute: %', v_public_execute;
+  END IF;
+
+  INSERT INTO _results VALUES (17, 'PUBLIC holds no execute', true, 'nothing granted to PUBLIC');
+EXCEPTION WHEN OTHERS THEN
+  INSERT INTO _results VALUES (17, 'PUBLIC holds no execute', false, SQLERRM);
+END $$;
+
+
+-- -----------------------------------------------------------------------------
+-- 12d  anon must not reach the table directly either
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE
+  v_bad text;
+BEGIN
+  IF has_table_privilege('anon', 'public.lead_urgent_review_requests', 'SELECT') THEN
+    v_bad := 'anon can SELECT the queue table';
+  END IF;
+
+  IF v_bad IS NOT NULL THEN
+    RAISE EXCEPTION '%', v_bad;
+  END IF;
+
+  INSERT INTO _results VALUES (18, 'anon has no table privilege', true, 'no direct access');
+EXCEPTION WHEN OTHERS THEN
+  INSERT INTO _results VALUES (18, 'anon has no table privilege', false, SQLERRM);
+END $$;
+
+
+-- -----------------------------------------------------------------------------
 -- 13  Every SECURITY DEFINER function pins its search path
 --     Without this, a caller who can create objects in a schema ahead of public
 --     in the path can shadow a function or table inside a definer context.
