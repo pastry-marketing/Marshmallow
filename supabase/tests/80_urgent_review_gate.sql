@@ -511,7 +511,6 @@ DO $$
 DECLARE
   v_cs     uuid;
   v_reviewer uuid;
-  v_reviewer_is_admin boolean := false;
   v_lead   uuid;
   v_req    uuid;
   v_blocked boolean := false;
@@ -670,7 +669,7 @@ BEGIN
     INSERT INTO _results VALUES (11, 'CS cannot review requests', false,
       'could not raise the fixture request: ' || left(SQLERRM, 160));
     RETURN;
-  END IF;
+  END;
 
   IF v_req IS NULL THEN
     INSERT INTO _results VALUES (11, 'CS cannot review requests', false,
