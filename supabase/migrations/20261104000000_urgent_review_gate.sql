@@ -748,33 +748,43 @@ END $$;
 -- -----------------------------------------------------------------------------
 -- 10. Grants
 --
---     RESET ALL is function-only syntax. On a table it is a parse error, so the
---     table is handled with REVOKE and an explicit grant.
+--     RESET ALL is NOT used here, and must not be added back. It resets function
+--     *configuration*, not privileges. Applied after the SET search_path clause
+--     it silently cleared the pinned search path on all six functions, and it
+--     left the default world grant exactly where it was.
 --
---     The functions still use RESET ALL rather than REVOKE ... FROM PUBLIC. An
---     earlier migration here used REVOKE, reported success, and changed nothing,
---     because the functions carried Postgres's default world grant rather than a
---     PUBLIC group entry that REVOKE could see.
+--     The result was a live data leak: list_urgent_review_requests is SECURITY
+--     DEFINER, its owner bypasses row level security, and it had no internal
+--     check on the caller, so the anon key could read the whole review queue.
+--     Corrected in 20261104001000_urgent_gate_security_fix.sql, and the
+--     list function now also authorises internally rather than trusting its
+--     grant.
+--
+--     Configuration is set with ALTER FUNCTION ... SET. Privileges are set with
+--     REVOKE and GRANT, against PUBLIC as well as named roles, because the
+--     default world grant arrives as a PUBLIC entry. An earlier migration in
+--     this project made the REVOKE mistake and reported success while changing
+--     nothing.
 -- -----------------------------------------------------------------------------
-REVOKE ALL ON TABLE public.lead_urgent_review_requests FROM anon, authenticated;
+REVOKE ALL ON TABLE public.lead_urgent_review_requests FROM PUBLIC, anon;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.lead_urgent_review_requests
   TO authenticated;
 
-ALTER FUNCTION public.enforce_urgent_gate()             RESET ALL;
-ALTER FUNCTION public.approve_urgent_verification(uuid, text, text) RESET ALL;
-ALTER FUNCTION public.approve_urgent_acknowledgement(uuid, text) RESET ALL;
-ALTER FUNCTION public.request_urgent_review(uuid, jsonb, text, text, text, text, text) RESET ALL;
-ALTER FUNCTION public.review_urgent_request(uuid, boolean, text) RESET ALL;
-ALTER FUNCTION public.list_urgent_review_requests(text) RESET ALL;
-ALTER FUNCTION public.set_urgent_review_updated_at()   RESET ALL;
+REVOKE ALL ON FUNCTION public.enforce_urgent_gate() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.set_urgent_review_updated_at() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.approve_urgent_verification(uuid, text, text) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.approve_urgent_acknowledgement(uuid, text) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.request_urgent_review(uuid, jsonb, text, text, text, text, text) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.review_urgent_request(uuid, boolean, text) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.list_urgent_review_requests(text) FROM PUBLIC, anon;
 
-GRANT EXECUTE ON FUNCTION public.enforce_urgent_gate() TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.approve_urgent_verification(uuid, text, text) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.approve_urgent_acknowledgement(uuid, text) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.request_urgent_review(uuid, jsonb, text, text, text, text, text) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.review_urgent_request(uuid, boolean, text) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.list_urgent_review_requests(text) TO authenticated;
-GRANT EXECUTE ON FUNCTION public.set_urgent_review_updated_at() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.enforce_urgent_gate() TO service_role;
+GRANT EXECUTE ON FUNCTION public.set_urgent_review_updated_at() TO service_role;
 
 
 -- =============================================================================
