@@ -48,36 +48,57 @@ const UNAVAILABLE: UrgentVerificationResult = {
   elapsedMs: 0,
 };
 
+// Generous next to the function's own eight second abort on the model call,
+// because this covers the whole round trip including the network.
+const REQUEST_TIMEOUT_MS = 15_000;
+
 export async function runUrgentVerification(leadId: string): Promise<UrgentVerificationResult> {
   if (!leadId) throw new Error("Missing lead ID.");
 
-  const { data, error } = await supabase.functions.invoke("check-urgent-lead", {
-    body: { leadId },
-  });
+  // supabase.functions.invoke has no timeout of its own. The edge function
+  // aborts its OpenAI call after eight seconds, but that covers only the model
+  // call: DNS, TLS and the hop to Supabase can each stall well past that, and a
+  // customer waiting on a dispatch decision should not be left looking at a
+  // spinner with no way out. Fifteen seconds is well past the expected one or
+  // two, and past anything legitimate.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
-  if (error) {
-    // A network failure or a 401/500 is not a pass and not a finding. It is an
-    // unknown, and the caller decides what to do about it.
+  try {
+    const { data, error } = await supabase.functions.invoke("check-urgent-lead", {
+      body: { leadId },
+      signal: controller.signal,
+    } as never);
+
+    if (error) {
+      // A network failure or a 401/500 is not a pass and not a finding. It is an
+      // unknown, and the caller decides what to do about it.
+      return {
+        ...UNAVAILABLE,
+        state: "error",
+        notice:
+          error.name === "AbortError"
+            ? "The check did not respond in time. Check your connection, or mark the lead urgent without a check."
+            : error.message || "The check could not be reached. Check your connection and try again.",
+      };
+    }
+
+    const raw = (data ?? {}) as Record<string, unknown>;
+    const verification = raw.verification === "checked" ? "checked" : "unavailable";
+    const issues = Array.isArray(raw.issues) ? (raw.issues as UrgentIssue[]) : [];
+
     return {
-      ...UNAVAILABLE,
-      state: "error",
-      notice: error.message || "The check could not be reached. Check your connection and try again.",
+      state: verification,
+      issues,
+      summary: typeof raw.summary === "string" ? raw.summary : "",
+      notice: typeof raw.notice === "string" ? raw.notice : "",
+      conversationFound: raw.conversation_found === true,
+      messageCount: typeof raw.message_count === "number" ? raw.message_count : 0,
+      elapsedMs: typeof raw.elapsed_ms === "number" ? raw.elapsed_ms : 0,
     };
+  } finally {
+    clearTimeout(timer);
   }
-
-  const raw = (data ?? {}) as Record<string, unknown>;
-  const verification = raw.verification === "checked" ? "checked" : "unavailable";
-  const issues = Array.isArray(raw.issues) ? (raw.issues as UrgentIssue[]) : [];
-
-  return {
-    state: verification,
-    issues,
-    summary: typeof raw.summary === "string" ? raw.summary : "",
-    notice: typeof raw.notice === "string" ? raw.notice : "",
-    conversationFound: raw.conversation_found === true,
-    messageCount: typeof raw.message_count === "number" ? raw.message_count : 0,
-    elapsedMs: typeof raw.elapsed_ms === "number" ? raw.elapsed_ms : 0,
-  };
 }
 
 /**

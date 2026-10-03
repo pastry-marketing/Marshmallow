@@ -59,7 +59,25 @@ describe("runUrgentVerification", () => {
     expect(result.issues).toHaveLength(0);
     expect(result.summary).toBe("All good");
     expect(result.messageCount).toBe(12);
-    expect(invoke()).toHaveBeenCalledWith("check-urgent-lead", { body: { leadId: "lead-1" } });
+    // Carries an abort signal as well as the body, so a stalled request cannot
+    // leave the dialog spinning forever.
+    expect(invoke()).toHaveBeenCalledWith(
+      "check-urgent-lead",
+      expect.objectContaining({ body: { leadId: "lead-1" } }),
+    );
+    const options = invoke().mock.calls[0][1] as { signal?: AbortSignal };
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("reports a timeout as unknown rather than as a pass", async () => {
+    const abort = Object.assign(new Error("aborted"), { name: "AbortError" });
+    invoke().mockResolvedValue({ data: null, error: abort } as never);
+
+    const result = await runUrgentVerification("lead-timeout");
+
+    expect(result.state).toBe("error");
+    expect(result.issues).toHaveLength(0);
+    expect(result.notice).toContain("did not respond in time");
   });
 
   it("surfaces findings with their evidence", async () => {

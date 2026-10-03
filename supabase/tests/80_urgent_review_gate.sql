@@ -958,6 +958,85 @@ END $$;
 
 
 -- -----------------------------------------------------------------------------
+-- 20  Applying urgent must settle any open request for the same lead
+--
+--     The sequence this guards against:
+--       a CS member marks a lead urgent, the check finds a disagreement, a pending
+--       request is raised and the lead stays put. They fix the flagged field and
+--       re-check. It comes back clean, so approve_urgent_verification sets the
+--       lead urgent. Nothing touched the queue.
+--
+--     A CS Admin then opens an entry for a lead that is already urgent. Approving
+--     is harmless. Declining marks the request declined, leaves the lead urgent,
+--     and writes a decline against an urgent lead into the activity trail. That is
+--     wrong in the record rather than in the data, which is the version nobody
+--     notices until later. The sidebar badge also counts the row, so the queue
+--     never clears.
+--
+--     Asserts that after the verification path runs, no pending request survives
+--     for that lead.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE
+  v_cs   uuid;
+  v_lead uuid;
+  v_req  uuid;
+  v_left integer;
+BEGIN
+  SELECT user_id INTO v_cs FROM public.user_roles WHERE role = 'customer_service' LIMIT 1;
+
+  SELECT l.id INTO v_lead
+    FROM public.leads l
+   WHERE l.status NOT IN ('urgent_job', 'paid', 'cancelled', 'scammed')
+     AND (l.created_by = v_cs OR l.assigned_cs = v_cs)
+   LIMIT 1;
+
+  IF v_cs IS NULL OR v_lead IS NULL THEN
+    INSERT INTO _results VALUES (20, 'verification settles the open request', true, 'skipped, no CS user or lead');
+    RETURN;
+  END IF;
+
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_cs, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_cs::text, true);
+  PERFORM set_config('request.jwt.claim.role', 'authenticated', true);
+
+  -- Raise a request the way the dialog does when the check finds something.
+  v_req := public.request_urgent_review(
+    v_lead, '[{"check":"schedule"}]'::jsonb, 'fixture', 'gpt-4o-mini', NULL, NULL, NULL);
+
+  IF v_req IS NULL THEN
+    INSERT INTO _results VALUES (20, 'verification settles the open request', false,
+      'fixture request was not created');
+    RETURN;
+  END IF;
+
+  -- Now the fix, and a clean re-check.
+  PERFORM public.approve_urgent_verification(v_lead, 'clean on re-check', 'gpt-4o-mini');
+
+  SELECT count(*) INTO v_left
+    FROM public.lead_urgent_review_requests
+   WHERE lead_id = v_lead AND status = 'pending';
+
+  IF v_left > 0 THEN
+    RAISE EXCEPTION '% request(s) still pending after the lead became urgent', v_left;
+  END IF;
+
+  -- And it must be settled as approved with no reviewer, because no human looked.
+  IF NOT EXISTS (
+    SELECT 1 FROM public.lead_urgent_review_requests
+     WHERE id = v_req AND status = 'approved' AND reviewed_by IS NULL
+  ) THEN
+    RAISE EXCEPTION 'the request was not closed as an unreviewed approval';
+  END IF;
+
+  INSERT INTO _results VALUES (20, 'verification settles the open request', true,
+    'closed as approved, no reviewer');
+EXCEPTION WHEN OTHERS THEN
+  INSERT INTO _results VALUES (20, 'verification settles the open request', false, SQLERRM);
+END $$;
+
+
+-- -----------------------------------------------------------------------------
 -- Results
 -- -----------------------------------------------------------------------------
 SELECT
