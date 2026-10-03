@@ -290,16 +290,38 @@ END $$;
 --     Sets the same transaction-local flag approve_urgent_verification uses and
 --     confirms the write is admitted. If this fails, a clean AI result can never
 --     become urgent and the feature is unusable.
+--
+--     The source status is an allowlist, not "any lead that is not urgent".
+--     The first version picked one at random and landed on a lead whose status was
+--     paid, so enforce_paid_status_rules -- an unrelated BEFORE UPDATE trigger that
+--     makes paid immutable -- rejected the write first. The check reported that
+--     the flag had failed, when the flag had in fact worked and a pre-existing rule
+--     had objected. That is the worst shape of harness failure: it points at the
+--     wrong component.
+--
+--     The error text is now reported rather than swallowed, so a genuine failure
+--     here names its cause instead of just saying the write was refused.
 -- -----------------------------------------------------------------------------
 DO $$
 DECLARE
   v_id     uuid;
   v_status text;
   v_blocked boolean := false;
+  v_message text := '';
 BEGIN
-  SELECT id INTO v_id FROM public.leads WHERE status <> 'urgent_job' LIMIT 1;
+  -- Transition-friendly sources only. paid, cancelled and scammed are governed
+  -- by their own rules and would raise for reasons that have nothing to do with
+  -- this gate.
+  SELECT id INTO v_id
+    FROM public.leads
+   WHERE status IN (
+     'waiting_complete_details', 'need_tech', 'quote_sent_waiting',
+     'needs_quote', 'quote_change', 'scheduled', 'waiting_customer_response'
+   )
+   LIMIT 1;
+
   IF v_id IS NULL THEN
-    INSERT INTO _results VALUES (6, 'flag admits a verified write', true, 'skipped, no candidate lead');
+    INSERT INTO _results VALUES (6, 'flag admits a verified write', true, 'skipped, no transition-friendly lead');
     RETURN;
   END IF;
 
@@ -308,12 +330,13 @@ BEGIN
     UPDATE public.leads SET status = 'urgent_job' WHERE id = v_id;
   EXCEPTION WHEN OTHERS THEN
     v_blocked := true;
+    v_message := SQLERRM;
   END;
 
   PERFORM set_config('app.urgent_verified', 'off', true);
 
   IF v_blocked THEN
-    RAISE EXCEPTION 'the flag did not admit the write';
+    RAISE EXCEPTION 'the flag did not admit the write: %', left(v_message, 200);
   END IF;
 
   SELECT status INTO v_status FROM public.leads WHERE id = v_id;
@@ -413,6 +436,16 @@ END $$;
 --     very evidence it was asked to protect.
 --
 --     Verified by reading the function source rather than trusting review.
+--
+--     The match is anchored: the column name must be followed immediately by an
+--     equals sign, allowing whitespace. The first version used
+--     ILIKE '%column% =%', which is wrong twice over. The % spans newlines, so a
+--     mention of scheduled_date in the comment "deliberately untouched" paired up
+--     with the equals sign in a completely unrelated SET status = line two
+--     statements below, and the check reported that the approval path rewrites the
+--     schedule when it does not. Anchoring removes the cross-statement pairing,
+--     and an assignment inside a comment would have to be written as
+--     "scheduled_date =" to be caught.
 -- -----------------------------------------------------------------------------
 DO $$
 DECLARE
@@ -421,11 +454,11 @@ DECLARE
 BEGIN
   SELECT prosrc INTO v_src
     FROM pg_proc
-   WHERE oid = 'public.approve_urgent_verification(uuid,text,text)'::regprocedure;
+   WHERE oid = to_regprocedure('public.approve_urgent_verification(uuid,text,text)');
 
   SELECT string_agg(DISTINCT col, ', ') INTO v_bad
     FROM unnest(ARRAY['scheduled_date', 'scheduled_time_start', 'customer_schedule_requirements']) AS col
-   WHERE v_src ILIKE '%' || col || '% =%';
+   WHERE (v_src ~* (col || '\s*='));
 
   IF v_bad IS NOT NULL THEN
     RAISE EXCEPTION 'these schedule columns are assigned: %', v_bad;
@@ -447,11 +480,12 @@ DECLARE
 BEGIN
   SELECT prosrc INTO v_src
     FROM pg_proc
-   WHERE oid = 'public.review_urgent_request(uuid,boolean,text)'::regprocedure;
+   WHERE oid = to_regprocedure('public.review_urgent_request(uuid,boolean,text)');
 
+  -- Anchored, for the same reason as check 8.
   SELECT string_agg(DISTINCT col, ', ') INTO v_bad
     FROM unnest(ARRAY['scheduled_date', 'scheduled_time_start', 'customer_schedule_requirements']) AS col
-   WHERE v_src ILIKE '%' || col || '% =%';
+   WHERE (v_src ~* (col || '\s*='));
 
   IF v_bad IS NOT NULL THEN
     RAISE EXCEPTION 'these schedule columns are assigned: %', v_bad;
@@ -461,48 +495,124 @@ BEGIN
 EXCEPTION WHEN OTHERS THEN
   INSERT INTO _results VALUES (9, 'approval path leaves the schedule alone', false, SQLERRM);
 END $$;
-
-
 -- -----------------------------------------------------------------------------
 -- 10  A cs_admin cannot approve their own request
+--
+--     The first version of this check skipped itself whenever the queue was
+--     empty, which is exactly the state a new deployment is in. A check that
+--     reports "skipped" on an empty queue is a check that never runs before the
+--     feature has been used, which is when it is worth most.
+--
+--     It now creates its own pending request, as a customer_service user against
+--     a lead that user can actually reach, so it is exercised on a fresh
+--     database. Everything is inside the transaction that is rolled back.
 -- -----------------------------------------------------------------------------
 DO $$
 DECLARE
-  v_id    uuid;
-  v_user  uuid;
+  v_cs     uuid;
+  v_reviewer uuid;
+  v_reviewer_is_admin boolean := false;
+  v_lead   uuid;
+  v_req    uuid;
   v_blocked boolean := false;
   v_message text;
 BEGIN
-  SELECT id INTO v_id FROM public.lead_urgent_review_requests LIMIT 1;
-  SELECT user_id INTO v_user FROM public.user_roles WHERE role = 'cs_admin' LIMIT 1;
+  SELECT user_id INTO v_cs
+    FROM public.user_roles WHERE role = 'customer_service' LIMIT 1;
 
-  IF v_id IS NULL OR v_user IS NULL THEN
-    INSERT INTO _results VALUES (10, 'cs_admin cannot self-approve', true, 'skipped, no request or no cs_admin');
+  SELECT user_id INTO v_reviewer
+    FROM public.user_roles WHERE role = 'cs_admin' LIMIT 1;
+
+  IF v_cs IS NULL OR v_reviewer IS NULL THEN
+    INSERT INTO _results VALUES (10, 'cs_admin cannot self-approve', true,
+      format('skipped, cs=%s reviewer=%s', v_cs IS NULL, v_reviewer IS NULL));
     RETURN;
   END IF;
 
-  -- Point the request at the reviewing user, then have them review it.
-  UPDATE public.lead_urgent_review_requests
-     SET requested_by = v_user, status = 'pending'
-   WHERE id = v_id;
+  -- An admin is exempt from the self-approval rule by design, because they can
+  -- already set urgent directly and are the escalation when no second CS Admin is
+  -- free. Pick a reviewer who is not also an admin, or there is nothing to prove.
+  IF public.has_role(v_reviewer, 'admin'::app_role) THEN
+    SELECT ur.user_id INTO v_reviewer
+      FROM public.user_roles ur
+     WHERE ur.role = 'cs_admin'
+       AND NOT public.has_role(ur.user_id, 'admin'::app_role)
+     LIMIT 1;
+  END IF;
 
-  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_user, 'role', 'authenticated')::text, true);
-  PERFORM set_config('request.jwt.claim.sub', v_user::text, true);
+  IF v_reviewer IS NULL THEN
+    INSERT INTO _results VALUES (10, 'cs_admin cannot self-approve', true,
+      'skipped, every cs_admin is also an admin');
+    RETURN;
+  END IF;
+
+  -- A lead the requesting CS user can reach.
+  SELECT l.id INTO v_lead
+    FROM public.leads l
+   WHERE l.status NOT IN ('urgent_job', 'paid', 'cancelled', 'scammed')
+     AND (l.created_by = v_cs OR l.assigned_cs = v_cs)
+   LIMIT 1;
+
+  IF v_lead IS NULL THEN
+    SELECT l.id INTO v_lead
+      FROM public.leads l
+     WHERE l.status NOT IN ('urgent_job', 'paid', 'cancelled', 'scammed')
+     LIMIT 1;
+  END IF;
+
+  IF v_lead IS NULL THEN
+    INSERT INTO _results VALUES (10, 'cs_admin cannot self-approve', true,
+      'skipped, no usable lead');
+    RETURN;
+  END IF;
+
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_cs, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_cs::text, true);
   PERFORM set_config('request.jwt.claim.role', 'authenticated', true);
+
+  -- Raise it as the CS user, so the request is genuine rather than hand-inserted.
   BEGIN
-    PERFORM public.review_urgent_request(v_id, true, 'self review');
+    v_req := public.request_urgent_review(
+      v_lead,
+      '[{"check":"schedule","field":"","severity":"low","problem":"harness","evidence":"","suggestion":"s"}]'::jsonb,
+      'harness fixture', 'gpt-4o-mini', NULL, NULL, NULL);
+  EXCEPTION WHEN OTHERS THEN
+    INSERT INTO _results VALUES (10, 'cs_admin cannot self-approve', false,
+      'could not raise the fixture request: ' || left(SQLERRM, 160));
+    RETURN;
+  END;
+
+  IF v_req IS NULL THEN
+    INSERT INTO _results VALUES (10, 'cs_admin cannot self-approve', false,
+      'request_urgent_review returned no id');
+    RETURN;
+  END IF;
+
+  -- Now hand it to the reviewer so the request appears to be their own.
+  UPDATE public.lead_urgent_review_requests
+     SET requested_by = v_reviewer, status = 'pending'
+   WHERE id = v_req;
+
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_reviewer, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_reviewer::text, true);
+  PERFORM set_config('request.jwt.claim.role', 'authenticated', true);
+
+  BEGIN
+    PERFORM public.review_urgent_request(v_req, true, 'self review');
   EXCEPTION WHEN OTHERS THEN
     v_blocked := true;
     v_message := SQLERRM;
   END;
 
   IF NOT v_blocked THEN
-    RAISE EXCEPTION 'a cs_admin approved their own request';
+    INSERT INTO _results VALUES (10, 'cs_admin cannot self-approve', false,
+      'a cs_admin approved their own request');
+    RETURN;
   END IF;
 
   INSERT INTO _results VALUES (
     10, 'cs_admin cannot self-approve', true,
-    'raised ' || left(coalesce(v_message, ''), 60)
+    'raised ' || left(coalesce(v_message, ''), 70)
   );
 EXCEPTION WHEN OTHERS THEN
   INSERT INTO _results VALUES (10, 'cs_admin cannot self-approve', false, SQLERRM);
@@ -512,35 +622,80 @@ END $$;
 -- -----------------------------------------------------------------------------
 -- 11  customer_service cannot review at all
 --     They raise requests. Only cs_admin and admin clear them.
+--     Raises its own fixture, for the same reason as check 10.
 -- -----------------------------------------------------------------------------
 DO $$
 DECLARE
-  v_id      uuid;
-  v_user    uuid;
+  v_cs   uuid;
+  v_lead uuid;
+  v_req  uuid;
   v_blocked boolean := false;
+  v_message text;
 BEGIN
-  SELECT id INTO v_id FROM public.lead_urgent_review_requests LIMIT 1;
-  SELECT user_id INTO v_user FROM public.user_roles WHERE role = 'customer_service' LIMIT 1;
+  SELECT user_id INTO v_cs
+    FROM public.user_roles WHERE role = 'customer_service' LIMIT 1;
 
-  IF v_id IS NULL OR v_user IS NULL THEN
-    INSERT INTO _results VALUES (11, 'CS cannot review requests', true, 'skipped, no request or no CS user');
+  IF v_cs IS NULL THEN
+    INSERT INTO _results VALUES (11, 'CS cannot review requests', true, 'skipped, no customer_service user');
     RETURN;
   END IF;
 
-  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_user, 'role', 'authenticated')::text, true);
-  PERFORM set_config('request.jwt.claim.sub', v_user::text, true);
+  SELECT l.id INTO v_lead
+    FROM public.leads l
+   WHERE l.status NOT IN ('urgent_job', 'paid', 'cancelled', 'scammed')
+     AND (l.created_by = v_cs OR l.assigned_cs = v_cs)
+   LIMIT 1;
+
+  IF v_lead IS NULL THEN
+    SELECT l.id INTO v_lead
+      FROM public.leads l
+     WHERE l.status NOT IN ('urgent_job', 'paid', 'cancelled', 'scammed')
+     LIMIT 1;
+  END IF;
+
+  IF v_lead IS NULL THEN
+    INSERT INTO _results VALUES (11, 'CS cannot review requests', true, 'skipped, no usable lead');
+    RETURN;
+  END IF;
+
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_cs, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_cs::text, true);
   PERFORM set_config('request.jwt.claim.role', 'authenticated', true);
+
   BEGIN
-    PERFORM public.review_urgent_request(v_id, true, null);
+    v_req := public.request_urgent_review(
+      v_lead,
+      '[]'::jsonb, 'harness fixture', 'gpt-4o-mini', NULL, NULL, NULL);
+  EXCEPTION WHEN OTHERS THEN
+    INSERT INTO _results VALUES (11, 'CS cannot review requests', false,
+      'could not raise the fixture request: ' || left(SQLERRM, 160));
+    RETURN;
+  END IF;
+
+  IF v_req IS NULL THEN
+    INSERT INTO _results VALUES (11, 'CS cannot review requests', false,
+      'request_urgent_review returned no id');
+    RETURN;
+  END IF;
+
+  -- Still acting as the CS user who raised it. They must not be able to clear it.
+  BEGIN
+    PERFORM public.review_urgent_request(v_req, true, null);
   EXCEPTION WHEN OTHERS THEN
     v_blocked := true;
+    v_message := SQLERRM;
   END;
 
   IF NOT v_blocked THEN
-    RAISE EXCEPTION 'customer_service was allowed to review';
+    INSERT INTO _results VALUES (11, 'CS cannot review requests', false,
+      'customer_service was allowed to review');
+    RETURN;
   END IF;
 
-  INSERT INTO _results VALUES (11, 'CS cannot review requests', true, 'raised as expected');
+  INSERT INTO _results VALUES (
+    11, 'CS cannot review requests', true,
+    'raised ' || left(coalesce(v_message, ''), 70)
+  );
 EXCEPTION WHEN OTHERS THEN
   INSERT INTO _results VALUES (11, 'CS cannot review requests', false, SQLERRM);
 END $$;
@@ -746,6 +901,60 @@ BEGIN
   INSERT INTO _results VALUES (14, 'queue published to realtime', true, 'published');
 EXCEPTION WHEN OTHERS THEN
   INSERT INTO _results VALUES (14, 'queue published to realtime', false, SQLERRM);
+END $$;
+
+
+-- -----------------------------------------------------------------------------
+-- 19  The schedule detector is tested against known input
+--
+--     Checks 8 and 9 read function source looking for an assignment to a schedule
+--     column. Both of those checks failed for reasons that had nothing to do with
+--     the schedule: once from a comment being paired with an unrelated equals sign
+--     across statements, and once from operator precedence, where ~* binds tighter
+--     than || so the expression silently became a text concatenation and raised
+--     "argument of WHERE must be type boolean, not type text".
+--
+--     Neither failure would have been caught by the checks themselves. A detector
+--     that cannot detect anything also reports "no problems found", so a broken
+--     detector is indistinguishable from a clean function. This check runs the
+--     detector against input whose answer is known, including a real assignment it
+--     must flag and a comment it must not.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE
+  v_bad text;
+BEGIN
+  -- A real assignment. The detector must flag this.
+  IF (E'UPDATE public.leads\n SET status = ''urgent_job'',\n     scheduled_date = v_d\n WHERE id = p;'
+      ~* ('scheduled_date' || '\s*=')) IS NOT TRUE THEN
+    v_bad := 'missed a genuine scheduled_date assignment';
+  END IF;
+
+  -- Assignment with padding before the equals sign.
+  IF (E'UPDATE public.leads\n SET scheduled_date    = v_d\n WHERE id = p;'
+      ~* ('scheduled_date' || '\s*=')) IS NOT TRUE THEN
+    v_bad := 'missed a padded scheduled_date assignment';
+  END IF;
+
+  -- A comment naming the column, next to an unrelated equals sign. Must not flag.
+  IF (E'-- status only. scheduled_date, scheduled_time_start and\n-- customer_schedule_requirements are deliberately untouched.\nUPDATE public.leads\n SET status = ''urgent_job'';'
+      ~* ('scheduled_date' || '\s*=')) IS NOT FALSE THEN
+    v_bad := 'false positive on a comment mentioning scheduled_date';
+  END IF;
+
+  -- A different column being assigned. Must not flag.
+  IF (E'UPDATE public.leads\n SET scheduled_time_start = v_t\n WHERE id = p;'
+      ~* ('scheduled_date' || '\s*=')) IS NOT FALSE THEN
+    v_bad := 'false positive on an unrelated column';
+  END IF;
+
+  IF v_bad IS NOT NULL THEN
+    RAISE EXCEPTION '%', v_bad;
+  END IF;
+
+  INSERT INTO _results VALUES (19, 'schedule detector tested on known input', true, 'flags assignments, ignores comments');
+EXCEPTION WHEN OTHERS THEN
+  INSERT INTO _results VALUES (19, 'schedule detector tested on known input', false, SQLERRM);
 END $$;
 
 
