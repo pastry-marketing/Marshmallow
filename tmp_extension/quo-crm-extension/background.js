@@ -517,10 +517,15 @@ async function createLead() {
 
   const jobId = generateJobId();
 
-  // Set when the draft asked for urgent and the insert was therefore written in
-  // its ordinary status. Returned to the caller so the side panel can run the
-  // check against the new lead instead of quietly losing the request.
+  // True when urgent was asked for and was not applied on insert. The side panel
+  // reads this to say what is outstanding rather than reporting a plain success
+  // for a request that did not happen.
   let urgentAfterInsert = false;
+  // Carried back to the caller so the panel can say whether the check that follows
+  // is advisory or enforcing. Kept in step with urgentCheckModeForRole() in
+  // src/lib/urgent-verification.ts and with the bypass list in
+  // enforce_urgent_gate().
+  let urgentCheckMode = "advisory";
 
   const insertData = {
     job_id: jobId,
@@ -538,22 +543,27 @@ async function createLead() {
   };
 
   const leadStatus = normalizeLeadStatus(draft.leadStatus);
-  if (leadStatus !== "default") {
-    // A new lead is never inserted as urgent_job.
-    //
-    // The database rejects that insert for a customer_service user, and it should:
-    // the AI check reads the stored record and looks it up by id, so there is
-    // nothing to check at insert time. Create it in its normal status here, then
-    // let the caller run the check against the lead that now exists.
-    //
-    // Sending the status through anyway would only turn a clear message into a
-    // raw database error surfaced inside the side panel.
-    if (leadStatus === "urgent_job") {
-      urgentAfterInsert = true;
-    } else {
-      insertData.status = leadStatus;
+if (leadStatus !== "default") {
+      // A new lead is never inserted as urgent_job, whatever the role.
+      //
+      // The check reads the stored record and looks it up by id, so there is
+      // nothing to check at insert time. Admin, processor and cs_admin are
+      // permitted by the database to insert urgent_job directly, but they get the
+      // same comparison and the same suggested fixes as everyone else, so the
+      // status is withheld here and returned to the caller as work still to do.
+      //
+      // Sending the status through anyway would turn a clear message into a raw
+      // database error surfaced inside the side panel.
+      if (leadStatus === "urgent_job") {
+        urgentAfterInsert = true;
+        // customer_service is the only role the check binds. Everything else sees
+        // it as advice.
+        const profile = await getUserProfile(user.id);
+        urgentCheckMode = ["admin", "processor", "cs_admin"].includes(profile.role) ? "advisory" : "enforced";
+      } else {
+        insertData.status = leadStatus;
+      }
     }
-  }
 
   const leadTerms = normalizeLeadTerms(draft.terms);
   if (leadTerms) {
@@ -625,9 +635,11 @@ async function createLead() {
       leadUrl,
       lead: data,
       // True when urgent was asked for and was not applied on insert. The side
-      // panel reads this to open the AI check against the new lead rather than
-      // reporting a plain success for a request that did not happen.
-      urgentCheckRequired: urgentAfterInsert
+      // True when urgent was asked for and was not applied on insert. The side
+      // panel reads this to say what is outstanding rather than reporting a plain
+      // success for a request that did not happen.
+      urgentCheckRequired: urgentAfterInsert,
+      urgentCheckMode: urgentCheckMode
     }
   };
 }

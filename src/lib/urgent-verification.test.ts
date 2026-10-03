@@ -11,6 +11,7 @@ import {
   bypassesUrgentGate,
   runUrgentVerification,
   submitUrgentReviewRequest,
+  urgentCheckModeForRole,
 } from "./urgent-verification";
 
 const invoke = () => vi.mocked(supabase.functions.invoke);
@@ -18,6 +19,45 @@ const rpc = () => vi.mocked(supabase.rpc);
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe("urgentCheckModeForRole", () => {
+  // The whole point of the advisory split is that everybody who can set urgent_job
+  // sees the comparison, and only customer_service is bound by it. Getting this
+  // backwards either locks admins out of urgent dispatch or silently exempts CS,
+  // so it is pinned per role rather than inferred.
+  it("binds customer_service", () => {
+    expect(urgentCheckModeForRole("customer_service")).toBe("enforced");
+  });
+
+  it("treats the operational roles as advisory", () => {
+    expect(urgentCheckModeForRole("admin")).toBe("advisory");
+    expect(urgentCheckModeForRole("processor")).toBe("advisory");
+    expect(urgentCheckModeForRole("cs_admin")).toBe("advisory");
+  });
+
+  it("treats read-only roles as enforced rather than exempt", () => {
+    // opr and opr_admin cannot set urgent_job at all, so the mode is academic.
+    // What matters is that they are not given advisory, which would imply they
+    // have a choice.
+    expect(urgentCheckModeForRole("opr")).toBe("enforced");
+    expect(urgentCheckModeForRole("opr_admin")).toBe("enforced");
+  });
+
+  it("falls back to enforced for an unknown or absent role", () => {
+    // The stricter default. An unrecognised role must not be handed the advisory
+    // path, which is the one that lets someone proceed over findings.
+    expect(urgentCheckModeForRole(null)).toBe("enforced");
+    expect(urgentCheckModeForRole(undefined)).toBe("enforced");
+    expect(urgentCheckModeForRole("")).toBe("enforced");
+    expect(urgentCheckModeForRole("superuser")).toBe("enforced");
+  });
+
+  it("agrees with bypassesUrgentGate for every role", () => {
+    for (const role of ["admin", "processor", "cs_admin", "customer_service", "opr", null]) {
+      expect(urgentCheckModeForRole(role) === "advisory").toBe(bypassesUrgentGate(role));
+    }
+  });
 });
 
 describe("bypassesUrgentGate", () => {
@@ -202,5 +242,24 @@ describe("apply paths", () => {
     rpc().mockResolvedValue({ data: null, error: { message: "permission denied" } } as never);
 
     await expect(applyUrgentVerification("lead-4", "")).rejects.toThrow("permission denied");
+  });
+
+  it("keeps a summary on the override path so no clean check is implied", async () => {
+    rpc().mockResolvedValue({ data: null, error: null } as never);
+
+    // approve_urgent_verification falls back to 'All verification checks passed'
+    // when it receives nothing. The dialog passes an explicit summary on the
+    // override path precisely so proceeding over findings does not write a clean
+    // check into the activity log.
+    await applyUrgentVerification(
+      "lead-5",
+      "Proceeded over 2 findings: schedule is narrower than the customer agreed",
+    );
+
+    expect(rpc()).toHaveBeenCalledWith("approve_urgent_verification", {
+      p_lead_id: "lead-5",
+      p_ai_summary: "Proceeded over 2 findings: schedule is narrower than the customer agreed",
+      p_ai_model: "gpt-4o-mini",
+    });
   });
 });

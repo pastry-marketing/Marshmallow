@@ -34,7 +34,7 @@ import {
 import StatusBadge from "./StatusBadge";
 import LeadStatusHistoryDialog from "./LeadStatusHistoryDialog";
 import UrgentAICheckDialog from "./UrgentAICheckDialog";
-import { bypassesUrgentGate } from "@/lib/urgent-verification";
+import { urgentCheckModeForRole } from "@/lib/urgent-verification";
 import LeadUpdatesSection from "./LeadUpdatesSection";
 import PaymentDialog from "./PaymentDialog";
 import CopyLeadButton from "./CopyLeadButton";
@@ -308,17 +308,26 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
       }
       return;
     }
-    // Urgent is the one status a customer_service user cannot simply set. The
-    // dialog compares the record against the conversation first.
-    //
-    // Form state is deliberately left alone when it opens. If it were set here,
-    // the lead would look urgent in the panel while the database still had not
-    // accepted it, and the next save would try to write that unaccepted status
-    // and be refused by the gate.
-    if (key === "status" && value === "urgent_job" && !bypassesUrgentGate(role)) {
-      setUrgentCheckOpen(true);
-      return;
-    }
+    // Every role that can set urgent_job gets the dialog.
+//
+// It used to be skipped for admin, processor and cs_admin. That looked
+// reasonable, since the database exempts them anyway, but it meant 23% of urgent
+// work reached dispatch with no comparison against the conversation at all, and
+// the roles exempted were the ones most likely to be working from a half-filled
+// record and acting on reflex.
+//
+// So the dialog always opens now. For those three it is advisory: the same
+// findings, framed as worth a look, and they decide. For customer_service it
+// stays enforced.
+//
+// The database still exempts them. That is the point of the split. The front end
+// decides what someone is shown, the trigger decides what they are permitted to
+// do, and a dispatch workflow or a direct API call can never be blocked on a gate
+// that urgent work cannot wait for.
+if (key === "status" && value === "urgent_job") {
+  setUrgentCheckOpen(true);
+  return;
+}
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
@@ -1370,6 +1379,7 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
             customerName={lead?.customer_name}
             previousStatus={lead?.status}
             onProceed={handleUrgentProceed}
+            mode={urgentCheckModeForRole(role)}
           />
       </motion.div>
     </div>
