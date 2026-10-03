@@ -458,7 +458,7 @@ BEGIN
 
   SELECT string_agg(DISTINCT col, ', ') INTO v_bad
     FROM unnest(ARRAY['scheduled_date', 'scheduled_time_start', 'customer_schedule_requirements']) AS col
-   WHERE v_src ~* col || '\s*=';
+   WHERE (v_src ~* (col || '\s*='));
 
   IF v_bad IS NOT NULL THEN
     RAISE EXCEPTION 'these schedule columns are assigned: %', v_bad;
@@ -485,7 +485,7 @@ BEGIN
   -- Anchored, for the same reason as check 8.
   SELECT string_agg(DISTINCT col, ', ') INTO v_bad
     FROM unnest(ARRAY['scheduled_date', 'scheduled_time_start', 'customer_schedule_requirements']) AS col
-   WHERE v_src ~* col || '\s*=';
+   WHERE (v_src ~* (col || '\s*='));
 
   IF v_bad IS NOT NULL THEN
     RAISE EXCEPTION 'these schedule columns are assigned: %', v_bad;
@@ -780,6 +780,60 @@ BEGIN
   INSERT INTO _results VALUES (14, 'queue published to realtime', true, 'published');
 EXCEPTION WHEN OTHERS THEN
   INSERT INTO _results VALUES (14, 'queue published to realtime', false, SQLERRM);
+END $$;
+
+
+-- -----------------------------------------------------------------------------
+-- 19  The schedule detector is tested against known input
+--
+--     Checks 8 and 9 read function source looking for an assignment to a schedule
+--     column. Both of those checks failed for reasons that had nothing to do with
+--     the schedule: once from a comment being paired with an unrelated equals sign
+--     across statements, and once from operator precedence, where ~* binds tighter
+--     than || so the expression silently became a text concatenation and raised
+--     "argument of WHERE must be type boolean, not type text".
+--
+--     Neither failure would have been caught by the checks themselves. A detector
+--     that cannot detect anything also reports "no problems found", so a broken
+--     detector is indistinguishable from a clean function. This check runs the
+--     detector against input whose answer is known, including a real assignment it
+--     must flag and a comment it must not.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE
+  v_bad text;
+BEGIN
+  -- A real assignment. The detector must flag this.
+  IF (E'UPDATE public.leads\n SET status = ''urgent_job'',\n     scheduled_date = v_d\n WHERE id = p;'
+      ~* ('scheduled_date' || '\s*=')) IS NOT TRUE THEN
+    v_bad := 'missed a genuine scheduled_date assignment';
+  END IF;
+
+  -- Assignment with padding before the equals sign.
+  IF (E'UPDATE public.leads\n SET scheduled_date    = v_d\n WHERE id = p;'
+      ~* ('scheduled_date' || '\s*=')) IS NOT TRUE THEN
+    v_bad := 'missed a padded scheduled_date assignment';
+  END IF;
+
+  -- A comment naming the column, next to an unrelated equals sign. Must not flag.
+  IF (E'-- status only. scheduled_date, scheduled_time_start and\n-- customer_schedule_requirements are deliberately untouched.\nUPDATE public.leads\n SET status = ''urgent_job'';'
+      ~* ('scheduled_date' || '\s*=')) IS NOT FALSE THEN
+    v_bad := 'false positive on a comment mentioning scheduled_date';
+  END IF;
+
+  -- A different column being assigned. Must not flag.
+  IF (E'UPDATE public.leads\n SET scheduled_time_start = v_t\n WHERE id = p;'
+      ~* ('scheduled_date' || '\s*=')) IS NOT FALSE THEN
+    v_bad := 'false positive on an unrelated column';
+  END IF;
+
+  IF v_bad IS NOT NULL THEN
+    RAISE EXCEPTION '%', v_bad;
+  END IF;
+
+  INSERT INTO _results VALUES (19, 'schedule detector tested on known input', true, 'flags assignments, ignores comments');
+EXCEPTION WHEN OTHERS THEN
+  INSERT INTO _results VALUES (19, 'schedule detector tested on known input', false, SQLERRM);
 END $$;
 
 
