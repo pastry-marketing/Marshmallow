@@ -14,14 +14,14 @@
 
 <img src="https://img.shields.io/badge/Supabase-Postgres%20%2B%20Auth%20%2B%20RLS-3ECF8E?style=for-the-badge&logo=supabase&logoColor=white" alt="Supabase"/>
 <img src="https://img.shields.io/badge/TanStack_Query-v5-FF415C?style=for-the-badge&logo=tanstack&logoColor=white" alt="TanStack Query"/>
-<img src="https://img.shields.io/badge/Edge_Functions-10-8B5CF?style=for-the-badge&logo=supabase&logoColor=white" alt="Edge Functions"/>
+<img src="https://img.shields.io/badge/Edge_Functions-11-8B5CF?style=for-the-badge&logo=supabase&logoColor=white" alt="Edge Functions"/>
 <img src="https://img.shields.io/badge/Role_Based_Access-6_roles-F59E0B?style=for-the-badge&logo=lucide&logoColor=black" alt="RBAC"/>
 
 <br/>
 
-<img src="https://img.shields.io/badge/migrations-156-2563EB?style=for-the-badge&logo=supabase&logoColor=white" alt="156 migrations"/>
-<img src="https://img.shields.io/badge/unit_tests-23_files%20%C2%B7%20203_passing-16A34A?style=for-the-badge&logo=vitest&logoColor=white" alt="203 tests passing"/>
-<img src="https://img.shields.io/badge/db_harnesses-5_SQL-CFA874?style=for-the-badge&logo=postgresql&logoColor=white" alt="SQL harnesses"/>
+<img src="https://img.shields.io/badge/migrations-168-2563EB?style=for-the-badge&logo=supabase&logoColor=white" alt="156 migrations"/>
+<img src="https://img.shields.io/badge/unit_tests-27_files%20%C2%B7%20306_passing-16A34A?style=for-the-badge&logo=vitest&logoColor=white" alt="306 tests passing"/>
+<img src="https://img.shields.io/badge/db_harnesses-7_SQL-CFA874?style=for-the-badge&logo=postgresql&logoColor=white" alt="SQL harnesses"/>
 <img src="https://img.shields.io/badge/lead_statuses-25-9333EA?style=for-the-badge&logo=postgresql&logoColor=white" alt="25 lead statuses"/>
 
 </div>
@@ -224,7 +224,7 @@ against live data before and after the change.
 
 ## Edge Functions
 
-10 Deno functions under `supabase/functions/`:
+11 Deno functions under `supabase/functions/`:
 
 | Function | Purpose |
 |---|---|
@@ -238,6 +238,55 @@ against live data before and after the change.
 | `generate-nearby-areas` | Geocodes an address and returns top nearby populated places |
 | `google-sheets-sync` | Server-side Sheets push helper |
 | `sync-us-places` | Syncs Census places and ACS population into `us_places` |
+| `check-urgent-lead` | Compares a lead against the customer's conversation before it goes urgent (`gpt-4o-mini`) |
+
+### `check-urgent-lead`
+
+Reads the **stored** lead and the matching Quo conversation, then reports only
+the things that contradict each other. The client sends a lead id and nothing
+else — accepting the browser's copy of the record would mean verifying whatever
+was claimed rather than what was saved.
+
+Three outcomes, and the difference matters:
+
+| Outcome | Meaning | Effect |
+|---|---|---|
+| `checked`, no issues | Nothing contradicts the conversation | Proceeds. No second click. |
+| `checked`, issues | Genuine disagreements, each with the customer's own words | Goes to a CS Admin |
+| `unavailable` | Nothing could be compared (no conversation, no text, timeout) | Needs a deliberate acknowledgement |
+
+`unavailable` is deliberately not one of the other two. It applies to **44% of
+leads**, which have no matched conversation. Reporting it as a finding would send
+nearly half of all urgent work to a human queue permanently, and a queue that is
+mostly noise stops being read. Reporting it as clean would claim a check that
+never ran. It gets its own state, and the activity log records it as
+`urgent_unverified_acknowledged` — never as a passed check.
+
+The conversation is looked up by `quo_conversations.linked_lead_id` first, then
+by phone. `linked_lead_id` is currently `NULL` on all ~18,400 conversations, so
+phone is what actually matches today, and it needs normalising: leads store
+`(904) 844-5483` while conversations store `+12056010689`.
+
+**The result is advisory.** It sets nothing. A clean result is a suggestion that
+nothing contradicts the record; the CS member still submits, and issues still go
+to a CS Admin. The database trigger is what enforces the rule, which is what
+keeps the worst outcome of a wrong or manipulated result at "misleading
+suggestion" rather than "unauthorised status change".
+
+Transcript text is untrusted input — a customer can type anything, including
+something shaped like an instruction to the model. It is fenced, labelled as
+data, and the checks are about comparing a record to a conversation, so an
+injected instruction can at worst produce a wrong opinion about that comparison.
+
+**Required secret:** `OPENAI_API_KEY` (Edge Functions → Secrets). Set it as a
+project secret, never in a `VITE_` variable.
+
+> The checks are written against the shape the data actually has, measured across
+> the 133 existing urgent leads: `scheduled_date` is null in 95%, `terms` is null
+> in 58% (and all of those still carry quote text), and the schedule lives in
+> `customer_schedule_requirements` free text in 93%. The literal checks "if
+> `scheduled_date` conflicts" and "`terms` must be quoted or free_estimate" would
+> have been near-vacuous on 95% of leads and wrong on 58% of them.
 
 ---
 
@@ -337,10 +386,10 @@ npm run sb:link
 npm test
 ```
 
-**23 test files, 203 tests passing.** Vitest with jsdom, tests co-located beside source
+**27 test files, 306 tests passing.** Vitest with jsdom, tests co-located beside source
 as `*.test.ts`. Supabase is mocked rather than hitting a test database.
 
-Five hand-run SQL harnesses in `supabase/tests/` cover what unit tests cannot — RLS and
+Seven hand-run SQL harnesses in `supabase/tests/` cover what unit tests cannot — RLS and
 role gates against real data:
 
 | Harness | Covers |
@@ -350,12 +399,27 @@ role gates against real data:
 | `40_leads_rls_baseline.sql` | Per-role visible-lead matrices, diffed before/after policy changes |
 | `50_tech_performance.sql` | Technician performance RPC and its admin gate |
 | `60_optimized_areas.sql` | Optimized areas, area performance, location parsing |
+| `70_google_sheets_sync_health.sql` | Sheets sync health, error pruning, lag watchdog |
+| `80_urgent_review_gate.sql` | Urgent gate behaviour: blocked and admitted transitions, self-approval, schedule preservation |
 
 These are **not** wired into any runner — run them in the Supabase SQL editor and read
 the `PASS`/`FAIL` rows.
 
 > When changing a `SELECT` policy, run `40_leads_rls_baseline.sql` before **and** after,
 > and diff the two matrices.
+
+### Harnesses assert behaviour, not existence
+
+`80_urgent_review_gate.sql` is the clearest example of why. The first version of the
+urgent gate had its condition inverted: it fired when status did **not** change, so every
+real transition into urgent passed straight through while unrelated edits to
+already-urgent leads were rejected instead.
+
+It compiled. It applied cleanly. An existence check — "is the trigger there?" — would
+have passed on it. Only executing a real transition and reading what the database
+actually did catches that class of bug, so the behavioural checks there perform real
+updates and assert on the outcome. Checks 8 and 9 read the function source and fail if
+a schedule column is ever assigned.
 
 ---
 
@@ -376,6 +440,30 @@ Never write `UPDATE public.leads` in a migration.
 > Verify database changes by **executing the query text from the file itself**, not a
 > retyped copy. A retype can silently differ from what ships — that gap has hidden two
 > real defects in this project.
+
+### Bringing up the urgent AI check
+
+Four steps, in this order. The first two are easy to miss and the feature is inert
+without both.
+
+1. **Apply the migration** — `20261104000000_urgent_review_gate.sql` in the Supabase SQL
+   editor. Without it the trigger does not exist and a `customer_service` user can still
+   set `urgent_job` directly. Nothing is enforced by the dialog alone.
+2. **Set the secret** — `OPENAI_API_KEY` under Edge Functions → Secrets. Use a
+   **Secret API key** nowhere; the Edge Function secret is the only place this belongs.
+3. **Deploy the function** — `supabase/functions deploy check-urgent-lead --project-ref
+   <ref>`. The web dashboard editor cannot resolve `../_shared/quo-ai.ts`, so either
+   deploy via CLI or inline those three helpers.
+4. **Run the harness** — `80_urgent_review_gate.sql`, and expect every row `PASS`.
+
+Roles: `admin`, `processor` and `cs_admin` pass through the check without seeing the
+dialog. `customer_service` is gated, and a `cs_admin` cannot approve a request they
+raised themselves.
+
+Urgent is dispatch priority and **never changes the agreed schedule**. Nothing in
+`approve_urgent_verification`, `approve_urgent_acknowledgement` or
+`review_urgent_request` writes `scheduled_date`, `scheduled_time_start` or
+`customer_schedule_requirements`; harness checks 8 and 9 fail if that ever changes.
 
 ---
 
@@ -408,9 +496,9 @@ src/
 └── index.css          Tailwind layers and theme tokens
 
 supabase/
-├── functions/         10 Deno Edge Functions
-├── migrations/        156 SQL migrations
-└── tests/             5 hand-run RLS harnesses
+├── functions/         11 Deno Edge Functions (plus _shared/)
+├── migrations/        168 SQL migrations
+└── tests/             7 hand-run RLS harnesses
 ```
 
 ---
