@@ -8,6 +8,7 @@ import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
+import { TECHNICIANS_ROOT_KEY } from "@/lib/technicians";
 import {
   fetchPendingChangeSummary,
   requestTechnicianChange,
@@ -82,7 +83,12 @@ export function GoodTechFlagCell({ tech }: { tech: TechnicianFlagTarget }) {
         .eq("id", tech.id);
       if (error) throw new Error(error.message);
     },
-    onSuccess: () => toast.success(isGoodTech ? "Good Tech cleared" : "Marked as Good Tech"),
+    onSuccess: () => {
+      // The directory list holds a 30 second staleTime, so an admin writing
+      // the flag here would not see it apply without this.
+      void queryClient.invalidateQueries({ queryKey: TECHNICIANS_ROOT_KEY });
+      toast.success(isGoodTech ? "Good Tech cleared" : "Marked as Good Tech");
+    },
     onError: (err: Error) => toast.error("Could not update", { description: err.message }),
     onSettled: () => setBusy(false),
   });
@@ -202,7 +208,10 @@ export function ActiveFlagCell({ tech }: { tech: TechnicianFlagTarget }) {
         .eq("id", tech.id);
       if (error) throw new Error(error.message);
     },
-    onSuccess: () => toast.success(isActive ? "Technician deactivated" : "Technician activated"),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: TECHNICIANS_ROOT_KEY });
+      toast.success(isActive ? "Technician deactivated" : "Technician activated");
+    },
     onError: (err: Error) => toast.error("Could not update", { description: err.message }),
     onSettled: () => setBusy(false),
   });
