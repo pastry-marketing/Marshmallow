@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/contexts/AuthContext";
+import { TECHNICIANS_ROOT_KEY } from "@/lib/technicians";
 import {
   canReviewTechnicianChanges,
   describeChangeType,
@@ -64,6 +65,12 @@ export default function TechnicianChangeApprovals() {
     },
     onSuccess: (message) => {
       void queryClient.invalidateQueries({ queryKey: QUERY_KEY });
+      // Approval writes the technicians row, so the directory list is now
+      // stale. Its query holds a 30 second staleTime, so without this an admin
+      // who approves and navigates straight to Technicians sees the old flag
+      // and it looks like the approval did not take, even though it did.
+      void queryClient.invalidateQueries({ queryKey: TECHNICIANS_ROOT_KEY });
+      void queryClient.invalidateQueries({ queryKey: ["tech-pending-changes"] });
       setNotes((prev) => {
         const next = { ...prev };
         Object.keys(next).forEach((k) => delete next[k]);

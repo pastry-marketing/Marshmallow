@@ -65,6 +65,7 @@ export function TechnicianDialog({ open, onOpenChange, technician, onSaved }: Pr
 
   // A regular opr is locked to their own code; opr_admin / admin pick one.
   const myOprCode = profile?.opr_code ?? "";
+  const canSetGoodTech = role === "admin";
   const canChooseOprCode = mustChooseOprCode(role);
 
   useEffect(() => {
@@ -160,9 +161,13 @@ export function TechnicianDialog({ open, onOpenChange, technician, onSaved }: Pr
         chat_link: chatLink.trim() || null,
         notes: notes.trim() || null,
         opr_code: cleanOprCode || null,
-        is_good_tech: isGoodTech,
         latitude,
         longitude,
+        // is_good_tech is admin-only now. Sending it from anyone else would be
+        // rejected by the trigger on technicians, which would take the whole
+        // save down with it: editing a note would fail because an untouched
+        // flag was carried along. Omitting the key leaves the column alone.
+        ...(canSetGoodTech ? { is_good_tech: isGoodTech } : {}),
       };
 
       const SELECT = "id, name, area, service, notes, chat_link, phone_number, latitude, longitude, code, opr_code, is_active, created_by, created_at, updated_at, is_good_tech";
@@ -221,11 +226,16 @@ export function TechnicianDialog({ open, onOpenChange, technician, onSaved }: Pr
               <Label htmlFor="tech-name">Technician Name <span className="text-destructive">*</span></Label>
               <button
                 type="button"
-                onClick={() => setIsGoodTech(!isGoodTech)}
-                className={`flex items-center gap-1.5 text-[11px] font-semibold transition-colors ${
+                onClick={() => canSetGoodTech && setIsGoodTech(!isGoodTech)}
+                disabled={!canSetGoodTech}
+                className={`flex items-center gap-1.5 text-[11px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
                   isGoodTech ? "text-amber-500 hover:text-amber-600" : "text-muted-foreground hover:text-foreground"
                 }`}
-                title="Mark as Good Tech"
+                title={
+                  canSetGoodTech
+                    ? "Mark as Good Tech"
+                    : "Only an admin can change Good Tech. Request it from the Technicians list."
+                }
               >
                 <Star
                   className={`h-4 w-4 ${isGoodTech ? "fill-amber-500 text-amber-500" : ""}`}
