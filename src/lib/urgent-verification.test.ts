@@ -12,6 +12,8 @@ import {
   runUrgentVerification,
   submitUrgentReviewRequest,
   showsUrgentCheck,
+  showsUrgentCheckRole,
+  URGENT_CHECK_ENABLED,
 } from "./urgent-verification";
 
 const invoke = () => vi.mocked(supabase.functions.invoke);
@@ -22,41 +24,53 @@ beforeEach(() => {
 });
 
 describe("showsUrgentCheck", () => {
+  it("runs for customer service, admin, and CS admin only", () => {
+    expect(URGENT_CHECK_ENABLED).toBe(true);
+    expect(showsUrgentCheck("customer_service")).toBe(true);
+    expect(showsUrgentCheck("admin")).toBe(true);
+    expect(showsUrgentCheck("cs_admin")).toBe(true);
+    expect(showsUrgentCheck("processor")).toBe(false);
+    expect(showsUrgentCheck("opr")).toBe(false);
+    expect(showsUrgentCheck("opr_admin")).toBe(false);
+  });
+});
+
+describe("showsUrgentCheckRole", () => {
   // Who is asked is separate from what the database permits. processor sets
   // urgent directly and is never asked; customer_service, admin and cs_admin all
   // see the same advisory check and nobody is queued for review.
   it("asks customer_service, admin and cs_admin", () => {
-    expect(showsUrgentCheck("customer_service")).toBe(true);
-    expect(showsUrgentCheck("admin")).toBe(true);
-    expect(showsUrgentCheck("cs_admin")).toBe(true);
+    expect(showsUrgentCheckRole("customer_service")).toBe(true);
+    expect(showsUrgentCheckRole("admin")).toBe(true);
+    expect(showsUrgentCheckRole("cs_admin")).toBe(true);
   });
 
   it("does not ask processor", () => {
-    expect(showsUrgentCheck("processor")).toBe(false);
+    expect(showsUrgentCheckRole("processor")).toBe(false);
   });
 
   it("does not ask the read-only roles", () => {
-    expect(showsUrgentCheck("opr")).toBe(false);
-    expect(showsUrgentCheck("opr_admin")).toBe(false);
+    expect(showsUrgentCheckRole("opr")).toBe(false);
+    expect(showsUrgentCheckRole("opr_admin")).toBe(false);
   });
 
   it("does not ask an unknown or absent role", () => {
-    expect(showsUrgentCheck(null)).toBe(false);
-    expect(showsUrgentCheck(undefined)).toBe(false);
-    expect(showsUrgentCheck("")).toBe(false);
-    expect(showsUrgentCheck("superuser")).toBe(false);
+    expect(showsUrgentCheckRole(null)).toBe(false);
+    expect(showsUrgentCheckRole(undefined)).toBe(false);
+    expect(showsUrgentCheckRole("")).toBe(false);
+    expect(showsUrgentCheckRole("superuser")).toBe(false);
   });
 
   it("keeps the asked list distinct from the database's exempt list", () => {
     // processor is exempt in the database and never asked.
     expect(bypassesUrgentGate("processor")).toBe(true);
-    expect(showsUrgentCheck("processor")).toBe(false);
+    expect(showsUrgentCheckRole("processor")).toBe(false);
 
     // CS, Admin, and CS Admin are gated in the database and asked.
     expect(bypassesUrgentGate("customer_service")).toBe(false);
     expect(bypassesUrgentGate("admin")).toBe(false);
     expect(bypassesUrgentGate("cs_admin")).toBe(false);
-    expect(showsUrgentCheck("customer_service")).toBe(true);
+    expect(showsUrgentCheckRole("customer_service")).toBe(true);
   });
 });
 

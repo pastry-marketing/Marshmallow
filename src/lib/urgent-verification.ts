@@ -52,9 +52,23 @@ export function bypassesUrgentGate(role: string | null | undefined): boolean {
   return role === "processor";
 }
 
-export function showsUrgentCheck(role: string | null | undefined): boolean {
+/** Enables the AI review for the roles that can move leads to Urgent. */
+export const URGENT_CHECK_ENABLED = true;
+
+/**
+ * Roles the check is shown to when it is enabled.
+ *
+ * Who is asked is separate from what the database permits: processor sets
+ * urgent directly and is never asked. Kept separate so role access can be
+ * tested independently from the feature switch.
+ */
+export function showsUrgentCheckRole(role: string | null | undefined): boolean {
   const r = role ?? "";
   return r === "customer_service" || r === "admin" || r === "cs_admin";
+}
+
+export function showsUrgentCheck(role: string | null | undefined): boolean {
+  return URGENT_CHECK_ENABLED && showsUrgentCheckRole(role);
 }
 
 export type UrgentIssue = {
