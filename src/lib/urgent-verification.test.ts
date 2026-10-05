@@ -48,14 +48,14 @@ describe("showsUrgentCheck", () => {
   });
 
   it("keeps the asked list distinct from the database's exempt list", () => {
-    // processor is exempt in the database and never asked. If these two lists
-    // were collapsed into one, processor would either start seeing the dialog or
-    // lose the ability to set urgent directly. They are meant to disagree here.
+    // processor is exempt in the database and never asked.
     expect(bypassesUrgentGate("processor")).toBe(true);
     expect(showsUrgentCheck("processor")).toBe(false);
 
-    // customer_service is the mirror image: gated in the database, and asked.
+    // CS, Admin, and CS Admin are gated in the database and asked.
     expect(bypassesUrgentGate("customer_service")).toBe(false);
+    expect(bypassesUrgentGate("admin")).toBe(false);
+    expect(bypassesUrgentGate("cs_admin")).toBe(false);
     expect(showsUrgentCheck("customer_service")).toBe(true);
   });
 });
@@ -65,14 +65,14 @@ describe("bypassesUrgentGate", () => {
   // 20261104000000_urgent_review_gate.sql. The list exists to spare a user a
   // pointless dialog; the trigger is what actually enforces the rule, so a
   // mismatch here is a UX bug rather than a security hole.
-  it("lets the operational roles through", () => {
-    expect(bypassesUrgentGate("admin")).toBe(true);
+  it("lets only Processor straight through", () => {
     expect(bypassesUrgentGate("processor")).toBe(true);
-    expect(bypassesUrgentGate("cs_admin")).toBe(true);
   });
 
-  it("holds customer_service and the read-only roles back", () => {
+  it("holds customer_service, admin, cs_admin, and read-only roles back", () => {
     expect(bypassesUrgentGate("customer_service")).toBe(false);
+    expect(bypassesUrgentGate("admin")).toBe(false);
+    expect(bypassesUrgentGate("cs_admin")).toBe(false);
     expect(bypassesUrgentGate("opr")).toBe(false);
     expect(bypassesUrgentGate("opr_admin")).toBe(false);
   });

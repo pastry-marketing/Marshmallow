@@ -65,6 +65,8 @@ import {
   reviewCancellationRequest,
 } from "@/lib/cancellation-requests";
 import NumberNameCombobox from "@/components/leads/NumberNameCombobox";
+import UrgentAICheckDialog from "@/components/leads/UrgentAICheckDialog";
+import { showsUrgentCheck } from "@/lib/urgent-verification";
 
 const PHOTO_PREVIEW_LIMIT = 1;
 
@@ -147,6 +149,7 @@ export default function LeadDetailPage() {
   const [cancelRequestLoading, setCancelRequestLoading] = useState(false);
   const [adminCancelOpen, setAdminCancelOpen] = useState(false);
   const [adminCancelLoading, setAdminCancelLoading] = useState(false);
+  const [urgentCheckOpen, setUrgentCheckOpen] = useState(false);
   const [cancelReviewLoading, setCancelReviewLoading] = useState(false);
   const [pendingCancellationRequest, setPendingCancellationRequest] = useState<LeadCancellationRequest | null>(null);
 
@@ -439,6 +442,11 @@ export default function LeadDetailPage() {
   }, [leadId]);
 
   const update = (key: string, value: string) => {
+    if (key === "status" && value === "urgent_job" && leadId && showsUrgentCheck(role)) {
+      setUrgentCheckOpen(true);
+      return;
+    }
+
     if (key === "customer_phone" || key === "customer_landline" || key === "tech_number") {
       setForm((prev) => ({ ...prev, [key]: formatUSPhone(value) }));
       return;
@@ -658,7 +666,12 @@ export default function LeadDetailPage() {
       role === "customer_service" &&
       form.status === "pending_to_send" &&
       (isNew || originalLead?.status !== "pending_to_send");
-    const savedStatus: LeadStatus = quoteApprovalRequested
+    const urgentVerificationRequested =
+      form.status === "urgent_job" && showsUrgentCheck(role) &&
+      (isNew || originalLead?.status !== "urgent_job");
+    const savedStatus: LeadStatus = urgentVerificationRequested
+      ? (isNew ? "waiting_complete_details" : originalLead?.status ?? "waiting_complete_details")
+      : quoteApprovalRequested
       ? (originalLead?.status ?? "waiting_complete_details")
       : form.status;
 
@@ -744,6 +757,9 @@ export default function LeadDetailPage() {
         const newLeadId = data.id;
         setLeadId(newLeadId);
         setOriginalLead(data as Lead);
+        if (urgentVerificationRequested) {
+          setForm((previous) => ({ ...previous, status: savedStatus }));
+        }
 
         let quoteApprovalSucceeded = false;
         if (quoteApprovalRequested) {
@@ -802,6 +818,7 @@ export default function LeadDetailPage() {
 
         navigate(`/leads/${newLeadId}`, { replace: true });
         setSaving(false);
+        if (urgentVerificationRequested) setUrgentCheckOpen(true);
         return;
       }
 
@@ -1904,6 +1921,17 @@ export default function LeadDetailPage() {
         onSubmit={handleCancellationRequestSubmit}
         loading={cancelRequestLoading}
         requesterLabel={isProcessor ? "Admin" : "Processor or Admin"}
+      />
+
+      <UrgentAICheckDialog
+        open={urgentCheckOpen}
+        onOpenChange={setUrgentCheckOpen}
+        leadId={leadId ?? ""}
+        onProceed={() => {
+          setForm((previous) => ({ ...previous, status: "urgent_job" }));
+          setOriginalLead((previous) => previous ? { ...previous, status: "urgent_job" } : previous);
+          setSaved(true);
+        }}
       />
 
       <CancellationRequestSheet

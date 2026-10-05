@@ -308,26 +308,13 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
       }
       return;
     }
-    // Every role that can set urgent_job gets the dialog.
-//
-// It used to be skipped for admin, processor and cs_admin. That looked
-// reasonable, since the database exempts them anyway, but it meant 23% of urgent
-// work reached dispatch with no comparison against the conversation at all, and
-// the roles exempted were the ones most likely to be working from a half-filled
-// record and acting on reflex.
-//
-// So the dialog always opens now. For those three it is advisory: the same
-// findings, framed as worth a look, and they decide. For customer_service it
-// stays enforced.
-//
-// The database still exempts them. That is the point of the split. The front end
-// decides what someone is shown, the trigger decides what they are permitted to
-// do, and a dispatch workflow or a direct API call can never be blocked on a gate
-// that urgent work cannot wait for.
-if (key === "status" && value === "urgent_job" && showsUrgentCheck(role)) {
-  setUrgentCheckOpen(true);
-  return;
-}
+    // CS, CS Admin, and Admin all review the conversation before Urgent. The
+    // database gate also blocks direct status writes for these roles; Processor
+    // remains exempt for dispatch operations.
+    if (key === "status" && value === "urgent_job" && showsUrgentCheck(role)) {
+      setUrgentCheckOpen(true);
+      return;
+    }
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
