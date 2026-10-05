@@ -49,7 +49,6 @@ export default function UrgentAICheckDialog({
   const [result, setResult] = useState<UrgentVerificationResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [editLead, setEditLead] = useState(false);
   const startedFor = useRef<string | null>(null);
 
   // Run once when the dialog opens for a lead, not on every render. A second run
@@ -66,7 +65,6 @@ export default function UrgentAICheckDialog({
     if (!open) {
       startedFor.current = null;
       setResult(null);
-      setEditLead(false);
     }
   }, [open]);
 
@@ -83,6 +81,7 @@ export default function UrgentAICheckDialog({
         notice: err instanceof Error ? err.message : "The check could not be run.",
         conversationFound: false,
         messageCount: 0,
+        reason: "unknown",
         elapsedMs: 0,
       });
     } finally {
@@ -156,7 +155,7 @@ export default function UrgentAICheckDialog({
             Worth a look before dispatch
           </DialogTitle>
           <DialogDescription>
-            Comparing this record against what the customer actually agreed to. You can mark it urgent either way.
+            Comparing the job details with the customer’s conversation. Review any suggestions, then choose whether to update the record or continue to Urgent.
           </DialogDescription>
         </DialogHeader>
 
@@ -164,7 +163,7 @@ export default function UrgentAICheckDialog({
           <div className="py-10 text-center space-y-3">
             <Loader2 className="h-8 w-8 animate-spin mx-auto text-muted-foreground" />
             <p className="text-sm text-muted-foreground">
-              Reading the conversation. This usually takes a couple of seconds.
+              Reviewing the conversation and job details. This usually takes about 5–6 seconds.
             </p>
           </div>
         )}
@@ -203,12 +202,6 @@ export default function UrgentAICheckDialog({
                 Reason: <code className="bg-muted px-1.5 py-0.5 rounded">{result.reason}</code>
               </p>
             )}
-            <div className="flex items-center justify-between rounded-lg border p-3">
-              <p className="text-sm">Fix the record first, then check again.</p>
-              <Button variant="outline" size="sm" onClick={() => setEditLead(true)}>
-                {editLead ? "Close lead" : "Edit lead first"}
-              </Button>
-            </div>
           </div>
         )}
 
@@ -262,19 +255,14 @@ export default function UrgentAICheckDialog({
 
             <p className="text-xs text-muted-foreground">
               Compared {result.messageCount} message{result.messageCount === 1 ? "" : "s"}.{" "}
-              These are for you to weigh. Marking it urgent is your call.
+              Suggestions are advisory. You can close this review to update the job, or continue to Urgent without making changes.
             </p>
           </div>
         )}
 
         <DialogFooter className="gap-2">
-          {editLead && (
-            <Button variant="ghost" onClick={() => { setEditLead(false); void run(); }} disabled={busy}>
-              Check again
-            </Button>
-          )}
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
-            {clean ? "Cancel" : "Leave as is"}
+            {clean ? "Cancel" : "Keep current status"}
           </Button>
 
           {clean && (
@@ -283,7 +271,7 @@ export default function UrgentAICheckDialog({
             </Button>
           )}
 
-          {unavailable && !editLead && (
+          {unavailable && (
             <Button onClick={proceedUnchecked} disabled={submitting}>
               {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Mark urgent unchecked"}
             </Button>
@@ -291,8 +279,8 @@ export default function UrgentAICheckDialog({
 
           {!clean && !unavailable && issues.length > 0 && (
             <>
-              <Button variant="outline" onClick={() => { onOpenChange(false); setEditLead(true); }} disabled={submitting}>
-                Fix it first
+              <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
+                Review job details
               </Button>
               {/* Same RPC the clean path uses, so the status change and any open
                   request settle in one transaction exactly as they do for a clean

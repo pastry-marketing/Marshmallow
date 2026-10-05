@@ -50,8 +50,6 @@ const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 // for long. gpt-4o-mini answers this in a couple of seconds; anything much
 // past that means something is wrong and we should say so rather than hang.
 const REQUEST_TIMEOUT_MS = 8_000;
-const MAX_MESSAGES = 40;
-const MAX_MESSAGE_CHARS = 1_200;
 const MAX_ISSUES = 12;
 
 // -----------------------------------------------------------------------------
@@ -74,7 +72,7 @@ const MAX_ISSUES = 12;
 // -----------------------------------------------------------------------------
 const SYSTEM_PROMPT = `You verify that a handyman or tradesperson job record matches what the customer actually agreed to, before the job is given urgent dispatch priority.
 
-You are checking a RECORD against a CONVERSATION. Report only genuine contradictions. Not omissions, not stylistic problems, not opportunities to sell more work.
+You are checking a RECORD against the customer's complete stored conversation. Report missing required details as well as contradictions. Do not report stylistic problems or opportunities to sell more work.
 
 ## What "urgent" means here
 
@@ -82,23 +80,20 @@ Urgent means dispatch priority. It does NOT mean the job happens faster, and it 
 
 ## Checks
 
-1. SERVICE SCOPE
-Do the recorded service_type and service_details describe the job the customer asked for? Flag a recorded scope that includes work the customer did not ask for, misses the main thing they did ask for, or misdescribes the problem.
+1. CUSTOMER AND JOB DETAILS
+The saved record should include the customer's name and usable service address. If either is blank, incomplete, or the conversation provides a different value, report it with the relevant record field and a suggestion to fill or correct it. Check that the recorded service_type and service_details describe the work the customer requested. Report missing main work, extra unrequested work, or a materially inaccurate description.
 
-2. SCHEDULE
+2. QUANTITIES AND SCOPE
+Compare every item, count, size, and quantity the customer specifies with the job record. Flag missing or mismatched quantities and identify the exact item and expected versus recorded quantity when possible. Do not infer a quantity the customer did not state.
+
+3. SCHEDULE
 Compare the recorded schedule against the conversation. The agreed date and time usually live in the free-text customer_schedule_requirements ("3rd OCT", "October 3 to October 4"), and are often left in the structured scheduled_date field.
 Flag when the recorded requirement contradicts what the customer stated.
 Do not flag a blank scheduled_date or scheduled_time_start on its own. These are frequently empty while the free-text requirement is correct. Only flag a schedule contradiction when what IS recorded disagrees with the customer.
 Treat a recorded schedule that is narrower or more specific than the customer agreed as a flag. For example, if the customer said "3rd or 4th" and the record states only the 3rd, the record has quietly dropped the customer's option. That matters.
 
-3. QUOTE AND TERMS
-terms may be "quoted", "free_estimate", or empty. An empty terms field is normal and is not itself a problem.
-Flag when terms is "quoted" but no quote text exists, when a recorded quote amount contradicts an amount discussed in the conversation, or when the quote describes materially different work than the recorded service.
-Judge the quote against its TEXT, which is what carries the real information. A quote is often present even when terms is empty.
-
-4. URGENCY
-Does the conversation support treating this as urgent? A water leak, no heat, an unusable entrance, a safety problem or an explicit "as soon as possible" supports it.
-Flag when the conversation reads routine, or the customer described a timeframe that is not urgent. If the conversation contains no urgency signal at all, say so plainly and do not invent one.
+4. QUOTE, ESTIMATE, AND CUSTOMER AGREEMENT
+Determine whether the record and conversation describe a quoted job or a free-estimate visit. Report when the record's terms conflict with what was communicated, or the distinction is missing and cannot be determined from the record. For a quoted job, compare the recorded price and scope with the conversation and check that the customer clearly agreed to that price. A question, silence, or vague response is not agreement. Report a price that was presented but not accepted. A free-estimate visit does not require agreement to a quote.
 
 5. LOCATION AND SERVICE CATEGORY
 Does the recorded service category match the problem described? Flag a category that is plainly wrong.
@@ -108,11 +103,11 @@ Flag a record or an agent message in the transcript that promises a specific com
 
 ## How to judge
 
-Quote the customer's own words when you flag something. A finding the CS member can check in two seconds is worth having; one they have to re-investigate is noise.
+Quote the customer's or agent's own words when you flag something. Name the field, item, quantity, or agreement that needs attention and give a concrete correction or follow-up suggestion.
 
 Infer ordinary shorthand. "3rd oct" is the 3rd of October. "asap" is urgent. Struggles with spelling, caps, typos, and missing punctuation are not findings. A conversational "how much" is not an agreed quote. Vague agreement is not a firm commitment.
 
-If the conversation is too thin to judge something, leave that point out entirely rather than guessing. Do not manufacture a finding to seem thorough.
+If the conversation is too thin to establish a value, do not guess. For required record details such as customer name, service address, requested work, item quantities, job type, and applicable quote acceptance, report that the information could not be confirmed and suggest what CS should verify. Do not treat a missing structured schedule date/time as a problem when the customer's agreed schedule is accurately present in customer_schedule_requirements.
 
 Return an empty issues array when nothing genuinely contradicts. An empty array is a good outcome. Do not pad it.
 
@@ -142,7 +137,7 @@ const RESPONSE_SCHEMA = {
         properties: {
           check: {
             type: "string",
-            enum: ["service_scope", "schedule", "quote_terms", "urgency", "location", "commitments"],
+            enum: ["customer_details", "service_scope", "quantities", "schedule", "quote_terms", "location", "commitments"],
           },
           field: {
             type: "string",
@@ -176,13 +171,6 @@ type Issue = {
 
 function text(value: unknown): string {
   return typeof value === "string" ? value : "";
-}
-
-function clipped(value: string | null | undefined, max: number): string {
-  if (!value) return "";
-  const trimmed = value.trim();
-  if (trimmed.length <= max) return trimmed;
-  return `${trimmed.slice(0, max)}… [truncated]`;
 }
 
 // -----------------------------------------------------------------------------
@@ -305,7 +293,7 @@ Deno.serve(async (req) => {
   const { data: lead, error: leadError } = await supabaseUser
     .from("leads")
     .select(
-      "id, job_id, customer_name, customer_phone, status, terms, quote, " +
+      "id, job_id, customer_name, customer_phone, address, city, state, zip_code, status, terms, quote, " +
         "scheduled_date, scheduled_time_start, service_type, service_details, " +
         "customer_schedule_requirements, number_name",
     )
@@ -357,20 +345,28 @@ Deno.serve(async (req) => {
     });
   }
 
-  const { data: messages, error: messageError } = await supabaseUser
-    .from("quo_messages")
-    .select("sender, direction, text, message_time")
-    .eq("conversation_id", conversationId)
-    .order("message_time", { ascending: true })
-    .limit(MAX_MESSAGES);
+  // PostgREST caps a response page at 1000 rows. Fetch every page so older
+  // customer decisions and earlier agent commitments are not silently omitted.
+  const messages: Array<{ sender: string; text: string | null }> = [];
+  const pageSize = 1000;
+  for (let offset = 0; ; offset += pageSize) {
+    const { data: page, error: messageError } = await supabaseUser
+      .from("quo_messages")
+      .select("sender, text, message_time")
+      .eq("conversation_id", conversationId)
+      .order("message_time", { ascending: true })
+      .range(offset, offset + pageSize - 1);
 
-  if (messageError) return jsonResponse({ error: messageError.message }, 400);
+    if (messageError) return jsonResponse({ error: messageError.message }, 400);
+    messages.push(...(page ?? []));
+    if (!page || page.length < pageSize) break;
+  }
 
-  const lines = (messages ?? [])
-    .filter((message) => clipped(text(message.text), MAX_MESSAGE_CHARS).length > 0)
+  const lines = messages
+    .filter((message) => text(message.text).trim().length > 0)
     .map((message) => {
-      const who = text(message.direction) === "inbound" ? "CUSTOMER" : "AGENT";
-      return `${who}: ${clipped(text(message.text), MAX_MESSAGE_CHARS)}`;
+      const who = text(message.sender).toLowerCase() === "customer" ? "CUSTOMER" : "AGENT";
+      return `${who}: ${text(message.text).trim()}`;
     });
 
   if (!lines.length) {
@@ -393,6 +389,7 @@ Deno.serve(async (req) => {
     `Job id: ${text(lead.job_id) || "(none)"}`,
     `Customer: ${text(lead.customer_name) || "(none)"}`,
     `Phone: ${text(lead.customer_phone) || "(none)"}`,
+    `Service address: ${[lead.address, lead.city, lead.state, lead.zip_code].map(text).filter(Boolean).join(", ") || "(none)"}`,
     `Status: ${text(lead.status) || "(none)"}`,
     `Terms: ${text(lead.terms) || "(empty)"}`,
     `Quote: ${text(lead.quote) || "(empty)"}`,
@@ -488,6 +485,41 @@ Deno.serve(async (req) => {
     const parsed = JSON.parse(raw ?? "{}");
 
     const issues: Issue[] = Array.isArray(parsed.issues) ? parsed.issues.slice(0, MAX_ISSUES) : [];
+    const missingRequiredFields: Issue[] = [];
+    if (!text(lead.customer_name).trim()) {
+      missingRequiredFields.push({
+        check: "customer_details",
+        field: "customer_name",
+        severity: "high",
+        problem: "The customer name is missing from the job record.",
+        evidence: "",
+        suggestion: "Add the customer's name and confirm it matches the conversation.",
+      });
+    }
+    if (![lead.address, lead.city, lead.state, lead.zip_code].some((value) => text(value).trim())) {
+      missingRequiredFields.push({
+        check: "customer_details",
+        field: "address",
+        severity: "high",
+        problem: "The service address is missing from the job record.",
+        evidence: "",
+        suggestion: "Add and confirm the customer's complete service address before dispatch.",
+      });
+    }
+    if (!text(lead.service_type).trim() && !text(lead.service_details).trim()) {
+      missingRequiredFields.push({
+        check: "service_scope",
+        field: "service_details",
+        severity: "high",
+        problem: "The requested work is missing from the job record.",
+        evidence: "",
+        suggestion: "Record the work the customer requested and verify any item quantities against the conversation.",
+      });
+    }
+    for (const missing of missingRequiredFields) {
+      if (!issues.some((issue) => issue.field === missing.field)) issues.unshift(missing);
+    }
+    issues.splice(MAX_ISSUES);
 
     // A model that found nothing is a genuine pass, and it is the only outcome
     // that lets the lead through without a human.

@@ -1109,6 +1109,66 @@ END $$;
 -- -----------------------------------------------------------------------------
 -- Results
 -- -----------------------------------------------------------------------------
+DO $$
+DECLARE
+  v_role text;
+  v_user uuid;
+  v_lead uuid;
+  v_blocked boolean;
+  v_detail text := '';
+BEGIN
+  SELECT id INTO v_lead
+    FROM public.leads
+   WHERE status IN (
+     'waiting_complete_details', 'need_tech', 'quote_sent_waiting',
+     'needs_quote', 'quote_change', 'scheduled', 'waiting_customer_response'
+   )
+   LIMIT 1;
+
+  IF v_lead IS NULL THEN
+    INSERT INTO _results VALUES (22, 'Admin and CS Admin direct writes blocked', true,
+      'skipped, no transition-friendly lead');
+    RETURN;
+  END IF;
+
+  FOREACH v_role IN ARRAY ARRAY['admin', 'cs_admin'] LOOP
+    SELECT user_id INTO v_user
+      FROM public.user_roles
+     WHERE role = v_role::app_role
+     LIMIT 1;
+
+    CONTINUE WHEN v_user IS NULL;
+    v_blocked := false;
+    PERFORM set_config('request.jwt.claims', json_build_object('sub', v_user, 'role', 'authenticated')::text, true);
+    PERFORM set_config('request.jwt.claim.sub', v_user::text, true);
+    PERFORM set_config('request.jwt.claim.role', 'authenticated', true);
+
+    BEGIN
+      UPDATE public.leads SET status = 'urgent_job' WHERE id = v_lead;
+    EXCEPTION WHEN OTHERS THEN
+      v_blocked := true;
+    END;
+
+    IF NOT v_blocked THEN
+      RAISE EXCEPTION '% direct urgent write was allowed', v_role;
+    END IF;
+    v_detail := v_detail || v_role || ' blocked; ';
+  END LOOP;
+
+  IF v_detail = '' THEN
+    INSERT INTO _results VALUES (22, 'Admin and CS Admin direct writes blocked', true,
+      'skipped, no admin or cs_admin users');
+  ELSE
+    INSERT INTO _results VALUES (22, 'Admin and CS Admin direct writes blocked', true, v_detail);
+  END IF;
+EXCEPTION WHEN OTHERS THEN
+  INSERT INTO _results VALUES (22, 'Admin and CS Admin direct writes blocked', false, SQLERRM);
+END $$;
+
+
+-- -----------------------------------------------------------------------------
+-- Results
+-- -----------------------------------------------------------------------------
 SELECT
   seq,
   name,

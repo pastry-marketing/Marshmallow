@@ -25,9 +25,7 @@ export type UrgentVerificationState = "idle" | "running" | "checked" | "unavaila
  *   customer_service, admin, cs_admin   the check runs and the findings are shown
  *   processor                          not asked
  *
- * Processor dispatch, they set urgent directly, and the database still exempts
- * them. Putting a two second check in front of the people whose job is moving the
- * queue would slow the one path that must not slow.
+ * Processor dispatch remains exempt so the dispatch queue can move without delay.
  *
  * Nobody is blocked by a finding and nobody is queued for review. The check tells
  * the person making the call whether the record disagrees with the customer, and
@@ -41,42 +39,28 @@ export type UrgentVerificationState = "idle" | "running" | "checked" | "unavaila
  * directly or from the extension. The dialog is how you satisfy it; it is not
  * what makes it true.
  *
- * This is presentation only. enforce_urgent_gate() exempts admin, processor and
- * cs_admin in the database regardless, so this governs what someone is shown,
- * never what they are permitted to do. If the front end were the thing enforcing
- * the rule it could be bypassed with one request, and if the database started
- * blocking those roles a dispatch workflow could jam on work that cannot wait.
+ * The database gate enforces the check for these roles too. Processor is the
+ * sole operational bypass so dispatch work can move without a CS review.
  */
 
 /**
- * Roles the database gate lets straight through.
+ * Roles the database gate lets straight through without the CS review.
  *
- * Kept in step with the bypass list in enforce_urgent_gate(). Note it includes
- * processor, who is never asked, because the database still exempts them.
+ * Kept in step with enforce_urgent_gate(). Only Processor is exempt.
  */
 export function bypassesUrgentGate(role: string | null | undefined): boolean {
-  return role === "admin" || role === "processor" || role === "cs_admin";
+  return role === "processor";
 }
 
-/**
- * TEMPORARY: the urgent AI check is switched off.
- *
- * Urgent work cannot wait on a check that is not reliable yet, so the front end
- * stops intercepting the status change and the database trigger is dropped by
- * 20261104004000_temporarily_disable_urgent_gate.sql. Both have to be on for
- * the feature to be on.
- *
- * To switch it back on: set this to true and recreate the leads_urgent_gate
- * trigger, as that migration's header describes. Nothing else was removed.
- */
-export const URGENT_CHECK_ENABLED = false;
+/** Enables the AI review for the roles that can move leads to Urgent. */
+export const URGENT_CHECK_ENABLED = true;
 
 /**
  * Roles the check is shown to when it is enabled.
  *
  * Who is asked is separate from what the database permits: processor sets
- * urgent directly and is never asked. Kept as its own function so the role
- * rules stay under test while the feature is off.
+ * urgent directly and is never asked. Kept separate so role access can be
+ * tested independently from the feature switch.
  */
 export function showsUrgentCheckRole(role: string | null | undefined): boolean {
   const r = role ?? "";

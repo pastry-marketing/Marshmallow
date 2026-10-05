@@ -91,6 +91,8 @@ import { useQuoAttention } from "@/hooks/useQuoAttention";
 import { History } from "lucide-react";
 import LeadStatusHistoryDialog from "./LeadStatusHistoryDialog";
 import ImageLightbox from "./ImageLightbox";
+import UrgentAICheckDialog from "./UrgentAICheckDialog";
+import { showsUrgentCheck } from "@/lib/urgent-verification";
 
 interface LeadCardProps {
   lead: Lead;
@@ -750,6 +752,7 @@ function LeadCard({
   const [assignOprOpen, setAssignOprOpen] = useState(false);
   const [activateCustomerOpen, setActivateCustomerOpen] = useState(false);
   const [statusHistoryOpen, setStatusHistoryOpen] = useState(false);
+  const [urgentCheckOpen, setUrgentCheckOpen] = useState(false);
   // Tick every 30s so blinking/expiry state stays fresh without a full refetch.
   const [, setNowTick] = useState(0);
   useEffect(() => {
@@ -1151,6 +1154,13 @@ function LeadCard({
 
     if (newStatus === "activate_customer" && (isAdmin || isProcessor)) {
       setActivateCustomerOpen(true);
+      return;
+    }
+
+    // Card-level status changes must use the same conversation review as the
+    // detail views. The review applies the status through its audited RPC.
+    if (newStatus === "urgent_job" && showsUrgentCheck(role)) {
+      setUrgentCheckOpen(true);
       return;
     }
 
@@ -2281,6 +2291,13 @@ function LeadCard({
           onOpenChange={setStatusHistoryOpen}
           leadId={lead.id}
           currentStatus={lead.status}
+        />
+
+        <UrgentAICheckDialog
+          open={urgentCheckOpen}
+          onOpenChange={setUrgentCheckOpen}
+          leadId={lead.id}
+          onProceed={onRefresh}
         />
 
         <ActivateCustomerNoteDialog
