@@ -141,7 +141,7 @@ BEGIN
   IF v_clean = '' THEN RETURN NULL; END IF;
 
   v_parts := ARRAY(
-    SELECT p.part FROM string_to_array(v_clean, ',') AS p(part)
+    SELECT p.part FROM unnest(string_to_array(v_clean, ',')) AS p(part)
     WHERE btrim(p.part) <> '');
 
   IF cardinality(v_parts) = 0 THEN RETURN NULL; END IF;
@@ -161,7 +161,10 @@ BEGIN
   ELSE
     -- Strip a trailing state token from the last segment itself; that segment
     -- may carry both the street and the city ("... St, Henderson NV 89615").
-    v_tail := btrim(regexp_replace(v_tail, '[\s,]+[A-Za-z]{2}\s*$', ''));
+    IF v_tail ~ '[\s,]+[A-Za-z]{2}\s*$'
+       AND public.us_state_code((regexp_match(v_tail, '([A-Za-z]{2})\s*$'))[1]) IS NOT NULL THEN
+      v_tail := btrim(regexp_replace(v_tail, '[\s,]+[A-Za-z]{2}\s*$', ''));
+    END IF;
     FOR i IN 1..array_length(names, 1) LOOP
       v_tail := btrim(regexp_replace(v_tail, '[\s,]+' || names[i] || '\s*$', '', 'i'));
     END LOOP;
@@ -170,7 +173,7 @@ BEGIN
 
   -- The candidate may still hold a street number and type before the city.
   v_city := regexp_replace(v_candidate,
-    '(?i)^\d+[a-z]?\s+.*?\b(st|street|ave|avenue|av|dr|drive|ln|lane|ct|court|blvd|boulevard|bl|way|rd|road|pkwy|parkway|pky|ter|terrace|trl|trail|cir|circle|pl|place|sq|square|hwy|highway|expy|fwy|loop|path|row|pt|point|plz|plaza)\b\.?\s*',
+    '^\d+[a-z]?\s+.*?\m(st|street|ave|avenue|av|dr|drive|ln|lane|ct|court|blvd|boulevard|bl|way|rd|road|pkwy|parkway|pky|ter|terrace|trl|trail|cir|circle|pl|place|sq|square|hwy|highway|expy|fwy|loop|path|row|pt|point|plz|plaza)\M\.?\s*',
     '', 'i');
 
   -- Unit designators the street strip can leave behind, e.g. "# B Houston".
