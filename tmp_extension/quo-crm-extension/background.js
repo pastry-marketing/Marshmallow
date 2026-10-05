@@ -563,6 +563,15 @@ if (leadStatus !== "default") {
           // Not asked. Put the status back the way they asked for it.
           insertData.status = "urgent_job";
           urgentAfterInsert = false;
+        } else {
+          // Withholding urgent still has to name a status. Leaving the field out
+          // falls back to the column default, which the CRM's status filter need
+          // not recognise: filterLeads() keeps only leads whose status is in the
+          // viewer's allowed set, so the lead is created, this extension's own
+          // lookup still finds it because that query filters on created_by and
+          // reference_name rather than status, and it is invisible in the CRM.
+          // AddLeadDialog parks a withheld lead here for the same reason.
+          insertData.status = "waiting_complete_details";
         }
       } else {
         insertData.status = leadStatus;
