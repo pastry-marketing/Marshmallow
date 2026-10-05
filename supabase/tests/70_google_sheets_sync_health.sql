@@ -388,7 +388,7 @@ DECLARE
   v_titles  integer;
 BEGIN
   DELETE FROM public.google_sheets_sync_health;
-  DELETE FROM public.notifications WHERE title = '[Alert] Google Sheets sync is not current';
+  DELETE FROM public.notifications WHERE title = '[Alert] Google Sheets backup is behind';
 
   FOR i IN 1..10 LOOP
     PERFORM public.record_sheets_sync_failure('boom', NULL, 'sync');
@@ -407,7 +407,7 @@ BEGIN
   END IF;
 
   SELECT count(*) INTO v_titles FROM public.notifications
-   WHERE title = '[Alert] Google Sheets sync is not current';
+   WHERE title = '[Alert] Google Sheets backup is behind';
   IF v_titles <> v_first THEN
     RAISE EXCEPTION 'expected % notification rows, found %', v_first, v_titles;
   END IF;
