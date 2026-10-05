@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Quo CRM Lead Capture",
-  "version": "1.0.1",
-  "description": "Capture selected text from quo.com chats and create CRM leads without leaving the page.",
+  "name": "Donut",
+  "version": "1.2.0",
+  "description": "Capture selected text from quo.com chats and create CRM leads without leaving the page. by Pastry Marketing.",
   "permissions": [
     "storage",
     "sidePanel",
@@ -36,6 +36,7 @@
     {
       "matches": [
         "https://marshmallow-crm.lovable.app/*",
+        "https://account-boosters-crm.lovable.app/*",
         "http://localhost:*/*",
         "https://localhost:*/*"
       ],
@@ -48,5 +49,18 @@
   "side_panel": {
     "default_path": "sidepanel.html"
   },
-  "options_page": "options.html"
+  "options_page": "options.html",
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "action": {
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    },
+    "default_title": "Open Donut"
+  }
 }

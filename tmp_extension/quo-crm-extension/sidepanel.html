@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Lead Capture - Quo CRM</title>
+    <title>Lead Capture - Donut</title>
     <!-- Google Fonts Inter & Outfit -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -16,11 +16,31 @@
       <header class="app-header">
         <div class="brand">
           <div class="brand__icon">
-            <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24">
+              <!-- Shadow -->
+              <circle cx="12" cy="13" r="10" fill="var(--border)"/>
+              <!-- Dough Base (Golden Tan) -->
+              <circle cx="12" cy="12" r="10" fill="currentColor"/>
+              <!-- Frosting (Chocolate) -->
+              <path d="M 12 2 C 17.5 2 22 6.5 22 12 C 22 13 21.5 14 20.5 14 C 19 14 18 12.5 17 13.5 C 16 14.5 15.5 16 14 16 C 12.5 16 12 14.5 11 14.5 C 9.5 14.5 8 16.5 6.5 16 C 5 15.5 4 14 3 13 C 2 12 2 12 2 12 C 2 6.5 6.5 2 12 2 Z" fill="currentColor"/>
+              <!-- Dough Hole -->
+              <circle cx="12" cy="12" r="3.5" fill="var(--bg-panel)"/>
+              <!-- Inner shadow for depth -->
+              <circle cx="12" cy="12" r="3.5" stroke="currentColor" stroke-width="1.2" fill="none" opacity="0.6"/>
+              <!-- Sprinkles (No pink!) -->
+              <line x1="7" y1="6" x2="8.5" y2="7.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              <line x1="16" y1="5.5" x2="15" y2="7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              <line x1="13" y1="3.5" x2="14" y2="4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              <line x1="18.5" y1="9.5" x2="19.5" y2="11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              <line x1="5.5" y1="10.5" x2="4.5" y2="9.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              <line x1="9" y1="14" x2="10.5" y2="13.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              <line x1="15.5" y1="13.5" x2="16.5" y2="15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
           </div>
           <div class="brand__text">
-            <span class="brand__title">Quo CRM</span>
-            <span class="brand__badge">v1.0.1</span>
+            <span class="brand__title">Donut</span>
+            <span class="brand__byline">by Pastry Marketing</span>
+
           </div>
         </div>
 
@@ -160,7 +180,13 @@
             <!-- Row 1: Direction & Check CRM Phone -->
             <div class="form-row form-row--split-align">
               <div class="form-cell">
-                <label class="cell-label">Direction</label>
+                <div class="cell-header">
+                  <label class="cell-label">Direction</label>
+                  <button type="button" id="auto-pick-direction" class="action-link" title="Detect who started the Quo conversation">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    <span>Auto</span>
+                  </button>
+                </div>
                 <div class="segmented-pill">
                   <input type="radio" id="direction-incoming" name="direction" value="incoming" checked />
                   <label for="direction-incoming">Incoming</label>
@@ -368,40 +394,102 @@
         <!-- VIEW 2: Activity & Reports (Dedicated Tab) -->
         <div id="view-reports" class="tab-pane">
           <section class="activity-section">
+
+            <!-- Section Header -->
             <div class="activity-header">
               <div>
-                <h3>Sent Leads Activity</h3>
-                <p class="activity-sub">Track real-time lead captures sent to CRM</p>
+                <h3>Activity &amp; Reports</h3>
+                <p class="activity-sub">Leads you captured via this extension</p>
               </div>
-              <button type="button" id="export-report-btn" class="btn btn--outline btn--compact" title="Download captures report as CSV">
+              <button type="button" id="export-report-btn" class="btn btn--outline btn--compact" title="Download visible leads as CSV">
                 <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 <span>Export CSV</span>
               </button>
             </div>
 
-            <div class="metrics-grid">
-              <div class="metric-card">
-                <span class="metric-card__title">Sent Today</span>
-                <span id="report-today-count" class="metric-card__value">0</span>
+            <!-- Quick-Select Date Pills -->
+            <div class="report-quick-pills">
+              <button type="button" class="report-pill" data-range="today">Today</button>
+              <button type="button" class="report-pill" data-range="yesterday">Yesterday</button>
+              <button type="button" class="report-pill report-pill--active" data-range="7d">Last 7 Days</button>
+              <button type="button" class="report-pill" data-range="30d">Last 30 Days</button>
+            </div>
+
+            <!-- Custom Date Range Row -->
+            <div class="report-date-row">
+              <div class="report-date-field">
+                <label for="report-date-from">From</label>
+                <input type="date" id="report-date-from" class="report-date-input" />
               </div>
-              <div class="metric-card">
-                <span class="metric-card__title">Sent Yesterday</span>
-                <span id="report-yesterday-count" class="metric-card__value">0</span>
+              <div class="report-date-field">
+                <label for="report-date-to">To</label>
+                <input type="date" id="report-date-to" class="report-date-input" />
+              </div>
+              <button type="button" id="load-report-btn" class="btn btn--outline btn--compact">
+                <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                <span>Load</span>
+              </button>
+            </div>
+
+            <!-- Status Summary Strip -->
+            <div id="report-status-strip" class="report-status-strip" hidden>
+              <div class="report-stat-card">
+                <span class="report-stat-card__value" id="report-total-count">0</span>
+                <span class="report-stat-card__label">Total</span>
+              </div>
+              <div class="report-stat-card report-stat-card--today">
+                <span class="report-stat-card__value" id="report-today-count">0</span>
+                <span class="report-stat-card__label">Today</span>
+              </div>
+              <div class="report-stat-card report-stat-card--urgent">
+                <span class="report-stat-card__value" id="report-urgent-count">0</span>
+                <span class="report-stat-card__label">Urgent</span>
+              </div>
+              <div class="report-stat-card report-stat-card--cancelled">
+                <span class="report-stat-card__value" id="report-cancelled-count">0</span>
+                <span class="report-stat-card__label">Cancelled</span>
               </div>
             </div>
 
-            <div class="history-card">
-              <div class="history-card__header">
-                <h4>Recent Submissions</h4>
-              </div>
+            <!-- Loading indicator -->
+            <div id="report-loading" class="report-loading" hidden>
+              <svg class="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" style="animation: spin 0.8s linear infinite"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-opacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" stroke-linecap="round"/></svg>
+              <span>Loading report...</span>
+            </div>
+
+            <!-- Leads List -->
+            <div class="report-leads-wrap">
               <ul id="report-history-list" class="history-list">
-                <li class="history-empty">No recent extension leads.</li>
+                <li class="history-empty">Switch to the Activity &amp; Reports tab to load leads.</li>
               </ul>
             </div>
+
           </section>
         </div>
+
       </div>
     </main>
+
+    <div id="photo-lightbox" class="photo-lightbox" role="dialog" aria-modal="true" aria-label="Chat picture preview" hidden>
+      <div class="photo-lightbox__topbar">
+        <span id="photo-lightbox-counter" class="photo-lightbox__counter"></span>
+        <button type="button" id="photo-lightbox-close" class="photo-lightbox__icon-btn" aria-label="Close picture preview" title="Close">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+
+      <button type="button" id="photo-lightbox-prev" class="photo-lightbox__nav photo-lightbox__nav--prev" aria-label="Previous picture" title="Previous picture">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      </button>
+
+      <div class="photo-lightbox__stage">
+        <img id="photo-lightbox-image" class="photo-lightbox__image" alt="" />
+      </div>
+
+      <button type="button" id="photo-lightbox-next" class="photo-lightbox__nav photo-lightbox__nav--next" aria-label="Next picture" title="Next picture">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+      </button>
+    </div>
 
     <script src="supabase.js"></script>
     <script src="sidepanel.js"></script>

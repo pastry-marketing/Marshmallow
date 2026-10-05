@@ -43,6 +43,8 @@ let latestPointerPosition = null;
 let suppressMenuUntilSelectionChanges = false;
 let contextInvalidated = false;
 let heartbeatInterval = null;
+let lastNotifiedConversationUrl = window.location.href;
+let conversationChangeObserver = null;
 
 initialize();
 
@@ -56,6 +58,13 @@ function initialize() {
   window.addEventListener("scroll", handleViewportChange, true);
   window.addEventListener("resize", handleViewportChange);
   window.addEventListener("blur", hideMenu);
+  window.addEventListener("popstate", notifyConversationUrlChange);
+
+  conversationChangeObserver = new MutationObserver(notifyConversationUrlChange);
+  conversationChangeObserver.observe(document.documentElement, {
+    childList: true,
+    subtree: true
+  });
 
   // Poll for context invalidation (extension reloaded/updated while this
   // tab stayed open) so we can surface a clear recovery prompt instead of
@@ -121,7 +130,8 @@ function showReloadBanner() {
   banner.id = RELOAD_BANNER_ID;
   banner.innerHTML = `
     <span class="quo-reload-banner__dot"></span>
-    <span class="quo-reload-banner__text">Quo CRM extension was updated. Refresh this tab to keep capturing leads.</span>
+    <span class="quo-reload-banner__text">Donut extension was updated. Refresh this tab to keep capturing leads.</span>
+
     <button type="button" class="quo-reload-banner__btn">Refresh Tab</button>
     <button type="button" class="quo-reload-banner__close" aria-label="Dismiss">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -671,6 +681,12 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
     if (message?.type === "SCRAPE_CUSTOMER_NUMBER") {
       const number = scrapeCustomerNumber();
       sendResponse({ success: !!number, number });
+    } else if (message?.type === "SCRAPE_CHAT_DIRECTION") {
+      scrapeChatDirection().then(sendResponse);
+      return true;
+    } else if (message?.type === "SCRAPE_CHAT_DETAILS") {
+      scrapeChatDetails().then(sendResponse);
+      return true;
     } else if (message?.type === "SCRAPE_NUMBER_NAME") {
       const name = scrapeNumberName();
       sendResponse({ success: !!name, name });
@@ -681,13 +697,159 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
       const response = openAssignFieldMenu(message.field);
       sendResponse(response);
     } else if (message?.type === "NAVIGATE_AND_SEND_MESSAGE") {
-      handleNavigateAndSendMessage(message.chatUrl, message.message, message.scheduleTime).then(result => {
+      handleNavigateAndSendMessage(message.chatUrl, message.message, message.scheduleTime, message.navigationPrepared).then(result => {
         sendResponse(result || { success: true });
       });
       return true; // Keep message channel open for async response
     }
     return true; // Keep message channel open for async response
   });
+}
+
+function notifyConversationUrlChange() {
+  if (window.location.href === lastNotifiedConversationUrl) return;
+  lastNotifiedConversationUrl = window.location.href;
+
+  if (!isExtensionContextValid()) return;
+  chrome.runtime.sendMessage({
+    type: "QUO_CHAT_CHANGED",
+    url: window.location.href
+  }).catch(() => {
+    // The side panel may be closed; the current URL will still be synced when
+    // it is opened later.
+  });
+}
+
+async function scrapeChatDetails() {
+  // Capture the currently rendered metadata before direction detection moves
+  // the virtualized feed to its beginning and restores it.
+  const number = scrapeCustomerNumber();
+  const name = scrapeNumberName();
+  const images = scrapeChatImages();
+  const directionResult = await scrapeChatDirection();
+
+  return {
+    success: !!(number || name || directionResult?.direction || images.length),
+    number: number || "",
+    name: name || "",
+    direction: directionResult?.direction || "",
+    images,
+    directionError: directionResult?.success ? "" : (directionResult?.error || "")
+  };
+}
+
+/**
+ * Determine who created the oldest contact activity in the active Quo
+ * conversation. Calls and missed calls count because they often represent the
+ * customer's first contact before either side sends a text message.
+ *
+ * Quo renders its feed with React Virtuoso, so a long conversation only keeps
+ * the visible activities in the DOM. Move that scroller to its real beginning,
+ * inspect the oldest activity, and then restore the user's previous position.
+ */
+async function scrapeChatDirection() {
+  const feed = document.querySelector('[data-testid="feed"]');
+  const scroller = feed?.querySelector('[data-testid="virtuoso-scroller"]');
+
+  if (!feed || !scroller) {
+    return {
+      success: false,
+      error: "Open a Quo conversation before using Auto direction."
+    };
+  }
+
+  const originalDistanceFromBottom = Math.max(
+    0,
+    scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop
+  );
+
+  try {
+    // Repeatedly request the top. If Quo fetches an older page when the top is
+    // reached, Virtuoso can move the scroll position to preserve its anchor;
+    // another pass then continues toward the true first activity.
+    let previousOldestIndex = null;
+    let unchangedPasses = 0;
+    let reachedOldestActivity = false;
+
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      scroller.scrollTo({ top: 0, behavior: "auto" });
+      scroller.dispatchEvent(new Event("scroll", { bubbles: true }));
+      await waitForDirectionFrame(350);
+
+      const oldestIndex = getOldestRenderedActivityIndex(feed);
+      if (oldestIndex === 0 && scroller.scrollTop <= 2) {
+        reachedOldestActivity = true;
+        break;
+      }
+
+      if (oldestIndex !== null && oldestIndex === previousOldestIndex && scroller.scrollTop <= 2) {
+        unchangedPasses += 1;
+        if (unchangedPasses >= 2) break;
+      } else {
+        unchangedPasses = 0;
+      }
+      previousOldestIndex = oldestIndex;
+    }
+
+    if (!reachedOldestActivity) {
+      return {
+        success: false,
+        error: "Quo did not load the beginning of this conversation. Choose the direction manually."
+      };
+    }
+
+    const direction = directionFromOldestRenderedActivity(feed);
+    if (!direction) {
+      return {
+        success: false,
+        error: "The oldest loaded Quo activity did not expose enough sender information. Choose the direction manually."
+      };
+    }
+
+    return { success: true, direction };
+  } finally {
+    // Preserve where the user was reading, including the common case where the
+    // chat was at the bottom. Bottom distance remains stable if older pages were
+    // prepended while detecting the first activity.
+    await waitForDirectionFrame(50);
+    const restoreTop = Math.max(
+      0,
+      scroller.scrollHeight - scroller.clientHeight - originalDistanceFromBottom
+    );
+    scroller.scrollTo({ top: restoreTop, behavior: "auto" });
+    scroller.dispatchEvent(new Event("scroll", { bubbles: true }));
+  }
+}
+
+function getOldestRenderedActivityIndex(feed) {
+  const indexes = Array.from(feed.querySelectorAll('[role="listitem"][data-index]'))
+    .map((item) => Number(item.getAttribute("data-index")))
+    .filter(Number.isFinite);
+
+  return indexes.length ? Math.min(...indexes) : null;
+}
+
+function directionFromOldestRenderedActivity(feed) {
+  const activities = Array.from(feed.querySelectorAll('[role="listitem"][data-index]'))
+    .sort((a, b) => Number(a.dataset.index) - Number(b.dataset.index));
+
+  for (const activity of activities) {
+    // Activity timestamps link to the same conversation with an `at` anchor.
+    // Quo places incoming timestamps on the bubble's right (inline `left`) and
+    // outgoing timestamps on its left (inline `right`). This avoids relying on
+    // Quo's generated class names, which change between releases.
+    const timestamps = activity.querySelectorAll('a[href*="?at="], a[href*="&at="]');
+    for (const timestamp of timestamps) {
+      if (timestamp.style.right) return "outgoing";
+      if (timestamp.style.left) return "incoming";
+    }
+  }
+
+  return null;
+}
+
+function waitForDirectionFrame(delay) {
+  return new Promise((resolve) => window.setTimeout(resolve, delay));
 }
 
 function openAssignFieldMenu(field) {
@@ -922,55 +1084,382 @@ function scrapeChatImages() {
   return chatImages;
 }
 
-async function handleNavigateAndSendMessage(chatUrl, message, scheduleTime) {
+function safePathname(url) {
+  try { return new URL(url, window.location.origin).pathname; } catch (e) { return url; }
+}
+
+// Quo/OpenPhone uses a Slate.js composer. Try the specific labels first, then
+// progressively more generic selectors, so a small UI/label change doesn't
+// break sending outright.
+const COMPOSER_SELECTORS = [
+  'div[role="textbox"][aria-label="message input"]',
+  'div[role="textbox"][aria-label*="message" i]',
+  '[contenteditable="true"][aria-label*="message" i]',
+  '[contenteditable="true"][aria-multiline="true"]',
+  '[data-slate-editor="true"]',
+  '[data-lexical-editor="true"]',
+  'div[contenteditable="true"][role="textbox"]',
+  'div[aria-label*="message input" i]',
+  'textarea[aria-label*="message" i]',
+  'textarea[placeholder*="message" i]',
+  'div[contenteditable="true"]',
+];
+const SEND_SELECTORS = [
+  'button[aria-label="Send message"]:not([aria-disabled="true"]):not([disabled])',
+  'button[aria-label*="send" i]:not([aria-disabled="true"]):not([disabled])',
+];
+
+function queryAny(selectors) {
+  for (const s of selectors) {
+    try { const el = document.querySelector(s); if (el) return el; } catch (e) { /* ignore */ }
+  }
+  return null;
+}
+
+function isVisibleElement(element) {
+  if (!element || element.disabled || element.getAttribute?.("aria-disabled") === "true") return false;
+  const style = window.getComputedStyle(element);
+  if (style.display === "none" || style.visibility === "hidden") return false;
+  const rect = element.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
+}
+
+function findComposer() {
+  for (const selector of COMPOSER_SELECTORS) {
+    try {
+      const candidates = Array.from(document.querySelectorAll(selector)).filter(isVisibleElement);
+      if (candidates.length) return candidates[candidates.length - 1];
+    } catch (e) { /* ignore */ }
+  }
+  return null;
+}
+
+function waitForAny(selectors, timeout = 8000) {
+  return new Promise((resolve) => {
+    const isComposerQuery = selectors === COMPOSER_SELECTORS;
+    const findMatch = () => isComposerQuery ? findComposer() : queryAny(selectors);
+    const found = findMatch();
+    if (found) return resolve(found);
+    const obs = new MutationObserver(() => {
+      const el = findMatch();
+      if (el) { obs.disconnect(); resolve(el); }
+    });
+    obs.observe(document.body, { childList: true, subtree: true });
+    setTimeout(() => { obs.disconnect(); resolve(null); }, timeout);
+  });
+}
+
+function getConversationId(url) {
+  try { const m = String(url).match(/\/c\/([^/?#]+)/); return m ? m[1] : null; } catch (e) { return null; }
+}
+
+function phoneFromChatUrl(url) {
+  try { return (new URL(url).searchParams.get("phone") || "").replace(/\D/g, "").slice(-10); }
+  catch (e) { return ""; }
+}
+
+function setNativeInputValue(input, value) {
+  const prototype = input instanceof HTMLTextAreaElement
+    ? window.HTMLTextAreaElement.prototype
+    : window.HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+  if (setter) setter.call(input, value);
+  else input.value = value;
+  input.dispatchEvent(new InputEvent("input", { data: value, inputType: "insertText", bubbles: true }));
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+function findConversationForPhone(phone) {
+  const last10 = String(phone || "").replace(/\D/g, "").slice(-10);
+  if (!last10) return null;
+
+  const selectors = [
+    'a[href*="/c/"]',
+    '[role="option"]',
+    '[role="listitem"]',
+    '[role="row"]',
+    '[data-testid*="conversation" i]',
+    '[data-testid*="contact" i]',
+    'button'
+  ];
+  const matches = [];
+  const seen = new Set();
+
+  for (const selector of selectors) {
+    for (const element of document.querySelectorAll(selector)) {
+      const clickable = element.matches('a,button,[role="option"],[role="listitem"],[role="row"],[role="button"],[role="link"]')
+        ? element
+        : element.closest('a,button,[role="option"],[role="listitem"],[role="row"],[role="button"],[role="link"]');
+      if (!clickable || seen.has(clickable) || !isVisibleElement(clickable)) continue;
+      seen.add(clickable);
+
+      const searchable = [
+        clickable.textContent,
+        clickable.getAttribute("aria-label"),
+        clickable.getAttribute("title"),
+        clickable.getAttribute("data-phone-number"),
+        clickable.getAttribute("href")
+      ].filter(Boolean).join(" ").replace(/\D/g, "");
+      if (!searchable.includes(last10)) continue;
+
+      const href = clickable.getAttribute("href") || "";
+      const role = clickable.getAttribute("role") || "";
+      const score =
+        (href.includes("/c/") ? 1000 : 0) +
+        (["option", "listitem", "row"].includes(role) ? 500 : 0) +
+        (clickable.hasAttribute("data-testid") ? 250 : 0) -
+        (clickable.tagName === "BUTTON" ? 200 : 0);
+      matches.push({ clickable, score });
+    }
+  }
+
+  matches.sort((a, b) => b.score - a.score);
+  return matches[0]?.clickable || null;
+}
+
+async function waitForConversationForPhone(phone, timeout = 7000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const result = findConversationForPhone(phone);
+    if (result) return result;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return null;
+}
+
+async function openConversationForPhone(phone) {
+  let conversation = await waitForConversationForPhone(phone, 3500);
+  if (!conversation) {
+    let search = Array.from(document.querySelectorAll(
+      'input[placeholder*="search" i], input[aria-label*="search" i], [role="searchbox"]'
+    )).find(isVisibleElement);
+
+    if (!search) {
+      const searchButton = Array.from(document.querySelectorAll(
+        'button[aria-label*="search" i], button[title*="search" i], [role="button"][aria-label*="search" i]'
+      )).find(isVisibleElement);
+      if (searchButton) {
+        searchButton.click();
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        search = Array.from(document.querySelectorAll(
+          'input[placeholder*="search" i], input[aria-label*="search" i], [role="searchbox"]'
+        )).find(isVisibleElement);
+      }
+    }
+
+    if (search instanceof HTMLInputElement || search instanceof HTMLTextAreaElement) {
+      search.focus();
+      setNativeInputValue(search, phone);
+      conversation = await waitForConversationForPhone(phone, 5000);
+    }
+  }
+
+  if (!conversation) return false;
+  const initialConversationId = getConversationId(window.location.href);
+  const linkedConversationId = getConversationId(conversation.getAttribute("href") || "");
+  conversation.scrollIntoView({ block: "center", inline: "nearest" });
+  conversation.click();
+
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    const currentConversationId = getConversationId(window.location.href);
+    if (linkedConversationId && currentConversationId === linkedConversationId && findComposer()) return true;
+    if (!linkedConversationId && currentConversationId && currentConversationId !== initialConversationId && findComposer()) return true;
+    if (!initialConversationId && !linkedConversationId && findComposer()) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  return false;
+}
+
+// Switch the Quo SPA to a chat URL without a full reload. Prefer the app's own
+// in-page link (a guaranteed router transition that also loads the conversation
+// data); otherwise drive the History API. Returns which method it used, and
+// logs it so we can see whether the chat link is actually being opened.
+function spaNavigate(chatUrl) {
   try {
-    // 1. Navigate without full reload by injecting a link and clicking it.
-    if (window.location.href !== chatUrl) {
-      const a = document.createElement("a");
-      a.href = chatUrl;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+    const path = safePathname(chatUrl);
+    const convId = getConversationId(chatUrl);
+    let link = document.querySelector(`a[href="${chatUrl}"]`) || document.querySelector(`a[href="${path}"]`);
+    if (!link && convId) link = document.querySelector(`a[href*="${convId}"]`);
+    if (link) {
+      console.log("[Donut] opening chat via in-page link:", link.getAttribute("href"));
+      link.click();
+      return "link";
+    }
+    console.log("[Donut] no in-page link found for chat; using History API. convId:", convId);
+  } catch (e) { /* ignore */ }
+  try {
+    window.history.pushState({}, "", chatUrl);
+    window.dispatchEvent(new PopStateEvent("popstate", { state: {} }));
+    window.dispatchEvent(new CustomEvent("pushstate"));
+    console.log("[Donut] navigated via pushState to:", chatUrl);
+    return "pushstate";
+  } catch (e) {
+    console.warn("[Donut] pushState navigation failed:", e && e.message);
+    return "failed";
+  }
+}
+
+// Put text into a Slate.js composer. Slate only registers input it receives
+// through its own handlers, so a real paste (with a DataTransfer) goes through
+// Slate's insertData path and updates its model — which is what enables the Send
+// button. Direct DOM writes / execCommand put text in the DOM but Slate ignores
+// them, so Send stays disabled. Whether it truly worked is judged by the caller
+// watching the Send button, not by DOM text.
+function composerText(editor) {
+  return (editor?.value || editor?.textContent || "")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function findEnabledSendButton(editor) {
+  const labelled = queryAny(SEND_SELECTORS);
+  if (labelled) return labelled;
+  const form = editor?.closest?.("form");
+  return form?.querySelector?.('button[type="submit"]:not([aria-disabled="true"]):not([disabled])') || null;
+}
+
+async function insertIntoComposer(editor, message) {
+  const expected = String(message || "").replace(/\s+/g, " ").trim();
+  const containsMessage = () => expected && composerText(editor).includes(expected);
+
+  // Real focus + selection, like a user click.
+  try {
+    editor.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+    editor.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
+    editor.click();
+  } catch (e) { /* ignore */ }
+  editor.focus();
+
+  if (editor instanceof HTMLTextAreaElement || editor instanceof HTMLInputElement) {
+    const prototype = editor instanceof HTMLTextAreaElement
+      ? window.HTMLTextAreaElement.prototype
+      : window.HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+    if (setter) setter.call(editor, message);
+    else editor.value = message;
+    editor.dispatchEvent(new InputEvent("input", {
+      data: message,
+      inputType: "insertText",
+      bubbles: true
+    }));
+    editor.dispatchEvent(new Event("change", { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    return containsMessage();
+  }
+
+  // Select any existing draft so the paste replaces it.
+  try {
+    const sel = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  } catch (e) { /* ignore */ }
+
+  // Primary: paste through Slate's insertData handler.
+  try {
+    const dt = new DataTransfer();
+    dt.setData("text/plain", message);
+    editor.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+  } catch (e) { /* ignore */ }
+
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  if (containsMessage()) return true;
+
+  // Some Quo releases reject synthetic ClipboardEvents. Keep two user-input
+  // style fallbacks, but verify the exact message appears before continuing.
+  try { document.execCommand("insertText", false, message); } catch (e) { /* ignore */ }
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  if (containsMessage()) return true;
+
+  try {
+    editor.dispatchEvent(new InputEvent("beforeinput", {
+      inputType: "insertText",
+      data: message,
+      bubbles: true,
+      cancelable: true
+    }));
+  } catch (e) { /* ignore */ }
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  return containsMessage();
+}
+
+async function waitForComposerClear(editor, waitMs) {
+  if (!composerText(editor)) return false;
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline) {
+    const box = findComposer();
+    if (!composerText(box)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return false;
+}
+
+async function handleNavigateAndSendMessage(chatUrl, message, scheduleTime, navigationPrepared = false) {
+  try {
+    console.log("[Donut] send requested. target:", chatUrl, "| current:", window.location.href);
+    // 1. FAST PATH: switch chats via the SPA router, no full page reload.
+    const convId = getConversationId(chatUrl);
+    const targetPhone = phoneFromChatUrl(chatUrl);
+    const isTopFrame = window.top === window;
+    const onTarget = () => (convId ? getConversationId(window.location.href) === convId : window.location.pathname === safePathname(chatUrl));
+
+    if (isTopFrame && !navigationPrepared && !onTarget()) {
+      const method1 = spaNavigate(chatUrl);
+      await waitForAny(COMPOSER_SELECTORS, 3000);
+      if (!onTarget()) {
+        const method2 = spaNavigate(chatUrl);
+        await waitForAny(COMPOSER_SELECTORS, 4000);
+        console.log("[Donut] nav retry method:", method2);
+      }
+      // Brief settle so the new conversation's composer attaches its handlers.
+      await new Promise(r => setTimeout(r, 250));
+      console.log("[Donut] after nav. url:", window.location.href, "| onTarget:", onTarget(), "| method:", method1);
+    }
+
+    if (isTopFrame && convId && !onTarget()) {
+      return { success: false, retryable: true, error: "The requested Quo conversation did not finish loading." };
+    }
+
+    if (isTopFrame && !convId && targetPhone) {
+      console.log("[Donut] selecting customer conversation by phone:", targetPhone);
+      if (!await openConversationForPhone(targetPhone)) {
+        return {
+          success: false,
+          error: `Could not find the customer conversation for ${targetPhone} in this Quo inbox.`
+        };
+      }
     }
 
     // 2. Wait for the editor to appear
-    const editor = await waitForElement('div[role="textbox"][aria-label="message input"]');
+    const editor = await waitForAny(COMPOSER_SELECTORS, 3000);
     if (!editor) {
       console.error("Quo CRM Extension: Could not find message input editor.");
-      return { success: false, error: "Could not find message input editor on page." };
+      return { success: false, retryable: true, error: "Could not find message input editor on page." };
     }
 
-    // 3. Paste the message
-    editor.focus();
-    
-    // Create a new data transfer for the paste event to simulate real pasting
-    const dataTransfer = new DataTransfer();
-    dataTransfer.setData('text/plain', message);
-    
-    const pasteEvent = new ClipboardEvent('paste', {
-      clipboardData: dataTransfer,
-      bubbles: true,
-      cancelable: true
-    });
-    
-    editor.dispatchEvent(pasteEvent);
-
-    // If paste event doesn't trigger Slate.js updates, we might also need to use execCommand
-    if (!pasteEvent.defaultPrevented) {
-      document.execCommand("insertText", false, message);
+    // 3. Insert the message into the Slate composer. Success is judged by the
+    // Send button enabling (Slate registered the text), not by DOM text.
+    const insertOk = await insertIntoComposer(editor, message);
+    if (!insertOk) {
+      console.error("Quo CRM Extension: Message text did not register in the composer.");
+      return { success: false, error: "Could not type the message into the Quo composer." };
     }
-    
-    // Ensure React registers the input
-    editor.dispatchEvent(new Event('input', { bubbles: true }));
+    console.log("[Donut] message inserted; waiting for Send to enable…");
 
     if (scheduleTime) {
       console.log("Quo CRM: Attempting to schedule message...");
       // 5a. Wait and poll for the Schedule button to become enabled
       let scheduleBtn;
-      for (let i = 0; i < 10; i++) {
+      for (let i = 0; i < 40; i++) {
         scheduleBtn = document.querySelector('button[aria-label="Schedule message"]:not([aria-disabled="true"])');
         if (scheduleBtn) break;
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 50));
       }
 
       if (!scheduleBtn) {
@@ -995,35 +1484,62 @@ async function handleNavigateAndSendMessage(chatUrl, message, scheduleTime) {
       modalInput.dispatchEvent(new Event('input', { bubbles: true }));
       console.log("Quo CRM: Typed schedule time: " + scheduleTime);
       
-      // Wait for dropdown options to populate
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      
-      // Find the first list option and click it
-      const firstOption = document.querySelector('ul[aria-label="Suggested datetimes"] li[role="option"]');
+      // Wait for dropdown options to populate natively instead of a fixed 1.5s delay
+      const firstOption = await waitForElement('ul[aria-label="Suggested datetimes"] li[role="option"]', 3000);
       if (firstOption) {
         firstOption.click();
         console.log("Quo CRM: Clicked schedule option.");
-        return { success: true };
+        
+        // Wait a moment to let the UI react to the dropdown selection
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        // Check if there is a final "Schedule" or "Confirm" button in the modal
+        // Usually, primary buttons in these modals have specific attributes.
+        // We'll look for a button containing "Schedule" text or aria-label that isn't the original one we clicked.
+        const possibleConfirmBtns = Array.from(document.querySelectorAll('button:not([aria-disabled="true"])'))
+            .filter(b => b.textContent.includes('Schedule') || b.textContent.includes('Confirm'));
+        
+        // The last one is usually the modal's action button
+        if (possibleConfirmBtns.length > 0) {
+            const confirmBtn = possibleConfirmBtns[possibleConfirmBtns.length - 1];
+            confirmBtn.click();
+            console.log("Quo CRM: Clicked final schedule/confirm button.");
+        }
+        
+        if (await waitForComposerClear(editor, 4000)) return { success: true };
+        return { success: false, error: "The schedule action did not clear the composer, so it could not be verified." };
       } else {
         console.error("Quo CRM: No scheduling option found in dropdown.");
         return { success: false, error: "Could not find a scheduling option in the dropdown." };
       }
     } else {
-      // 5b. Wait and poll for the normal Send button to become enabled
+      // The message is really sent only when the composer empties itself. We use
+      // that as the source of truth, so we never report a fake success.
+      // 5b. Wait and poll for the normal Send button to become enabled (up to ~2.5s).
       let sendButton;
-      for (let i = 0; i < 10; i++) {
-        sendButton = document.querySelector('button[aria-label="Send message"]:not([aria-disabled="true"])');
+      for (let i = 0; i < 50; i++) {
+        sendButton = findEnabledSendButton(editor);
         if (sendButton) break;
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 50));
       }
-      
+
       if (sendButton) {
+        console.log("[Donut] clicking Send button.");
         sendButton.click();
-        return { success: true };
-      } else {
-        console.warn("Quo CRM Extension: Send button not found or is disabled.");
-        return { success: false, error: "Send button never became enabled after pasting the message." };
+        if (await waitForComposerClear(editor, 2500)) return { success: true };
+        console.warn("[Donut] Send clicked but composer never cleared — message may not have sent.");
+        return { success: false, error: "Clicked Send but the message did not go out (composer never cleared)." };
       }
+
+      // Fallback: in the Quo composer, Enter (without Shift) sends the message.
+      console.log("[Donut] Send button disabled/not found; trying Enter key.");
+      editor.focus();
+      ["keydown", "keypress", "keyup"].forEach((type) => {
+        editor.dispatchEvent(new KeyboardEvent(type, { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+      });
+      if (await waitForComposerClear(editor, 2000)) return { success: true };
+      console.warn("Quo CRM Extension: Send button not found or is disabled.");
+      return { success: false, error: "Send button never became enabled after typing the message." };
     }
   } catch (err) {
     return { success: false, error: err.message };

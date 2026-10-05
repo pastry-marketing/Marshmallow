@@ -146,6 +146,7 @@ const form = document.getElementById("lead-form");
 const feedback = document.getElementById("feedback");
 const clearButton = document.getElementById("clear-form");
 const createLeadButton = document.getElementById("create-lead");
+const autoPickDirectionBtn = document.getElementById("auto-pick-direction");
 const autoPickNumberBtn = document.getElementById("auto-pick-number");
 const autoPickNumberNameBtn = document.getElementById("auto-pick-number-name");
 const autoPickServiceNameBtn = document.getElementById("auto-pick-service-name");
@@ -161,6 +162,13 @@ const checkExpectedAreaBtn = document.getElementById("check-expected-area");
 const expectedAreaResult = document.getElementById("expected-area-result");
 const photosPreviewContainer = document.getElementById("photos-preview-container");
 const noPhotosLabel = document.getElementById("no-photos-label");
+const photoLightbox = document.getElementById("photo-lightbox");
+const photoLightboxImage = document.getElementById("photo-lightbox-image");
+const photoLightboxCounter = document.getElementById("photo-lightbox-counter");
+const photoLightboxClose = document.getElementById("photo-lightbox-close");
+const photoLightboxPrev = document.getElementById("photo-lightbox-prev");
+const photoLightboxNext = document.getElementById("photo-lightbox-next");
+const photoLightboxStage = photoLightbox?.querySelector(".photo-lightbox__stage");
 const addressSuggestions = document.getElementById("address-suggestions");
 const addressSuggestionsStatus = document.getElementById("address-suggestions-status");
 const addressSuggestionsList = document.getElementById("address-suggestions-list");
@@ -185,9 +193,19 @@ const viewReports = document.getElementById("view-reports");
 
 // Reports UI elements
 const reportTodayCount = document.getElementById("report-today-count");
-const reportYesterdayCount = document.getElementById("report-yesterday-count");
+const reportYesterdayCount = null; // replaced by status strip
 const reportHistoryList = document.getElementById("report-history-list");
 const exportReportBtn = document.getElementById("export-report-btn");
+const reportStatusStrip = document.getElementById("report-status-strip");
+const reportTotalCount = document.getElementById("report-total-count");
+const reportUrgentCount = document.getElementById("report-urgent-count");
+const reportCancelledCount = document.getElementById("report-cancelled-count");
+const reportLoading = document.getElementById("report-loading");
+const reportDateFrom = document.getElementById("report-date-from");
+const reportDateTo = document.getElementById("report-date-to");
+const loadReportBtn = document.getElementById("load-report-btn");
+const reportQuickPills = document.querySelectorAll(".report-pill");
+
 
 let currentDraft = null;
 let addressSuggestionTimer = null;
@@ -197,7 +215,17 @@ let checkedLeads = [];
 let selectedCheckedLeadId = "";
 let checkedPhone = "";
 let leadCheckCompleted = false;
+let leadCheckSequence = 0;
 let scheduleUpdateInProgress = false;
+let reportDateFromState = "";
+let reportDateToState = "";
+let currentReportHistory = [];
+let activeChatSyncToken = 0;
+let activeChatSyncTimer = null;
+let lightboxPhotos = [];
+let lightboxPhotoIndex = 0;
+let lightboxReturnFocus = null;
+
 
 initialize();
 
@@ -213,6 +241,17 @@ async function initialize() {
     tabBtnReports.addEventListener("click", () => switchTab("reports"));
   }
 
+  // Bind Report quick-select pills
+  reportQuickPills.forEach((pill) => {
+    pill.addEventListener("click", () => handleReportPillClick(pill));
+  });
+
+  // Bind custom date range Load button
+  if (loadReportBtn) {
+    loadReportBtn.addEventListener("click", handleLoadReportClick);
+  }
+
+
   // Bind Auth events
   loginForm.addEventListener("submit", handleLoginSubmit);
   logoutBtn.addEventListener("click", handleLogout);
@@ -220,7 +259,7 @@ async function initialize() {
   // Check initial authentication
   const authResponse = await chrome.runtime.sendMessage({ type: "CHECK_AUTH" });
   if (authResponse && authResponse.success) {
-    showLeadCaptureUI(authResponse);
+    await showLeadCaptureUI(authResponse);
   } else {
     showLoginUI();
   }
@@ -234,6 +273,9 @@ async function initialize() {
   form.addEventListener("change", handleFormInput);
   form.addEventListener("submit", handleCreateLead);
   clearButton.addEventListener("click", handleClearForm);
+  if (autoPickDirectionBtn) {
+    autoPickDirectionBtn.addEventListener("click", handleAutoPickDirection);
+  }
   autoPickNumberBtn.addEventListener("click", handleAutoPickNumber);
   autoPickNumberNameBtn.addEventListener("click", handleAutoPickNumberName);
   if (autoPickServiceNameBtn) {
@@ -248,6 +290,19 @@ async function initialize() {
   if (autoPickPhotosBtn) {
     autoPickPhotosBtn.addEventListener("click", handleAutoPickPhotos);
   }
+  if (photoLightboxClose) {
+    photoLightboxClose.addEventListener("click", closePhotoLightbox);
+  }
+  if (photoLightboxPrev) {
+    photoLightboxPrev.addEventListener("click", () => movePhotoLightbox(-1));
+  }
+  if (photoLightboxNext) {
+    photoLightboxNext.addEventListener("click", () => movePhotoLightbox(1));
+  }
+  if (photoLightbox) {
+    photoLightbox.addEventListener("click", handlePhotoLightboxBackdropClick);
+  }
+  document.addEventListener("keydown", handlePhotoLightboxKeydown);
   if (findAddressBtn) {
     findAddressBtn.addEventListener("click", handleFindAddressClick);
   }
@@ -256,12 +311,14 @@ async function initialize() {
   }
 
   // Automatic and silent URL tracking as tab updates or changes
-  handleAutoPickUrlSilently();
+  await handleAutoPickUrlSilently();
   chrome.tabs.onUpdated.addListener(handleTabUpdated);
   chrome.tabs.onActivated.addListener(handleTabActivated);
 
   chrome.runtime.onMessage.addListener((message) => {
-    if (message?.type === "DRAFT_UPDATED" && message.draft) {
+    if (message?.type === "QUO_CHAT_CHANGED") {
+      scheduleActiveQuoChatSync();
+    } else if (message?.type === "DRAFT_UPDATED" && message.draft) {
       const previousPhone = currentDraft?.customerNumber || "";
       currentDraft = message.draft;
       renderDraft(currentDraft);
@@ -300,7 +357,7 @@ function showLoginUI() {
   clearFeedback();
 }
 
-function showLeadCaptureUI(authResponse) {
+async function showLeadCaptureUI(authResponse) {
   loginContainer.hidden = true;
   leadCaptureContainer.hidden = false;
   userSessionBar.hidden = false;
@@ -311,8 +368,8 @@ function showLeadCaptureUI(authResponse) {
 
   switchTab("capture");
   clearFeedback();
-  loadDraft();
-  loadReports();
+  await loadDraft();
+  // Reports will load when the user clicks the tab
 }
 
 function switchTab(tabName) {
@@ -326,9 +383,12 @@ function switchTab(tabName) {
     if (tabBtnCapture) tabBtnCapture.classList.remove("active");
     if (viewReports) viewReports.classList.add("active");
     if (viewCapture) viewCapture.classList.remove("active");
-    loadReports();
+    // Set default 7-day range if not already set
+    initReportDateDefaults();
+    loadReports(reportDateFromState, reportDateToState);
   }
 }
+
 
 async function loadDraft() {
   const response = await chrome.runtime.sendMessage({ type: "GET_DRAFT" });
@@ -440,7 +500,8 @@ async function handleLoginSubmit(event) {
       throw new Error(response?.error || "Login failed. Check your credentials.");
     }
 
-    showLeadCaptureUI(response);
+    await showLeadCaptureUI(response);
+    await handleAutoPickUrlSilently();
   } catch (error) {
     showFeedback(error.message || "Authentication failed.", "error");
   } finally {
@@ -455,13 +516,20 @@ async function handleLogout() {
     await chrome.runtime.sendMessage({ type: "LOGOUT" });
     loginPassword.value = "";
 
-    // Clear reports cache & UI
+    // Clear reports cache & state
     await chrome.storage.local.remove("extensionReportCache");
+    currentReportHistory = [];
+    reportDateFromState = "";
+    reportDateToState = "";
     if (reportTodayCount) reportTodayCount.textContent = "0";
-    if (reportYesterdayCount) reportYesterdayCount.textContent = "0";
+    if (reportTotalCount) reportTotalCount.textContent = "0";
+    if (reportUrgentCount) reportUrgentCount.textContent = "0";
+    if (reportCancelledCount) reportCancelledCount.textContent = "0";
+    if (reportStatusStrip) reportStatusStrip.hidden = true;
     if (reportHistoryList) {
       reportHistoryList.innerHTML = `<li class="history-empty">No recent extension leads.</li>`;
     }
+
 
     showLoginUI();
   } catch (error) {
@@ -472,34 +540,35 @@ async function handleLogout() {
 async function handleExportReport() {
   clearFeedback();
   try {
-    const response = await chrome.runtime.sendMessage({ type: "GET_EXTENSION_REPORT" });
-    if (!response || !response.success || !response.history || response.history.length === 0) {
-      throw new Error("No recent extension leads found to export.");
+    if (!currentReportHistory || currentReportHistory.length === 0) {
+      throw new Error("No leads in the current view to export. Load a report first.");
     }
 
-    // Build CSV
-    const headers = ["Captured At", "Job ID", "Customer Name", "Customer Phone", "Status"];
-    const rows = response.history.map((lead) => [
+    const headers = ["Captured At", "Job ID", "Customer Name", "Customer Phone", "Service", "Status", "Source URL"];
+    const rows = currentReportHistory.map((lead) => [
       lead.createdAt ? formatCapturedAt(lead.createdAt) : "",
       lead.jobId || "",
       lead.customerName || "",
       lead.customerPhone || "",
-      lead.status || ""
+      lead.serviceType || "",
+      lead.status || "",
+      lead.sourceUrl || ""
     ]);
 
     const csvContent = [
       headers.join(","),
       ...rows.map((row) =>
-        row
-          .map((val) => `"${String(val).replaceAll('"', '""')}"`)
-          .join(",")
+        row.map((val) => `"${String(val).replaceAll('"', '""')}"`).join(",")
       )
     ].join("\n");
 
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
-    
-    const filename = `extension_leads_report_${new Date().toISOString().slice(0, 10)}.csv`;
+
+    const dateLabel = reportDateFromState && reportDateToState
+      ? `${reportDateFromState}_to_${reportDateToState}`
+      : new Date().toISOString().slice(0, 10);
+    const filename = `extension_leads_${dateLabel}.csv`;
     const link = document.createElement("a");
     link.href = url;
     link.download = filename;
@@ -507,49 +576,148 @@ async function handleExportReport() {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-    showFeedback("Report CSV saved successfully.", "success");
+    showFeedback(`Exported ${currentReportHistory.length} lead(s) to CSV.`, "success");
   } catch (error) {
     showFeedback("Export failed: " + error.message, "error");
   }
 }
 
-// Reports Logic
-async function loadReports() {
+// ─── Date helpers ─────────────────────────────────────────────────────────────
+
+function toLocalISODate(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function initReportDateDefaults() {
+  // Only set defaults if not already set
+  if (reportDateFromState && reportDateToState) return;
+  applyReportRange("7d");
+}
+
+function applyReportRange(range) {
+  const today = new Date();
+  let from, to;
+
+  if (range === "today") {
+    from = new Date(today);
+    to = new Date(today);
+  } else if (range === "yesterday") {
+    const y = new Date(today);
+    y.setDate(y.getDate() - 1);
+    from = y;
+    to = new Date(y);
+  } else if (range === "7d") {
+    from = new Date(today);
+    from.setDate(from.getDate() - 6);
+    to = new Date(today);
+  } else if (range === "30d") {
+    from = new Date(today);
+    from.setDate(from.getDate() - 29);
+    to = new Date(today);
+  } else {
+    return;
+  }
+
+  reportDateFromState = toLocalISODate(from);
+  reportDateToState = toLocalISODate(to);
+
+  if (reportDateFrom) reportDateFrom.value = reportDateFromState;
+  if (reportDateTo) reportDateTo.value = reportDateToState;
+}
+
+function handleReportPillClick(pill) {
+  // Update active state on pills
+  reportQuickPills.forEach((p) => p.classList.remove("report-pill--active"));
+  pill.classList.add("report-pill--active");
+
+  const range = pill.dataset.range;
+  applyReportRange(range);
+  loadReports(reportDateFromState, reportDateToState);
+}
+
+function handleLoadReportClick() {
+  const from = reportDateFrom?.value;
+  const to = reportDateTo?.value;
+
+  if (!from || !to) {
+    showFeedback("Please select both From and To dates.", "error");
+    return;
+  }
+  if (from > to) {
+    showFeedback("From date must be before or equal to To date.", "error");
+    return;
+  }
+
+  // Deactivate all quick pills (custom range)
+  reportQuickPills.forEach((p) => p.classList.remove("report-pill--active"));
+
+  reportDateFromState = from;
+  reportDateToState = to;
+  loadReports(from, to);
+}
+
+// ─── Reports Loading & Rendering ──────────────────────────────────────────────
+
+async function loadReports(dateFrom, dateTo) {
+  // Show loading state
+  if (reportLoading) reportLoading.hidden = false;
+  if (reportStatusStrip) reportStatusStrip.hidden = true;
+  if (reportHistoryList) reportHistoryList.innerHTML = "";
+
   try {
-    // 1. Load from cache first for instant UI response
-    const cached = await chrome.storage.local.get("extensionReportCache");
-    if (cached && cached.extensionReportCache) {
-      const data = cached.extensionReportCache;
-      reportTodayCount.textContent = data.todayCount;
-      reportYesterdayCount.textContent = data.yesterdayCount;
-      renderHistoryList(data.history);
-    }
+    const response = await chrome.runtime.sendMessage({
+      type: "GET_EXTENSION_REPORT",
+      dateFrom: dateFrom || reportDateFromState || undefined,
+      dateTo: dateTo || reportDateToState || undefined
+    });
 
-    // 2. Fetch fresh data from background worker
-    const response = await chrome.runtime.sendMessage({ type: "GET_EXTENSION_REPORT" });
     if (response && response.success) {
-      reportTodayCount.textContent = response.todayCount;
-      reportYesterdayCount.textContent = response.yesterdayCount;
-      renderHistoryList(response.history);
+      currentReportHistory = response.history || [];
+      renderReports(response);
 
-      // Save to cache for next load
+      // Save to cache
       await chrome.storage.local.set({
         extensionReportCache: {
-          todayCount: response.todayCount,
-          yesterdayCount: response.yesterdayCount,
-          history: response.history
+          dateFrom: dateFrom || reportDateFromState,
+          dateTo: dateTo || reportDateToState,
+          ...response
         }
       });
+    } else {
+      renderHistoryList([]);
     }
   } catch (error) {
     console.error("Could not load extension reports", error);
+    if (reportHistoryList) {
+      reportHistoryList.innerHTML = `<li class="history-empty history-empty--error">Could not load report. Check your connection.</li>`;
+    }
+  } finally {
+    if (reportLoading) reportLoading.hidden = true;
   }
 }
 
+function renderReports(data) {
+  // Status strip
+  if (reportStatusStrip) {
+    reportStatusStrip.hidden = false;
+    if (reportTotalCount) reportTotalCount.textContent = data.totalCount ?? 0;
+    if (reportTodayCount) reportTodayCount.textContent = data.todayCount ?? 0;
+    if (reportUrgentCount) reportUrgentCount.textContent = data.urgentCount ?? 0;
+    if (reportCancelledCount) reportCancelledCount.textContent = data.cancelledCount ?? 0;
+  }
+
+  renderHistoryList(data.history || []);
+}
+
 function renderHistoryList(history) {
+  if (!reportHistoryList) return;
   reportHistoryList.innerHTML = "";
+
   if (!history || history.length === 0) {
-    reportHistoryList.innerHTML = `<li class="history-empty">No recent extension leads.</li>`;
+    reportHistoryList.innerHTML = `<li class="history-empty">No leads found for the selected date range.</li>`;
     return;
   }
 
@@ -558,35 +726,54 @@ function renderHistoryList(history) {
     li.className = "history-item";
 
     const dateStr = formatCapturedAt(lead.createdAt);
-    
-    // Status dot color mapping
-    let dotColor = "var(--text-muted)";
-    if (lead.status === "urgent_job" || lead.status === "need_tech") {
-      dotColor = "#ef4444"; // red
-    } else if (lead.status === "pending_to_send" || lead.status === "quote_sent_waiting") {
-      dotColor = "#f59e0b"; // amber
-    } else if (lead.status === "scheduled") {
-      dotColor = "var(--primary-teal)"; // teal
-    } else if (lead.status === "job_done" || lead.status === "paid") {
-      dotColor = "#10b981"; // green
-    } else if (lead.status === "cancelled") {
-      dotColor = "#6b7280"; // grey
+    const status = lead.status || "default";
+
+    // Compute status badge class
+    let badgeClass = "status-badge--default";
+    let statusLabel = status.replace(/_/g, " ");
+    if (status === "urgent_job" || status === "need_tech") {
+      badgeClass = "status-badge--urgent";
+      statusLabel = status === "urgent_job" ? "Urgent" : "Need Tech";
+    } else if (status === "pending_to_send") {
+      badgeClass = "status-badge--quote";
+      statusLabel = "Quote Pending";
+    } else if (status === "quote_sent_waiting") {
+      badgeClass = "status-badge--waiting";
+      statusLabel = "Quote Sent";
+    } else if (status === "scheduled") {
+      badgeClass = "status-badge--scheduled";
+      statusLabel = "Scheduled";
+    } else if (status === "job_done" || status === "paid") {
+      badgeClass = "status-badge--done";
+      statusLabel = status === "job_done" ? "Job Done" : "Paid";
+    } else if (status === "cancelled") {
+      badgeClass = "status-badge--cancelled";
+      statusLabel = "Cancelled";
+    } else {
+      statusLabel = "Default";
     }
 
     li.innerHTML = `
-      <div class="history-item__left">
-        <span class="history-item__title">${escapeHtml(lead.customerName || "No Name")}</span>
-        <span class="history-item__phone">${escapeHtml(lead.customerPhone || "No Number")}</span>
-        <span class="history-item__date">${escapeHtml(dateStr)}</span>
-      </div>
-      <div class="history-item__right">
-        <span class="history-item__job-id">${escapeHtml(lead.jobId)}</span>
-        <span class="history-item__status-dot" style="background-color: ${dotColor};" title="${escapeHtml(lead.status)}"></span>
+      <div class="history-item__main">
+        <div class="history-item__top">
+          <span class="history-item__title">${escapeHtml(lead.customerName || "No Name")}</span>
+          <span class="status-badge ${escapeHtml(badgeClass)}">${escapeHtml(statusLabel)}</span>
+        </div>
+        <div class="history-item__meta">
+          <span class="history-item__phone">${escapeHtml(lead.customerPhone || "No Number")}</span>
+          ${lead.serviceType ? `<span class="history-item__sep">·</span><span class="history-item__service">${escapeHtml(lead.serviceType)}</span>` : ""}
+        </div>
+        <div class="history-item__footer">
+          <span class="history-item__job-id">${escapeHtml(lead.jobId || "")}</span>
+          <span class="history-item__date">${escapeHtml(dateStr)}</span>
+        </div>
       </div>
     `;
     reportHistoryList.appendChild(li);
   });
 }
+
+
 
 // Lead Form logic
 async function handleFormInput(event) {
@@ -645,6 +832,27 @@ async function handleClearForm() {
   showFeedback("Draft cleared.", "info");
 }
 
+/**
+ * The check's findings as a short list. Severity is carried in the text rather
+ * than a colour, since the panel has no severity styling and an unstyled class
+ * would render as nothing at all.
+ */
+function renderUrgentIssues(issues) {
+  if (!Array.isArray(issues) || issues.length === 0) return "";
+
+  const items = issues
+    .slice(0, 6)
+    .map((issue) => {
+      const field = issue && issue.field ? `${escapeHtml(String(issue.field))}: ` : "";
+      const problem = escapeHtml(String((issue && issue.problem) || "")); 
+      return `<li>${field}${problem}</li>`;
+    })
+    .join("");
+
+  const more = issues.length > 6 ? `<li>and ${issues.length - 6} more</li>` : "";
+  return `<ul style="margin:6px 0 0 16px;padding:0">${items}${more}</ul>`;
+}
+
 async function handleCreateLead(event) {
   event.preventDefault();
   clearFeedback();
@@ -665,33 +873,70 @@ async function handleCreateLead(event) {
     renderDraft(currentDraft);
     resetTransientFormState();
 
-      const leadUrl = response.response?.leadUrl;
-      // The lead was created in its normal status because urgent was asked for.
-      // Saying "created successfully" here would report a request that did not
-      // happen, so the message states what is outstanding and what to do.
-      const urgentPending = response.response?.urgentCheckRequired === true;
-      // Prefers the deep link, which opens the AI review itself, so the status
-      // change is not something the CS member has to redo by hand.
+    const leadUrl = response.response?.leadUrl;
+    const openLink = leadUrl
+      ? ` <a href="${escapeHtml(leadUrl)}" target="_blank" rel="noreferrer">Open Lead</a>`
+      : "";
+
+    if (response.quoteApprovalError) {
+      // The lead was created, but it is sitting in Waiting Complete Details
+      // rather than waiting on a CS Admin, so say so plainly.
+      showFeedback(
+        `Lead created, but the quote approval request failed: ${escapeHtml(response.quoteApprovalError)}. Set the status from the CRM.${openLink}`,
+        "error",
+        true
+      );
+    } else if (response.urgentCheckRequired) {
       const reviewUrl = response.response?.urgentReviewUrl || leadUrl;
-      const successHtml = leadUrl
-        ? `Lead created successfully. <a href="${escapeHtml(leadUrl)}" target="_blank" rel="noreferrer">Open Lead</a>`
+      // Opens the review itself rather than just the lead, so the status change
+      // is not a step the CS member has to find and redo by hand.
+      const reviewLink = reviewUrl
+        ? ` <a href="${escapeHtml(reviewUrl)}" target="_blank" rel="noreferrer">Open the review</a>`
+        : "";
+      const check = response.urgentCheck;
+
+      if (check && check.state === "clean") {
+        showFeedback(
+          `Lead created and marked urgent. The conversation check found nothing to fix.${openLink}`,
+          "success",
+          true
+        );
+      } else if (check && check.state === "issues") {
+        showFeedback(
+          `Lead created, but it was not marked urgent. The conversation check found ${check.issues.length} thing${check.issues.length === 1 ? "" : "s"} to fix:${renderUrgentIssues(check.issues)}${reviewLink}`,
+          "info",
+          true
+        );
+      } else if (check && check.state === "unavailable") {
+        showFeedback(
+          `Lead created, but it was not marked urgent. ${escapeHtml(check.notice || "The conversation could not be compared.")}${reviewLink}`,
+          "info",
+          true
+        );
+      } else {
+        // The lead is saved and simply not urgent yet, either because the check
+        // could not run or because recording a clean result failed. Point at the
+        // review rather than reporting the creation as a failure.
+        const why = check && check.error ? ` ${escapeHtml(check.error)}` : "";
+        showFeedback(
+          `Lead created, but it was not marked urgent.${why}${reviewLink}`,
+          "info",
+          true
+        );
+      }
+    } else {
+      const successText = response.quoteApprovalRequested
+        ? "Lead created and sent to a CS Admin for approval."
         : "Lead created successfully.";
 
-      showFeedback(
-        urgentPending && reviewUrl
-          ? `${successHtml}<br><br>This lead was not marked urgent. <a href="${escapeHtml(reviewUrl)}" target="_blank" rel="noreferrer">Run the conversation check</a> to review it against the customer chat, then mark it urgent.`
-          : urgentPending
-            ? `${successHtml}<br><br>This lead was not marked urgent. Open it in the CRM to run the conversation check first.`
-            : successHtml,
-        // "info" is the neutral-but-notable kind here. There is no
-        // feedback--warning class in the stylesheet, so passing one would leave
-        // the toast unstyled.
-        urgentPending ? "info" : "success",
-        true,
-      );
+      showFeedback(`${successText}${openLink}`, "success", true);
+    }
     
-    // Refresh stats and history list!
-    loadReports();
+    // Refresh stats and history list with current date range!
+    if (reportDateFromState || reportDateToState) {
+      loadReports(reportDateFromState, reportDateToState);
+    }
+
   } catch (error) {
     showFeedback(error.message || "Lead creation failed.", "error");
   } finally {
@@ -880,7 +1125,9 @@ async function handleUpdateScheduleRequirement() {
       : `Schedule requirement updated for Job ID ${escapeHtml(jobId)}.`;
 
     showFeedback(successHtml, "success", true);
-    loadReports();
+    if (reportDateFromState || reportDateToState) {
+      loadReports(reportDateFromState, reportDateToState);
+    }
   } catch (error) {
     showFeedback(error.message || "Schedule requirement update failed.", "error");
   } finally {
@@ -1240,6 +1487,62 @@ async function handleAutoPickNumber() {
   }
 }
 
+async function handleAutoPickDirection() {
+  clearFeedback();
+
+  const originalHtml = autoPickDirectionBtn?.innerHTML;
+  if (autoPickDirectionBtn) {
+    autoPickDirectionBtn.disabled = true;
+    autoPickDirectionBtn.textContent = "Detecting...";
+  }
+
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) {
+      throw new Error("No active browser tab found.");
+    }
+
+    const response = await chrome.tabs.sendMessage(
+      tab.id,
+      { type: "SCRAPE_CHAT_DIRECTION" },
+      { frameId: 0 }
+    );
+    if (!response?.success || !response.direction) {
+      throw new Error(response?.error || "Could not determine who started this conversation.");
+    }
+
+    const direction = response.direction === "outgoing" ? "outgoing" : "incoming";
+    const radios = form.elements["direction"];
+    if (radios) {
+      radios.value = direction;
+    }
+
+    const updated = await chrome.runtime.sendMessage({
+      type: "UPDATE_DRAFT",
+      payload: { direction }
+    });
+
+    currentDraft = updated?.draft || {
+      ...(currentDraft || {}),
+      direction
+    };
+
+    const starter = direction === "incoming" ? "Customer" : "Your team";
+    showFeedback(`${starter} started the conversation — marked ${direction}.`, "success");
+  } catch (error) {
+    let errMsg = error?.message || "Failed to auto-pick direction.";
+    if (errMsg.includes("Receiving end does not exist") || errMsg.includes("Could not establish connection")) {
+      errMsg = "Could not connect to quo.com. Refresh the Quo tab, then try Auto again.";
+    }
+    showFeedback(errMsg, "error");
+  } finally {
+    if (autoPickDirectionBtn) {
+      autoPickDirectionBtn.disabled = false;
+      autoPickDirectionBtn.innerHTML = originalHtml;
+    }
+  }
+}
+
 async function handleAutoPickNumberName() {
   clearFeedback();
   try {
@@ -1304,6 +1607,7 @@ async function handleAutoPickServiceName() {
 async function handleCheckCrmNumber() {
   clearFeedback();
   resetLeadCheckState();
+  const leadCheckToken = ++leadCheckSequence;
 
   let phone = formatPhoneNumber(form.customerNumber.value.trim());
 
@@ -1330,6 +1634,8 @@ async function handleCheckCrmNumber() {
       console.log("Auto-pick during check lead failed, falling back to current field value:", error);
     }
 
+    if (leadCheckToken !== leadCheckSequence) return;
+
     if (!phone) {
       showCheckLeadFeedback("Please enter or auto-pick a phone number to check.", "error");
       return;
@@ -1340,6 +1646,8 @@ async function handleCheckCrmNumber() {
       type: "CHECK_LEAD_EXISTS",
       phone
     });
+
+    if (leadCheckToken !== leadCheckSequence) return;
 
     if (!response?.success) {
       throw new Error(response?.error || "Failed to check lead status.");
@@ -1360,10 +1668,67 @@ async function handleCheckCrmNumber() {
       showCheckLeadFeedback("Not in CRM. You can safely add this lead.", "success");
     }
   } catch (error) {
+    if (leadCheckToken !== leadCheckSequence) return;
     resetLeadCheckState({ clearMessage: false });
     showCheckLeadFeedback(error.message || "Failed to check CRM.", "error");
   } finally {
-    if (checkCrmNumberBtn) checkCrmNumberBtn.disabled = false;
+    if (leadCheckToken === leadCheckSequence && checkCrmNumberBtn) {
+      checkCrmNumberBtn.disabled = false;
+    }
+    updateScheduleRequirementButtonState();
+  }
+}
+
+async function automaticallyCheckSyncedLead(phone, chatSyncToken, conversationKey) {
+  const formattedPhone = formatPhoneNumber(String(phone || "").trim());
+  if (!formattedPhone || chatSyncToken !== activeChatSyncToken) return;
+  const leadCheckToken = ++leadCheckSequence;
+
+  resetLeadCheckState();
+  if (checkCrmNumberBtn) checkCrmNumberBtn.disabled = true;
+  showCheckLeadFeedback("Checking CRM database...", "info");
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "CHECK_LEAD_EXISTS",
+      phone: formattedPhone
+    });
+
+    if (chatSyncToken !== activeChatSyncToken || leadCheckToken !== leadCheckSequence) return;
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!activeTab?.url || getQuoConversationKey(activeTab.url) !== conversationKey) return;
+    if (!phonesMatchForLeadCheck(form.customerNumber.value, formattedPhone)) return;
+
+    if (!response?.success) {
+      throw new Error(response?.error || "Failed to check lead status.");
+    }
+
+    checkedPhone = formattedPhone;
+    leadCheckCompleted = true;
+    checkedLeads = Array.isArray(response.leads) ? response.leads : [];
+    selectedCheckedLeadId = "";
+    renderMatchingLeads();
+
+    if (checkedLeads.length > 0) {
+      showCheckLeadFeedback(
+        `Found ${checkedLeads.length} existing active lead${checkedLeads.length === 1 ? "" : "s"}. Select the correct lead below.`,
+        "info"
+      );
+    } else {
+      showCheckLeadFeedback("Not in CRM. You can safely add this lead.", "success");
+    }
+  } catch (error) {
+    if (chatSyncToken !== activeChatSyncToken || leadCheckToken !== leadCheckSequence) return;
+    resetLeadCheckState({ clearMessage: false });
+    showCheckLeadFeedback(error?.message || "Failed to check CRM.", "error");
+  } finally {
+    if (
+      chatSyncToken === activeChatSyncToken &&
+      leadCheckToken === leadCheckSequence &&
+      checkCrmNumberBtn
+    ) {
+      checkCrmNumberBtn.disabled = false;
+    }
     updateScheduleRequirementButtonState();
   }
 }
@@ -1484,27 +1849,150 @@ function formatPhoneInput(input) {
 }
 
 async function handleAutoPickUrlSilently() {
+  window.clearTimeout(activeChatSyncTimer);
+  activeChatSyncToken += 1;
+  return syncActiveQuoChatDetails(activeChatSyncToken);
+}
+
+function scheduleActiveQuoChatSync(delay = 100) {
+  window.clearTimeout(activeChatSyncTimer);
+  activeChatSyncToken += 1;
+  const token = activeChatSyncToken;
+  activeChatSyncTimer = window.setTimeout(() => {
+    syncActiveQuoChatDetails(token).catch((error) => {
+      console.debug("Automatic Quo chat sync failed:", error);
+    });
+  }, delay);
+}
+
+function getQuoConversationKey(value) {
+  try {
+    const url = new URL(value);
+    if (url.hostname !== "quo.com" && !url.hostname.endsWith(".quo.com")) return "";
+    const match = url.pathname.match(/\/inbox\/([^/]+)\/c\/([^/?#]+)/i);
+    return match ? `${match[1]}:${match[2]}` : "";
+  } catch (error) {
+    return "";
+  }
+}
+
+async function syncActiveQuoChatDetails(token) {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab?.url && (tab.url.startsWith("http://") || tab.url.startsWith("https://"))) {
-      if (!currentDraft || currentDraft.sourceUrl !== tab.url) {
-        if (!currentDraft) {
-          currentDraft = {};
-        }
-        currentDraft.sourceUrl = tab.url;
-        const sourceUrlInput = document.querySelector('[name="sourceUrl"]');
-        if (sourceUrlInput) {
-          sourceUrlInput.value = tab.url;
-        }
-        await chrome.runtime.sendMessage({
+    if (!tab?.id || !tab.url) return;
+
+    const conversationKey = getQuoConversationKey(tab.url);
+    if (!conversationKey) {
+      if (tab.url.startsWith("http://") || tab.url.startsWith("https://")) {
+        const updated = await chrome.runtime.sendMessage({
           type: "UPDATE_DRAFT",
           payload: { sourceUrl: tab.url }
         });
+        if (token === activeChatSyncToken && updated?.draft) {
+          currentDraft = updated.draft;
+          renderDraft(currentDraft);
+        }
       }
+      return;
+    }
+
+    const previousConversationKey = getQuoConversationKey(currentDraft?.sourceUrl || "");
+    const changedConversation = !!previousConversationKey && previousConversationKey !== conversationKey;
+
+    if (changedConversation) {
+      leadCheckSequence += 1;
+      if (checkCrmNumberBtn) checkCrmNumberBtn.disabled = false;
+      const cleared = await chrome.runtime.sendMessage({ type: "CLEAR_DRAFT" });
+      if (token !== activeChatSyncToken) return;
+      currentDraft = cleared?.draft || {};
+      suppressAddressLookup = false;
+      renderDraft(currentDraft);
+      resetTransientFormState();
+    }
+
+    const sourceUpdate = await chrome.runtime.sendMessage({
+      type: "UPDATE_DRAFT",
+      payload: { sourceUrl: tab.url }
+    });
+    if (token !== activeChatSyncToken) return;
+    if (sourceUpdate?.draft) {
+      currentDraft = sourceUpdate.draft;
+      renderDraft(currentDraft);
+    }
+
+    // Give Quo's single-page navigation time to replace the previous chat DOM.
+    await waitForChatSync(500);
+
+    let details = { number: "", name: "", direction: "", images: [] };
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (token !== activeChatSyncToken) return;
+
+      const [latestTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!latestTab?.id || getQuoConversationKey(latestTab.url) !== conversationKey) return;
+
+      try {
+        const response = await chrome.tabs.sendMessage(
+          latestTab.id,
+          { type: "SCRAPE_CHAT_DETAILS" },
+          { frameId: 0 }
+        );
+
+        if (response) {
+          details = {
+            number: response.number || details.number,
+            name: response.name || details.name,
+            direction: response.direction || details.direction,
+            images: Array.from(new Set([...(details.images || []), ...(response.images || [])]))
+          };
+        }
+      } catch (error) {
+        console.debug("Quo chat details are not ready yet:", error);
+      }
+
+      if (details.number && details.name && details.direction) break;
+      await waitForChatSync(600);
+    }
+
+    if (token !== activeChatSyncToken) return;
+    const [confirmedTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!confirmedTab?.id || getQuoConversationKey(confirmedTab.url) !== conversationKey) return;
+
+    const payload = {
+      sourceUrl: confirmedTab.url,
+      capturedAt: new Date().toISOString()
+    };
+    if (details.number) payload.customerNumber = formatPhoneNumber(details.number);
+    if (details.name) payload.numberName = details.name;
+    if (details.direction) payload.direction = details.direction;
+    if (details.images.length) {
+      payload.photos = Array.from(new Set([
+        ...((changedConversation ? [] : currentDraft?.photos) || []),
+        ...details.images
+      ]));
+    }
+
+    const updated = await chrome.runtime.sendMessage({
+      type: "UPDATE_DRAFT",
+      payload
+    });
+    if (token !== activeChatSyncToken) return;
+    if (updated?.draft) {
+      currentDraft = updated.draft;
+      renderDraft(currentDraft);
+      resetLeadCheckState();
+      updateScheduleRequirementButtonState();
+    }
+
+    if (details.number && token === activeChatSyncToken) {
+      await automaticallyCheckSyncedLead(details.number, token, conversationKey);
     }
   } catch (error) {
-    console.debug("Silent auto-pick URL failed:", error);
+    console.debug("Silent Quo chat sync failed:", error);
   }
+}
+
+function waitForChatSync(delay) {
+  return new Promise((resolve) => window.setTimeout(resolve, delay));
 }
 
 async function handleTabUpdated(tabId, changeInfo, tab) {
@@ -1512,7 +2000,7 @@ async function handleTabUpdated(tabId, changeInfo, tab) {
     try {
       const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (activeTab && activeTab.id === tabId) {
-        await handleAutoPickUrlSilently();
+        scheduleActiveQuoChatSync();
       }
     } catch (e) {
       console.debug("Error handling tab update:", e);
@@ -1522,7 +2010,7 @@ async function handleTabUpdated(tabId, changeInfo, tab) {
 
 async function handleTabActivated(activeInfo) {
   try {
-    await handleAutoPickUrlSilently();
+    scheduleActiveQuoChatSync();
   } catch (e) {
     console.debug("Error handling tab activation:", e);
   }
@@ -1567,10 +2055,19 @@ async function handleAutoPickPhotos() {
 
 function renderPhotos(photos) {
   if (!photosPreviewContainer || !noPhotosLabel) return;
+
+  const nextPhotos = Array.isArray(photos) ? photos : [];
+  if (
+    photoLightbox &&
+    !photoLightbox.hidden &&
+    !samePhotoList(lightboxPhotos, nextPhotos)
+  ) {
+    closePhotoLightbox({ restoreFocus: false });
+  }
   
   photosPreviewContainer.innerHTML = "";
   
-  if (!photos || photos.length === 0) {
+  if (nextPhotos.length === 0) {
     photosPreviewContainer.style.display = "none";
     noPhotosLabel.style.display = "block";
     return;
@@ -1579,13 +2076,25 @@ function renderPhotos(photos) {
   photosPreviewContainer.style.display = "grid";
   noPhotosLabel.style.display = "none";
   
-  photos.forEach((url, index) => {
+  nextPhotos.forEach((url, index) => {
     const thumb = document.createElement("div");
     thumb.className = "photo-thumb";
-    
+
+    const previewBtn = document.createElement("button");
+    previewBtn.type = "button";
+    previewBtn.className = "photo-thumb__preview";
+    previewBtn.title = `Preview picture ${index + 1}`;
+    previewBtn.setAttribute("aria-label", `Preview chat picture ${index + 1} of ${nextPhotos.length}`);
+
     const img = document.createElement("img");
     img.src = url;
     img.alt = `Chat image ${index + 1}`;
+    img.loading = "lazy";
+
+    previewBtn.appendChild(img);
+    previewBtn.addEventListener("click", () => {
+      openPhotoLightbox(nextPhotos, index, previewBtn);
+    });
     
     const removeBtn = document.createElement("button");
     removeBtn.type = "button";
@@ -1603,8 +2112,88 @@ function renderPhotos(photos) {
       renderPhotos(updatedPhotos);
     });
     
-    thumb.appendChild(img);
+    thumb.appendChild(previewBtn);
     thumb.appendChild(removeBtn);
     photosPreviewContainer.appendChild(thumb);
   });
+}
+
+function samePhotoList(first, second) {
+  if (first.length !== second.length) return false;
+  return first.every((url, index) => url === second[index]);
+}
+
+function openPhotoLightbox(photos, index, returnFocusElement) {
+  if (!photoLightbox || !photoLightboxImage || !photos?.length) return;
+
+  lightboxPhotos = [...photos];
+  lightboxPhotoIndex = Math.min(Math.max(Number(index) || 0, 0), lightboxPhotos.length - 1);
+  lightboxReturnFocus = returnFocusElement || document.activeElement;
+  photoLightbox.hidden = false;
+  document.body.classList.add("photo-lightbox-open");
+  renderPhotoLightboxImage();
+  photoLightboxClose?.focus();
+}
+
+function closePhotoLightbox({ restoreFocus = true } = {}) {
+  if (!photoLightbox || photoLightbox.hidden) return;
+
+  photoLightbox.hidden = true;
+  document.body.classList.remove("photo-lightbox-open");
+  if (photoLightboxImage) {
+    photoLightboxImage.removeAttribute("src");
+    photoLightboxImage.alt = "";
+  }
+
+  const returnFocus = lightboxReturnFocus;
+  lightboxPhotos = [];
+  lightboxPhotoIndex = 0;
+  lightboxReturnFocus = null;
+  if (restoreFocus && returnFocus?.isConnected) {
+    returnFocus.focus();
+  }
+}
+
+function movePhotoLightbox(offset) {
+  if (!lightboxPhotos.length) return;
+  lightboxPhotoIndex = (
+    lightboxPhotoIndex + offset + lightboxPhotos.length
+  ) % lightboxPhotos.length;
+  renderPhotoLightboxImage();
+}
+
+function renderPhotoLightboxImage() {
+  if (!photoLightboxImage || !lightboxPhotos.length) return;
+
+  const total = lightboxPhotos.length;
+  photoLightboxImage.src = lightboxPhotos[lightboxPhotoIndex];
+  photoLightboxImage.alt = `Chat picture ${lightboxPhotoIndex + 1} of ${total}`;
+  if (photoLightboxCounter) {
+    photoLightboxCounter.textContent = `${lightboxPhotoIndex + 1} / ${total}`;
+  }
+
+  const hideNavigation = total < 2;
+  if (photoLightboxPrev) photoLightboxPrev.hidden = hideNavigation;
+  if (photoLightboxNext) photoLightboxNext.hidden = hideNavigation;
+}
+
+function handlePhotoLightboxBackdropClick(event) {
+  if (event.target === photoLightbox || event.target === photoLightboxStage) {
+    closePhotoLightbox();
+  }
+}
+
+function handlePhotoLightboxKeydown(event) {
+  if (!photoLightbox || photoLightbox.hidden) return;
+
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closePhotoLightbox();
+  } else if (event.key === "ArrowLeft" && lightboxPhotos.length > 1) {
+    event.preventDefault();
+    movePhotoLightbox(-1);
+  } else if (event.key === "ArrowRight" && lightboxPhotos.length > 1) {
+    event.preventDefault();
+    movePhotoLightbox(1);
+  }
 }

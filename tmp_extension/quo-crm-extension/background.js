@@ -92,6 +92,8 @@ async function handleMessage(message, sender) {
   switch (message?.type) {
     case "PAGE_CONTEXT_READY":
       return handlePageContextReady(message, sender);
+    case "QUO_CHAT_CHANGED":
+      return { success: true };
     case "ASSIGN_SELECTION_TO_FIELD":
       return assignSelectionToField(message, sender);
     case "GET_DRAFT":
@@ -130,7 +132,7 @@ async function handleMessage(message, sender) {
         message.checkedPhone
       );
     case "GET_EXTENSION_REPORT":
-      return getExtensionReport();
+      return getExtensionReport(message.dateFrom, message.dateTo);
     case "CENSUS_ADDRESS_LOOKUP":
       return searchCensusAddress(message.address);
     case "GET_SETTINGS":
@@ -145,6 +147,8 @@ async function handleMessage(message, sender) {
       };
     case "QUO_SEND_MESSAGE":
       return handleQuoSendMessage(message);
+    case "QUO_PREPARE_CHAT":
+      return handleQuoPrepareChat(message);
     default:
       throw new Error("Unsupported message type.");
   }
@@ -517,14 +521,6 @@ async function createLead() {
 
   const jobId = generateJobId();
 
-  // True when urgent was asked for and was not applied on insert. The side panel
-  // reads this to say what is outstanding rather than reporting a plain success
-  // for a request that did not happen.
-  let urgentAfterInsert = false;
-  // Whether the conversation check applies to the user creating this lead. Kept in
-  // step with showsUrgentCheck() in src/lib/urgent-verification.ts.
-  let urgentCheckApplies = false;
-
   const insertData = {
     job_id: jobId,
     customer_name: draft.customerName.trim(),
@@ -541,42 +537,42 @@ async function createLead() {
   };
 
   const leadStatus = normalizeLeadStatus(draft.leadStatus);
-if (leadStatus !== "default") {
-      // A new lead is never inserted as urgent_job, whatever the role.
-      //
-      // The check reads the stored record and looks it up by id, so there is
-      // nothing to check at insert time. Admin, processor and cs_admin are
-      // permitted by the database to insert urgent_job directly, but they get the
-      // same comparison and the same suggested fixes as everyone else, so the
-      // status is withheld here and returned to the caller as work still to do.
-      //
-      // Sending the status through anyway would turn a clear message into a raw
-      // database error surfaced inside the side panel.
-      if (leadStatus === "urgent_job") {
-        urgentAfterInsert = true;
-        // Mirrors showsUrgentCheck() in src/lib/urgent-verification.ts. processor
-        // is absent on purpose: they are not asked, and the database still lets
-        // them insert urgent_job directly, so this block must not fire for them.
-        const profile = await getUserProfile(user.id);
-        urgentCheckApplies = ["customer_service", "admin", "cs_admin"].includes(profile.role);
-        if (!urgentCheckApplies) {
-          // Not asked. Put the status back the way they asked for it.
-          insertData.status = "urgent_job";
-          urgentAfterInsert = false;
-        } else {
-          // Withholding urgent still has to name a status. Leaving the field out
-          // falls back to the column default, which the CRM's status filter need
-          // not recognise: filterLeads() keeps only leads whose status is in the
-          // viewer's allowed set, so the lead is created, this extension's own
-          // lookup still finds it because that query filters on created_by and
-          // reference_name rather than status, and it is invisible in the CRM.
-          // AddLeadDialog parks a withheld lead here for the same reason.
-          insertData.status = "waiting_complete_details";
-        }
-      } else {
-        insertData.status = leadStatus;
-      }
+
+  // Quote Pending to Send is not a status Customer Service may set directly.
+  // Inside the CRM it files an approval request for a CS Admin, so it has to
+  // here too, or the extension is a way around the approval. The lead is
+  // created as Waiting Complete Details, which is also where it stays if the
+  // request is declined. Anyone whose role is not known to be allowed to set
+  // the status outright goes through approval as well, so a role lookup that
+  // fails cannot reopen the gap.
+  const { role: creatorRole } = await getUserProfile(user.id);
+  const requestsQuoteApproval =
+    leadStatus === "pending_to_send" && creatorRole !== "admin" && creatorRole !== "cs_admin";
+
+  // A new lead is never inserted as urgent_job when the conversation check
+  // applies. The check reads the stored record and looks it up by id, so there
+  // is nothing to check before the row exists; the database gate rejects the
+  // insert for the same reason. Create it in its ordinary status, then run the
+  // check against the lead that now exists.
+  //
+  // Mirrors showsUrgentCheck() in src/lib/urgent-verification.ts. processor is
+  // absent on purpose: they are not asked, and the database lets them insert
+  // urgent_job directly.
+  const urgentCheckApplies =
+    leadStatus === "urgent_job" &&
+    ["customer_service", "admin", "cs_admin"].includes(creatorRole);
+
+  if (leadStatus !== "default") {
+    if (requestsQuoteApproval || urgentCheckApplies) {
+      // Withholding a status still has to name one. Leaving the field out falls
+      // back to the column default, which the CRM's status filter need not
+      // recognise, and the lead is then invisible there while this extension's
+      // own lookup still finds it. AddLeadDialog parks a withheld lead here too.
+      insertData.status = "waiting_complete_details";
+    } else {
+      insertData.status = leadStatus;
     }
+  }
 
   const leadTerms = normalizeLeadTerms(draft.terms);
   if (leadTerms) {
@@ -594,6 +590,23 @@ if (leadStatus !== "default") {
 
   if (error) {
     throw new Error(error.message);
+  }
+
+  // Same RPC the CRM calls. The lead already exists and is parked safely in
+  // Waiting Complete Details, so a failure here is reported rather than
+  // thrown: throwing would read as "no lead created" and invite a duplicate.
+  let quoteApprovalRequested = false;
+  let quoteApprovalError = null;
+  if (requestsQuoteApproval) {
+    const { error: approvalError } = await supabaseClient.rpc("request_quote_approval", {
+      _lead_id: data.id
+    });
+    if (approvalError) {
+      quoteApprovalError = approvalError.message;
+      console.error("Quote approval request failed:", approvalError);
+    } else {
+      quoteApprovalRequested = true;
+    }
   }
 
   // Upload picked photos to Supabase storage and link in lead_photos table
@@ -638,26 +651,96 @@ if (leadStatus !== "default") {
     }
   }
 
+  // The same conversation check the CRM runs, against the lead that now exists.
+  // check-urgent-lead reads the customer's conversation from quo_conversations
+  // and compares it to the stored record, so there is nothing to read off the
+  // page here: one edge function, one prompt, the same findings either way.
+  let urgentCheck = null;
+  if (urgentCheckApplies) {
+    urgentCheck = await runUrgentCheck(data.id);
+  }
+
   const settings = await getSettings();
   const leadUrl = settings.apiBaseUrl ? `${settings.apiBaseUrl}/leads/${data.id}` : null;
-  // Links straight into the conversation review. Without the ?urgentCheck=1 the
-  // lead simply opens and the CS member still has to find the status dropdown and
-  // pick Urgent again, which is the step that got missed the first time.
+  // Links straight into the conversation review, so a lead the check could not
+  // clear does not leave the CS member hunting for the status dropdown again.
   const urgentReviewUrl = leadUrl ? `${leadUrl}?urgentCheck=1` : null;
 
   return {
     success: true,
     payload: insertData,
+    quoteApprovalRequested,
+    quoteApprovalError,
+    // Urgent was asked for and withheld at insert. Saying so beats reporting a
+    // plain success for a request that did not happen.
+    urgentCheckRequired: urgentCheckApplies,
+    urgentCheck,
     response: {
       leadUrl,
       urgentReviewUrl,
-      lead: data,
-      // True when urgent was asked for and was not applied on insert. The side
-      // panel reads this to say what is outstanding rather than reporting a plain
-      // success for a request that did not happen.
-      urgentCheckRequired: urgentAfterInsert,
+      lead: data
     }
   };
+}
+
+/**
+ * Run the conversation check against a stored lead, and mark it urgent when the
+ * check comes back clean.
+ *
+ * Returns what the panel needs to say, never throws: the lead is already saved,
+ * and a check that could not run is not a reason to report the creation as
+ * failed. { state, issues, summary, applied, error }.
+ */
+async function runUrgentCheck(leadId) {
+  try {
+    const { data, error } = await supabaseClient.functions.invoke("check-urgent-lead", {
+      body: { leadId }
+    });
+
+    if (error) {
+      return { state: "error", issues: [], summary: "", applied: false, error: error.message };
+    }
+
+    const issues = Array.isArray(data?.issues) ? data.issues : [];
+    const summary = typeof data?.summary === "string" ? data.summary : "";
+    const notice = typeof data?.notice === "string" ? data.notice : "";
+
+    // "Could not verify" is not "found a problem", and neither is a pass. The
+    // function says which it is in `verification`; anything but "checked" means
+    // nothing was actually compared, whether the conversation was missing or
+    // the model call timed out.
+    if (data?.verification !== "checked") {
+      return { state: "unavailable", issues, summary, applied: false, error: null, notice };
+    }
+
+    if (!data?.clean) {
+      return { state: "issues", issues, summary, applied: false, error: null, notice };
+    }
+
+    // Clean. Record the verification, which is what lets the lead through the
+    // database gate, exactly as applyUrgentVerification() does in the CRM.
+    const { error: applyError } = await supabaseClient.rpc("approve_urgent_verification", {
+      p_lead_id: leadId,
+      p_ai_summary: summary || null,
+      p_ai_model: "gpt-4o-mini"
+    });
+
+    if (applyError) {
+      // The check passed; recording it did not. Reporting this as findings would
+      // claim the conversation disagreed with the lead, which it did not.
+      return { state: "error", issues: [], summary, applied: false, error: applyError.message };
+    }
+
+    return { state: "clean", issues, summary, applied: true, error: null };
+  } catch (err) {
+    return {
+      state: "error",
+      issues: [],
+      summary: "",
+      applied: false,
+      error: err instanceof Error ? err.message : String(err)
+    };
+  }
 }
 
 // Helper for robust phone number comparison (ignores formatting, country codes, and extensions)
@@ -805,23 +888,52 @@ async function updateLeadScheduleRequirement(leadId, requestedScheduleRequiremen
 }
 
 // Get Report Stats for Current User
-async function getExtensionReport() {
+async function getExtensionReport(dateFrom, dateTo) {
   const { data: { user } } = await supabaseClient.auth.getUser();
   if (!user) {
     throw new Error("User not authenticated.");
   }
 
-  const sevenDaysAgo = new Date();
-  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-  sevenDaysAgo.setHours(0, 0, 0, 0);
+  // Default: last 7 days
+  const now = new Date();
+  let fromDate, toDate;
 
+  if (dateFrom) {
+    fromDate = new Date(dateFrom);
+    fromDate.setHours(0, 0, 0, 0);
+  } else {
+    fromDate = new Date();
+    fromDate.setDate(fromDate.getDate() - 6);
+    fromDate.setHours(0, 0, 0, 0);
+  }
+
+  if (dateTo) {
+    toDate = new Date(dateTo);
+    toDate.setHours(23, 59, 59, 999);
+  } else {
+    toDate = new Date();
+    toDate.setHours(23, 59, 59, 999);
+  }
+
+  // Clamp to 90-day max window
+  const MAX_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
+  if (toDate - fromDate > MAX_DAYS_MS) {
+    fromDate = new Date(toDate.getTime() - MAX_DAYS_MS);
+    fromDate.setHours(0, 0, 0, 0);
+  }
+
+  // FIX: Filter by created_by (logged-in user) + source_url not null
+  // (all leads captured via extension have a source_url set — this correctly
+  //  identifies extension leads without relying on the free-text reference_name field).
   const { data, error } = await supabaseClient
     .from("leads")
-    .select("id, job_id, customer_name, customer_phone, created_at, status")
+    .select("id, job_id, customer_name, customer_phone, created_at, status, service_type, address, source_url")
     .eq("created_by", user.id)
-    .eq("reference_name", "Chrome Extension")
-    .gte("created_at", sevenDaysAgo.toISOString())
-    .order("created_at", { ascending: false });
+    .not("source_url", "is", null)
+    .gte("created_at", fromDate.toISOString())
+    .lte("created_at", toDate.toISOString())
+    .order("created_at", { ascending: false })
+    .limit(500);
 
   if (error) {
     throw new Error(error.message);
@@ -835,35 +947,62 @@ async function getExtensionReport() {
 
   let todayCount = 0;
   let yesterdayCount = 0;
-  let history = [];
+  let totalCount = 0;
+  let activeCount = 0;
+  let urgentCount = 0;
+  let cancelledCount = 0;
 
-  if (data) {
-    data.forEach((lead) => {
-      const createdDate = new Date(lead.created_at);
-      if (createdDate >= today) {
-        todayCount++;
-      } else if (createdDate >= yesterday && createdDate < today) {
-        yesterdayCount++;
-      }
-    });
+  const URGENT_STATUSES = new Set(["urgent_job", "need_tech"]);
+  const CANCELLED_STATUSES = new Set(["cancelled"]);
+  const ACTIVE_STATUSES = new Set(["default", "pending_to_send", "quote_sent_waiting", "scheduled"]);
 
-    history = data.slice(0, 5).map(lead => ({
-      id: lead.id,
-      jobId: lead.job_id,
-      customerName: lead.customer_name,
-      customerPhone: lead.customer_phone,
-      createdAt: lead.created_at,
-      status: lead.status
-    }));
-  }
+  const leads = data || [];
+  totalCount = leads.length;
+
+  leads.forEach((lead) => {
+    const createdDate = new Date(lead.created_at);
+    if (createdDate >= today) {
+      todayCount++;
+    } else if (createdDate >= yesterday && createdDate < today) {
+      yesterdayCount++;
+    }
+
+    const s = lead.status || "default";
+    if (URGENT_STATUSES.has(s)) {
+      urgentCount++;
+    } else if (CANCELLED_STATUSES.has(s)) {
+      cancelledCount++;
+    } else if (ACTIVE_STATUSES.has(s) || s === "default") {
+      activeCount++;
+    }
+  });
+
+  const history = leads.map(lead => ({
+    id: lead.id,
+    jobId: lead.job_id,
+    customerName: lead.customer_name,
+    customerPhone: lead.customer_phone,
+    serviceType: lead.service_type,
+    address: lead.address,
+    createdAt: lead.created_at,
+    status: lead.status,
+    sourceUrl: lead.source_url
+  }));
 
   return {
     success: true,
     todayCount,
     yesterdayCount,
-    history
+    totalCount,
+    activeCount,
+    urgentCount,
+    cancelledCount,
+    history,
+    dateFrom: fromDate.toISOString(),
+    dateTo: toDate.toISOString()
   };
 }
+
 
 // Phone formatting helper
 function formatPhoneNumber(value) {
@@ -925,72 +1064,138 @@ async function handleQuoSendMessage(message) {
     return { success: false, error: "Missing chatUrl or message." };
   }
 
-  // Find an existing Quo tab
-  const tabs = await chrome.tabs.query({ url: "*://*.quo.com/*" });
-  
-  if (tabs.length > 0) {
-    const tab = tabs[0];
-    
-    // Send message to the content script to navigate and send
-    const result = await sendMessageWithRetry(tab.id, {
-      type: "NAVIGATE_AND_SEND_MESSAGE",
-      chatUrl: chatUrl,
-      message: chatMessage,
-      scheduleTime: scheduleTime
-    });
-    
-    // Auto-refresh the Quo tab so the UI is up-to-date for the user
-    if (result && result.success) {
-      chrome.tabs.reload(tab.id);
-    }
+  const tabs = await chrome.tabs.query({ url: ["https://my.quo.com/*", "https://quo.com/*"] });
+  const matchingTab = tabs.find((tab) => tab.id && isTabOnTargetChat(tab.url, chatUrl));
+  const fallbackTab = [...tabs]
+    .filter((tab) => tab.id)
+    .sort((a, b) => Number(b.active) - Number(a.active) || (b.lastAccessed || 0) - (a.lastAccessed || 0))[0];
 
-    return { ...result, newTab: false };
-  } else {
-    // Open a new tab strictly in the background
-    const newTab = await chrome.tabs.create({ url: chatUrl, active: false });
-    
-    // We need to wait for the tab to load before sending the message
-    return new Promise((resolve) => {
-      chrome.tabs.onUpdated.addListener(async function listener(tabId, info) {
-        if (tabId === newTab.id && info.status === 'complete') {
-          chrome.tabs.onUpdated.removeListener(listener);
-          const result = await sendMessageWithRetry(tabId, {
-            type: "NAVIGATE_AND_SEND_MESSAGE",
-            chatUrl: chatUrl,
-            message: chatMessage,
-            scheduleTime: scheduleTime
-          });
-          
-          if (result && result.success) {
-            chrome.tabs.reload(tabId);
-          }
-
-          resolve({ ...result, newTab: true });
-        }
-      });
-    });
+  let tab = matchingTab || fallbackTab;
+  let newTab = false;
+  if (!tab) {
+    tab = await chrome.tabs.create({ url: chatUrl, active: false });
+    newTab = true;
+  } else if (!matchingTab) {
+    // A full background navigation is deliberate here. SPA navigation could
+    // retain the previous chat's composer and send the message to the wrong CX.
+    tab = await chrome.tabs.update(tab.id, { url: chatUrl });
   }
+
+  if (!tab?.id) return { success: false, error: "Could not open the requested Quo chat." };
+  const hasExactConversation = !!conversationIdFromUrl(chatUrl);
+
+  // Exact conversation URLs are safe to handle as soon as the new page's
+  // content script is available. The content script verifies the conversation
+  // ID before touching the composer, so we do not need to wait for unrelated
+  // images, analytics and other page resources to finish loading.
+  if (!hasExactConversation) {
+    await waitForTabComplete(tab.id, 25000);
+  }
+  const result = await sendMessageWithRetry(tab.id, {
+    type: "NAVIGATE_AND_SEND_MESSAGE",
+    chatUrl,
+    message: chatMessage,
+    scheduleTime,
+    navigationPrepared: true
+  }, hasExactConversation ? 40 : 15);
+  return { ...result, newTab };
 }
 
+async function handleQuoPrepareChat(message) {
+  const { chatUrl } = message;
+  if (!chatUrl) return { success: false, error: "Missing chatUrl." };
+
+  const tabs = await chrome.tabs.query({ url: ["https://my.quo.com/*", "https://quo.com/*"] });
+  const matchingTab = tabs.find((tab) => tab.id && isTabOnTargetChat(tab.url, chatUrl));
+  if (matchingTab?.id) return { success: true, ready: true };
+
+  const fallbackTab = [...tabs]
+    .filter((tab) => tab.id)
+    .sort((a, b) => Number(b.active) - Number(a.active) || (b.lastAccessed || 0) - (a.lastAccessed || 0))[0];
+
+  if (fallbackTab?.id) {
+    await chrome.tabs.update(fallbackTab.id, { url: chatUrl });
+    return { success: true, ready: false };
+  }
+
+  await chrome.tabs.create({ url: chatUrl, active: false });
+  return { success: true, ready: false };
+}
+
+function normalizedPhoneFromUrl(value) {
+  try { return (new URL(value).searchParams.get("phone") || "").replace(/\D/g, ""); }
+  catch (e) { return ""; }
+}
+
+function conversationIdFromUrl(value) {
+  try {
+    const match = new URL(value).pathname.match(/\/c\/([^/?#]+)/);
+    return match ? match[1] : "";
+  } catch (e) { return ""; }
+}
+
+function isTabOnTargetChat(currentUrl, targetUrl) {
+  const targetConversationId = conversationIdFromUrl(targetUrl);
+  if (targetConversationId) return conversationIdFromUrl(currentUrl) === targetConversationId;
+  const targetPhone = normalizedPhoneFromUrl(targetUrl);
+  return !!targetPhone && normalizedPhoneFromUrl(currentUrl) === targetPhone;
+}
+
+function waitForTabComplete(tabId, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      chrome.tabs.onRemoved.removeListener(onRemoved);
+      error ? reject(error) : resolve();
+    };
+    const onUpdated = (updatedId, info) => {
+      if (updatedId === tabId && info.status === "complete") finish();
+    };
+    const onRemoved = (removedId) => {
+      if (removedId === tabId) finish(new Error("The Quo tab was closed before the chat loaded."));
+    };
+    const timer = setTimeout(() => finish(new Error("Timed out while opening the requested Quo chat.")), timeoutMs);
+    chrome.tabs.onUpdated.addListener(onUpdated);
+    chrome.tabs.onRemoved.addListener(onRemoved);
+    chrome.tabs.get(tabId).then((current) => {
+      if (current?.status === "complete") finish();
+    }).catch((error) => finish(error));
+  });
+}
 async function sendMessageWithRetry(tabId, message, maxRetries = 15) {
+  let lastRetryableResponse = null;
   for (let i = 0; i < maxRetries; i++) {
     try {
       const response = await new Promise((resolve, reject) => {
-        chrome.tabs.sendMessage(tabId, message, (resp) => {
+        // Only the top Quo page owns inbox navigation. Sending to every frame
+        // can return an iframe's "no editor" response before the page has a
+        // chance to select the requested customer conversation.
+        chrome.tabs.sendMessage(tabId, message, { frameId: 0 }, (resp) => {
           if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
           else resolve(resp);
         });
       });
-      if (response && response.success !== undefined) {
-        console.log("Quo CRM Extension: Message successfully sent to content script on retry", i);
+      if (response?.success) return response;
+      if (response?.retryable) {
+        lastRetryableResponse = response;
+      } else if (response && response.success !== undefined) {
         return response;
       }
-    } catch (e) {
+    } catch (error) {
       console.log("Quo CRM Extension: Content script not ready, retrying...", i);
     }
-    // Wait 1 second before retrying
-    await new Promise(r => setTimeout(r, 1000));
+    // Retry quickly during normal React startup, then back off. This removes
+    // the previous average half-second wait without busy-looping on slow loads.
+    const retryDelay = i < 10 ? 150 : i < 20 ? 300 : 750;
+    await new Promise(r => setTimeout(r, retryDelay));
   }
-  console.warn("Quo CRM Extension: Failed to send message to content script after retries.");
-  return { success: false, error: "Content script did not respond after 15 seconds." };
+  console.warn("Quo CRM Extension: Could not reach a ready Quo composer after retries.");
+  return lastRetryableResponse || {
+    success: false,
+    error: "Could not find message input editor after waiting for the Quo chat to load."
+  };
 }
