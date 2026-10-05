@@ -521,10 +521,8 @@ async function createLead() {
   // reads this to say what is outstanding rather than reporting a plain success
   // for a request that did not happen.
   let urgentAfterInsert = false;
-  // Carried back to the caller so the panel can say whether the check that follows
   // Whether the conversation check applies to the user creating this lead. Kept in
-  // step with showsUrgentCheck() in src/lib/urgent-verification.ts and with the
-  // bypass list in enforce_urgent_gate().
+  // step with showsUrgentCheck() in src/lib/urgent-verification.ts.
   let urgentCheckApplies = false;
 
   const insertData = {
@@ -633,19 +631,22 @@ if (leadStatus !== "default") {
 
   const settings = await getSettings();
   const leadUrl = settings.apiBaseUrl ? `${settings.apiBaseUrl}/leads/${data.id}` : null;
+  // Links straight into the conversation review. Without the ?urgentCheck=1 the
+  // lead simply opens and the CS member still has to find the status dropdown and
+  // pick Urgent again, which is the step that got missed the first time.
+  const urgentReviewUrl = leadUrl ? `${leadUrl}?urgentCheck=1` : null;
 
   return {
     success: true,
     payload: insertData,
     response: {
       leadUrl,
+      urgentReviewUrl,
       lead: data,
-      // True when urgent was asked for and was not applied on insert. The side
       // True when urgent was asked for and was not applied on insert. The side
       // panel reads this to say what is outstanding rather than reporting a plain
       // success for a request that did not happen.
       urgentCheckRequired: urgentAfterInsert,
-
     }
   };
 }
