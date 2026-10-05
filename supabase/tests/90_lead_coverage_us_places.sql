@@ -158,21 +158,29 @@ END $$;
 
 -- -----------------------------------------------------------------------------
 -- 03  A technician Area is placed on the map
---     Houston must resolve to coordinates. A whole-state Area must NOT, because
---     "California" cannot be shown to reach one job address.
+--     Use a synthetic place so this check does not depend on the live
+--     us_places dataset containing a particular city spelling. A whole-state
+--     Area must NOT resolve, because it cannot be shown to reach one job.
 -- -----------------------------------------------------------------------------
+INSERT INTO public.us_places
+  (geoid, name, state_code, state_name, population, latitude, longitude)
+VALUES ('ZZ-COV-PROBE', 'Coverage Probe City', 'TX', 'Texas', 100, 0, 0);
+
 DO $$
 DECLARE
-  v_houston record;
+  v_city   record;
   v_state   record;
   v_bad integer := 0;
   v_detail text := '';
 BEGIN
-  SELECT * INTO v_houston FROM public.technician_area_place('Houston, Texas');
-  IF v_houston.latitude IS NULL OR v_houston.city IS DISTINCT FROM 'Houston' THEN
+  SELECT * INTO v_city FROM public.technician_area_place('Coverage Probe City, TX');
+  IF v_city.latitude IS NULL OR v_city.city IS DISTINCT FROM 'Coverage Probe City'
+     OR v_city.state_code IS DISTINCT FROM 'TX' THEN
     v_bad := v_bad + 1;
-    v_detail := v_detail || ' "Houston, Texas" did not place: '
-      || coalesce(v_houston.city, '(no city)') || ' lat=' || coalesce(v_houston.latitude::text, 'NULL') || ';';
+    v_detail := v_detail || ' synthetic city did not place: '
+      || coalesce(v_city.city, '(no city)') || ', '
+      || coalesce(v_city.state_code, '(no state)') || ' lat='
+      || coalesce(v_city.latitude::text, 'NULL') || ';';
   END IF;
 
   SELECT * INTO v_state FROM public.technician_area_place('California');
@@ -186,7 +194,7 @@ BEGIN
          'technician Area places a city and refuses a whole state',
          v_bad = 0,
          CASE WHEN v_bad = 0
-              THEN 'Houston placed; "California" left unplaced so it counts for nobody'
+              THEN 'synthetic city placed; "California" left unplaced so it counts for nobody'
               ELSE v_detail
          END;
 END $$;
@@ -203,10 +211,6 @@ END $$;
 --     rule it matched every technician whose Area contained the lead city/state and
 --     was labelled Good. Under distance it must read 0 and Bad.
 -- -----------------------------------------------------------------------------
-INSERT INTO public.us_places
-  (geoid, name, state_code, state_name, population, latitude, longitude)
-VALUES ('ZZ-COV-PROBE', 'Coverage Probe City', 'TX', 'Texas', 100, 0, 0);
-
 INSERT INTO public.technicians (name, area, is_active)
 VALUES ('COV-PROBE-01', 'Coverage Probe City, TX', true),
        ('COV-PROBE-02', 'Coverage Probe City, TX', true),
