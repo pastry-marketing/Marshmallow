@@ -14,9 +14,14 @@
 // ever reaches the browser - the technicians table is restricted to admins and
 // processors, and nothing here reveals who or where.
 //
-// See supabase/migrations/20261105000000_lead_technician_coverage.sql for how the
-// area is resolved, and why city matching can miss a technician who uses a metro
-// shorthand like "DFW" for their Area.
+// The lead and every technician are placed on the us_places table (31,839 Census
+// places) and counted within 40 miles, the same rule Map View's coverage circles
+// draw. A lead whose address cannot be placed shows no badge rather than a false
+// "Bad Coverage", and a technician whose Area is blank, a whole state, or a
+// shorthand like "DFW" counts for no lead.
+//
+// See supabase/migrations/20261107000000_place_coverage_by_us_places.sql, and
+// supabase/tests/90_lead_coverage_us_places.sql for the cases that pin it down.
 // =============================================================================
 
 export type CoverageLevel = "good" | "normal" | "bad";

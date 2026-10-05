@@ -49,6 +49,7 @@ import { optimizeImageForUpload } from "@/lib/image-upload";
 import { updateLeadById } from "@/lib/lead-updates";
 import { requestQuoteApproval } from "@/lib/quote-approval-requests";
 import StatusBadge from "@/components/leads/StatusBadge";
+import LeadCoverageBadge from "@/components/leads/LeadCoverageBadge";
 import CancelledStatusBadge from "@/components/leads/CancelledStatusBadge";
 import NearbyUrgentLeads from "@/components/leads/NearbyUrgentLeads";
 import LeadTagControl from "@/components/leads/LeadTagControl";
@@ -795,6 +796,23 @@ export default function LeadDetailPage() {
         const newLeadId = data.id;
         setLeadId(newLeadId);
         setOriginalLead(data as Lead);
+
+        // The coverage trigger stores its result in a follow-up UPDATE. The
+        // INSERT ... RETURNING payload can therefore contain the pre-trigger
+        // NULL coverage fields; read the stored result once so a lead created
+        // here shows its badge immediately without requiring a page refresh.
+        const { data: storedCoverage } = await supabase
+          .from("leads")
+          .select("coverage_level, coverage_tech_count, coverage_area_label")
+          .eq("id", newLeadId)
+          .maybeSingle();
+        if (storedCoverage) {
+          const coveragePatch = storedCoverage as Partial<Lead>;
+          setOriginalLead((previous) => previous
+            ? { ...previous, ...coveragePatch }
+            : previous);
+        }
+
         if (urgentVerificationRequested) {
           setForm((previous) => ({ ...previous, status: savedStatus }));
         }
@@ -1229,6 +1247,13 @@ export default function LeadDetailPage() {
                     <CancelledStatusBadge leadId={leadId} status={form.status} size="md" />
                   ) : (
                     <StatusBadge status={form.status} />
+                  )}
+                  {!isNew && originalLead && (
+                    <LeadCoverageBadge
+                      level={originalLead.coverage_level}
+                      count={originalLead.coverage_tech_count}
+                      areaLabel={originalLead.coverage_area_label}
+                    />
                   )}
                   {!isNew && hasQuickChatAccess && originalLead?.customer_phone && (
                     <QuoPhoneTrigger

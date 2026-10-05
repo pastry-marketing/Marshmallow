@@ -32,6 +32,7 @@ import {
   History,
 } from "lucide-react";
 import StatusBadge from "./StatusBadge";
+import LeadCoverageBadge from "./LeadCoverageBadge";
 import LeadStatusHistoryDialog from "./LeadStatusHistoryDialog";
 import UrgentAICheckDialog from "./UrgentAICheckDialog";
 import { showsUrgentCheck } from "@/lib/urgent-verification";
@@ -734,6 +735,11 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
                     {lead.customer_name}
                   </h2>
                   <StatusBadge status={lead.status as LeadStatus} />
+                  <LeadCoverageBadge
+                    level={lead.coverage_level}
+                    count={lead.coverage_tech_count}
+                    areaLabel={lead.coverage_area_label}
+                  />
                   {lead.source_url && (
                     <a
                       href={lead.source_url}
