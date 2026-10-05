@@ -32,9 +32,9 @@
 --
 --   1. A lead we cannot place shows NO badge. It never reads as "Bad
 --      Coverage": an unreadable address is not an unserved area.
---   2. If not one active technician can be placed anywhere on the roster,
---      every lead shows no badge, because a roster we cannot read proves
---      nothing about coverage.
+--   2. An actually empty active roster is Bad Coverage (zero technicians).
+--      If there are active technicians but not one can be placed, the answer is
+--      unknown and no badge is shown rather than inventing a zero.
 --
 -- SET-BASED RECALCULATE
 --   compute_all_lead_coverage() materialises the placed technician set once and
@@ -233,6 +233,7 @@ DECLARE
   v_zip          text;
   v_label        text;
   v_count        bigint;
+  v_active       bigint;
   v_placeable    bigint;
   v_radius_miles constant double precision := 40;
 BEGIN
@@ -260,10 +261,14 @@ BEGIN
     v_state
   );
 
-  -- Place the lead. Stored coordinates first, since a lead that has been
-  -- geocoded is more precise than the centre of its city.
-  v_lat := c_lead.latitude;
-  v_lng := c_lead.longitude;
+  -- Place the lead. Stored coordinates first only when they form a valid pair;
+  -- otherwise use the city centroid. Never mix a stored latitude with a city
+  -- longitude, or accept an out-of-range database value as a real point.
+  IF c_lead.latitude BETWEEN -90 AND 90
+     AND c_lead.longitude BETWEEN -180 AND 180 THEN
+    v_lat := c_lead.latitude;
+    v_lng := c_lead.longitude;
+  END IF;
 
   IF (v_lat IS NULL OR v_lng IS NULL) AND v_city IS NOT NULL THEN
     SELECT p.latitude, p.longitude
@@ -282,33 +287,61 @@ BEGIN
 
   -- How much of the roster can be placed at all. If none of it can, a count of
   -- zero would be reporting our blindness rather than the roster.
-  SELECT count(*)
-    INTO v_placeable
+  SELECT count(*) FILTER (WHERE coalesce(t.is_active, true)),
+         count(*) FILTER (
+           WHERE coalesce(t.is_active, true)
+             AND CASE WHEN t.latitude BETWEEN -90 AND 90
+                           AND t.longitude BETWEEN -180 AND 180
+                      THEN true
+                      ELSE tp.latitude BETWEEN -90 AND 90
+                           AND tp.longitude BETWEEN -180 AND 180
+                 END
+         )
+    INTO v_active, v_placeable
     FROM public.technicians t
-    LEFT JOIN LATERAL public.technician_area_place(t.area) tp ON true
-   WHERE coalesce(t.is_active, true)
-     AND COALESCE(t.latitude,  tp.latitude)  IS NOT NULL
-     AND COALESCE(t.longitude, tp.longitude) IS NOT NULL;
+    LEFT JOIN LATERAL public.technician_area_place(t.area) tp ON true;
+
+  -- An empty active roster is genuinely zero coverage everywhere. A nonempty
+  -- roster that cannot be placed at all is unknown, not a false zero.
+  IF v_active = 0 THEN
+    RETURN QUERY SELECT 0::bigint, v_label;
+    RETURN;
+  END IF;
 
   IF v_placeable = 0 THEN
     RETURN;
   END IF;
 
-  -- The bounding box is a cheap prefilter only; haversine decides membership.
-  -- It is deliberately wider than 40 miles at every inhabited latitude, so the
-  -- prefilter can never discard a technician that distance would have kept.
+  -- The latitude/longitude bounds are a cheap prefilter only; haversine decides
+  -- membership. Longitude delta accounts for latitude and wraps at the
+  -- antimeridian, so it cannot discard a point that distance would keep.
   SELECT count(DISTINCT lower(btrim(t.name)))
     INTO v_count
     FROM public.technicians t
     LEFT JOIN LATERAL public.technician_area_place(t.area) tp ON true
    WHERE coalesce(t.is_active, true)
-     AND COALESCE(t.latitude,  tp.latitude)  BETWEEN v_lat - 0.8 AND v_lat + 0.8
-     AND COALESCE(t.longitude, tp.longitude) BETWEEN v_lng - 1.5 AND v_lng + 1.5
+     AND (CASE WHEN t.latitude BETWEEN -90 AND 90
+                    AND t.longitude BETWEEN -180 AND 180
+               THEN t.latitude ELSE tp.latitude END) BETWEEN v_lat - 0.8 AND v_lat + 0.8
+     AND (
+          abs(
+            (CASE WHEN t.latitude BETWEEN -90 AND 90 AND t.longitude BETWEEN -180 AND 180
+                  THEN t.longitude ELSE tp.longitude END) - v_lng
+          ) <= LEAST(180.0, v_radius_miles / (69.0 * GREATEST(abs(cos(radians(v_lat))), 0.05)) + 0.05)
+          OR 360.0 - abs(
+            (CASE WHEN t.latitude BETWEEN -90 AND 90 AND t.longitude BETWEEN -180 AND 180
+                  THEN t.longitude ELSE tp.longitude END) - v_lng
+          ) <= LEAST(180.0, v_radius_miles / (69.0 * GREATEST(abs(cos(radians(v_lat))), 0.05)) + 0.05)
+     )
      AND public.haversine_miles(
            v_lat,
            v_lng,
-           COALESCE(t.latitude,  tp.latitude),
-           COALESCE(t.longitude, tp.longitude)
+           CASE WHEN t.latitude BETWEEN -90 AND 90
+                     AND t.longitude BETWEEN -180 AND 180
+                THEN t.latitude ELSE tp.latitude END,
+           CASE WHEN t.latitude BETWEEN -90 AND 90
+                     AND t.longitude BETWEEN -180 AND 180
+                THEN t.longitude ELSE tp.longitude END
          ) <= v_radius_miles;
 
   RETURN QUERY SELECT GREATEST(v_count, 0), v_label;
@@ -317,14 +350,38 @@ $fn$;
 
 COMMENT ON FUNCTION public.lead_technician_coverage(uuid) IS
   'Active technicians near a lead: placed on us_places and counted within 40 miles. '
-  'Returns no row when the lead cannot be placed, or when no technician on the roster '
-  'can be. Internal: not granted to any client role.';
+  'Returns no row when the lead cannot be placed, or when a nonempty active roster '
+  'cannot be placed. An empty active roster returns zero. Internal: not granted to clients.';
 
 REVOKE ALL ON FUNCTION public.lead_technician_coverage(uuid) FROM PUBLIC, anon, authenticated;
 
 
 -- -----------------------------------------------------------------------------
--- 5. Recompute every lead, set-based
+-- 5. Trusted trigger wrapper
+--    The initial migration revoked direct client execution of
+--    refresh_lead_coverage(), but its trigger wrapper was SECURITY INVOKER. A
+--    signed-in user inserting/updating a lead could therefore hit a permission
+--    error when the trigger tried to call that private function. The wrapper is
+--    deliberately SECURITY DEFINER: callers still cannot invoke the refresh
+--    function directly, but normal lead writes can safely run the trigger.
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.trg_lead_coverage_refresh()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $fn$
+BEGIN
+  PERFORM public.refresh_lead_coverage(NEW.id);
+  RETURN NULL;
+END;
+$fn$;
+
+REVOKE ALL ON FUNCTION public.trg_lead_coverage_refresh() FROM PUBLIC, anon, authenticated;
+
+
+-- -----------------------------------------------------------------------------
+-- 6. Recompute every lead, set-based
 --    Internal worker. The placed roster is materialised once and joined to the
 --    placed leads, so the cost is one pass rather than 4,000 roster passes.
 --
@@ -341,38 +398,79 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $fn$
 DECLARE
+  v_active bigint;
   v_placeable bigint;
 BEGIN
-  SELECT count(*)
-    INTO v_placeable
+  SELECT count(*) FILTER (WHERE coalesce(t.is_active, true)),
+         count(*) FILTER (
+           WHERE coalesce(t.is_active, true)
+             AND CASE WHEN t.latitude BETWEEN -90 AND 90
+                           AND t.longitude BETWEEN -180 AND 180
+                      THEN true
+                      ELSE tp.latitude BETWEEN -90 AND 90
+                           AND tp.longitude BETWEEN -180 AND 180
+                 END
+         )
+    INTO v_active, v_placeable
     FROM public.technicians t
-    LEFT JOIN LATERAL public.technician_area_place(t.area) tp ON true
-   WHERE coalesce(t.is_active, true)
-     AND COALESCE(t.latitude,  tp.latitude)  IS NOT NULL
-     AND COALESCE(t.longitude, tp.longitude) IS NOT NULL;
+    LEFT JOIN LATERAL public.technician_area_place(t.area) tp ON true;
 
-  IF v_placeable = 0 THEN
-    -- Nothing on the roster can be placed, so nothing can be said.
-    RETURN QUERY SELECT 0::bigint, 0::bigint, 0::bigint, 0::bigint, 0::bigint;
+  IF v_placeable = 0 AND v_active > 0 THEN
+    -- There are active technicians but not one can be placed, so previous
+    -- badges are stale and must be cleared rather than left looking current.
+    UPDATE public.leads l
+       SET coverage_tech_count = NULL,
+           coverage_level = NULL,
+           coverage_area_label = NULL,
+           coverage_checked_at = now()
+     WHERE l.address IS NOT NULL OR l.city IS NOT NULL
+        OR l.state IS NOT NULL OR l.zip_code IS NOT NULL;
+
+    RETURN QUERY
+      SELECT
+        count(*) FILTER (WHERE l.coverage_checked_at IS NOT NULL),
+        count(*) FILTER (WHERE l.coverage_level = 'good'),
+        count(*) FILTER (WHERE l.coverage_level = 'normal'),
+        count(*) FILTER (WHERE l.coverage_level = 'bad'),
+        count(*) FILTER (WHERE l.coverage_checked_at IS NOT NULL
+                           AND l.coverage_level IS NULL)
+      FROM public.leads l;
     RETURN;
   END IF;
 
   WITH placed_tech AS MATERIALIZED (
     SELECT lower(btrim(t.name))            AS tech_name,
-           COALESCE(t.latitude,  tp.latitude)  AS lat,
-           COALESCE(t.longitude, tp.longitude) AS lng
+           CASE WHEN t.latitude BETWEEN -90 AND 90
+                     AND t.longitude BETWEEN -180 AND 180
+                THEN t.latitude ELSE tp.latitude END AS lat,
+           CASE WHEN t.latitude BETWEEN -90 AND 90
+                     AND t.longitude BETWEEN -180 AND 180
+                THEN t.longitude ELSE tp.longitude END AS lng
       FROM public.technicians t
       LEFT JOIN LATERAL public.technician_area_place(t.area) tp ON true
      WHERE coalesce(t.is_active, true)
-       AND COALESCE(t.latitude,  tp.latitude)  IS NOT NULL
-       AND COALESCE(t.longitude, tp.longitude) IS NOT NULL
+       AND CASE WHEN t.latitude BETWEEN -90 AND 90
+                      AND t.longitude BETWEEN -180 AND 180
+                THEN true
+                ELSE tp.latitude BETWEEN -90 AND 90
+                     AND tp.longitude BETWEEN -180 AND 180
+           END
   ),
   placed_lead AS (
     SELECT l.id,
-           COALESCE(l.latitude,  up.latitude)  AS lat,
-           COALESCE(l.longitude, up.longitude) AS lng,
+           CASE WHEN loc.city IS NULL AND loc.state IS NULL AND loc.zip_code IS NULL
+                THEN NULL
+                WHEN l.latitude BETWEEN -90 AND 90
+                     AND l.longitude BETWEEN -180 AND 180
+                THEN l.latitude ELSE up.latitude END AS lat,
+           CASE WHEN loc.city IS NULL AND loc.state IS NULL AND loc.zip_code IS NULL
+                THEN NULL
+                WHEN l.latitude BETWEEN -90 AND 90
+                     AND l.longitude BETWEEN -180 AND 180
+                THEN l.longitude ELSE up.longitude END AS lng,
            loc.city,
-           loc.state
+           loc.state,
+           loc.zip_code
       FROM public.leads l
       CROSS JOIN LATERAL public.parse_lead_location(
                          l.address, l.city, l.state, l.zip_code
@@ -386,21 +484,26 @@ BEGIN
          ORDER BY p.population DESC, p.name
          LIMIT 1
       ) AS up ON true
-     WHERE l.address IS NOT NULL OR l.city IS NOT NULL OR l.state IS NOT NULL
+     WHERE l.address IS NOT NULL OR l.city IS NOT NULL
+        OR l.state IS NOT NULL OR l.zip_code IS NOT NULL
   ),
   counts AS (
-    SELECT pl.id,
-           pl.city,
-           pl.state,
-           count(DISTINCT pt.tech_name) AS tech_count
+     SELECT pl.id,
+            pl.city,
+            pl.state,
+            pl.zip_code,
+            count(DISTINCT pt.tech_name) AS tech_count
       FROM placed_lead pl
       LEFT JOIN placed_tech pt
-        ON pt.lat BETWEEN pl.lat - 0.8 AND pl.lat + 0.8
-       AND pt.lng BETWEEN pl.lng - 1.5 AND pl.lng + 1.5
+       ON pt.lat BETWEEN pl.lat - 0.8 AND pl.lat + 0.8
+       AND (
+            abs(pt.lng - pl.lng) <= LEAST(180.0, 40.0 / (69.0 * GREATEST(abs(cos(radians(pl.lat))), 0.05)) + 0.05)
+            OR 360.0 - abs(pt.lng - pl.lng) <= LEAST(180.0, 40.0 / (69.0 * GREATEST(abs(cos(radians(pl.lat))), 0.05)) + 0.05)
+       )
        AND public.haversine_miles(pl.lat, pl.lng, pt.lat, pt.lng) <= 40
      WHERE pl.lat IS NOT NULL
        AND pl.lng IS NOT NULL
-     GROUP BY pl.id, pl.city, pl.state
+      GROUP BY pl.id, pl.city, pl.state, pl.zip_code
   )
   UPDATE public.leads l
      SET coverage_tech_count = CASE
@@ -415,10 +518,13 @@ BEGIN
                               END,
          coverage_area_label = CASE
                                 WHEN c.id IS NULL THEN NULL
-                                ELSE COALESCE(
-                                       NULLIF(btrim(concat_ws(', ', c.city, c.state)), ''),
-                                       l.coverage_area_label
-                                     )
+                                 ELSE COALESCE(
+                                        NULLIF(btrim(concat_ws(', ', c.city, c.state)), ''),
+                                        NULLIF(btrim(concat_ws(' ', c.state, c.zip_code)), ''),
+                                        c.zip_code,
+                                        c.city,
+                                        c.state
+                                      )
                               END,
          coverage_checked_at = now()
     FROM placed_lead pl
@@ -446,7 +552,7 @@ REVOKE ALL ON FUNCTION public.compute_all_lead_coverage() FROM PUBLIC, anon, aut
 
 
 -- -----------------------------------------------------------------------------
--- 6. The admin entry point
+-- 7. The admin entry point
 --    A technician's Area edit changes the answer for every lead near them, and
 --    no per-row trigger on leads can observe that, so this is the one operation
 --    that has to be asked for. Run it after a roster change.
@@ -482,7 +588,7 @@ GRANT EXECUTE ON FUNCTION public.recalculate_all_lead_coverage() TO authenticate
 
 
 -- -----------------------------------------------------------------------------
--- 7. Backfill, now that the answer is computed differently
+-- 8. Backfill, now that the answer is computed differently
 --    The values stored by 20261105000000 were produced by the substring rule and
 --    are wrong in both directions, so they are all recomputed rather than kept.
 --
@@ -507,6 +613,7 @@ END $$;
 --   DROP FUNCTION IF EXISTS public.recalculate_all_lead_coverage();
 --   DROP FUNCTION IF EXISTS public.compute_all_lead_coverage();
 --   DROP FUNCTION IF EXISTS public.lead_technician_coverage(uuid);
+--   DROP FUNCTION IF EXISTS public.trg_lead_coverage_refresh();
 --   DROP FUNCTION IF EXISTS public.technician_area_place(text);
 --   DROP FUNCTION IF EXISTS public.haversine_miles(double precision, double precision, double precision, double precision);
 --   DROP INDEX IF EXISTS public.us_places_name_state_idx;

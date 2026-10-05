@@ -57,8 +57,11 @@ SELECT 0,
    AND to_regprocedure('public.haversine_miles(double precision,double precision,double precision,double precision)') IS NOT NULL
    AND to_regprocedure('public.technician_area_place(text)') IS NOT NULL
    AND to_regprocedure('public.lead_technician_coverage(uuid)') IS NOT NULL
+   AND to_regprocedure('public.trg_lead_coverage_refresh()') IS NOT NULL
    AND to_regprocedure('public.compute_all_lead_coverage()') IS NOT NULL
-   AND to_regprocedure('public.recalculate_all_lead_coverage()') IS NOT NULL,
+   AND to_regprocedure('public.recalculate_all_lead_coverage()') IS NOT NULL
+   AND (SELECT p.prosecdef FROM pg_proc p
+         WHERE p.oid = 'public.trg_lead_coverage_refresh()'::regprocedure),
        'the distance-based implementation is installed';
 
 -- -----------------------------------------------------------------------------
@@ -190,35 +193,77 @@ END $$;
 
 -- -----------------------------------------------------------------------------
 -- 04  The count is distance, not a state-wide substring
---     Three technicians sit at 32.51, -92.09 (near Monroe, Louisiana). Two
---     leads are created: one on top of them, one 30 miles away, one 600 miles
---     away in the same state.
+--     Three technicians sit on a synthetic Census place at 0,0. This is
+--     deliberately away from the real U.S. roster, so live technicians cannot
+--     make the exact expected count flaky. Nine technicians sit at (0,0), and
+--     one sits 48 miles away. Leads test 9=Normal, 1=Normal, 10=Good and 0=Bad;
+--     one of them starts without an address and gets it later.
 --
 --     The far lead is the regression the live data exposed: under the substring
---     rule it matched every technician whose Area contained "LA"/"Louisiana" and
+--     rule it matched every technician whose Area contained the lead city/state and
 --     was labelled Good. Under distance it must read 0 and Bad.
 -- -----------------------------------------------------------------------------
-INSERT INTO public.technicians (name, area, latitude, longitude, is_active)
-VALUES ('COV-PROBE-ONE', '', 32.5100, -92.0900, true),
-       ('COV-PROBE-TWO', '', 32.5100, -92.0900, true),
-       ('COV-PROBE-THREE', '', 32.5100, -92.0900, true);
+INSERT INTO public.us_places
+  (geoid, name, state_code, state_name, population, latitude, longitude)
+VALUES ('ZZ-COV-PROBE', 'Coverage Probe City', 'TX', 'Texas', 100, 0, 0);
+
+INSERT INTO public.technicians (name, area, is_active)
+VALUES ('COV-PROBE-01', 'Coverage Probe City, TX', true),
+       ('COV-PROBE-02', 'Coverage Probe City, TX', true),
+       ('COV-PROBE-03', 'Coverage Probe City, TX', true),
+       ('COV-PROBE-04', 'Coverage Probe City, TX', true),
+       ('COV-PROBE-05', 'Coverage Probe City, TX', true),
+       ('COV-PROBE-06', 'Coverage Probe City, TX', true),
+       ('COV-PROBE-07', 'Coverage Probe City, TX', true),
+       ('COV-PROBE-08', 'Coverage Probe City, TX', true),
+       ('COV-PROBE-09', 'Coverage Probe City, TX', true),
+       ('COV-PROBE-10', 'Coverage Probe City, TX', true);
+
+UPDATE public.technicians
+   SET latitude = 0, longitude = 0.7
+ WHERE name = 'COV-PROBE-10';
 
 -- The leads trigger computes coverage on insert; the addresses carry the state in
 -- the shape the old parser mishandled, and the coordinates make the expected
 -- distance unambiguous.
 INSERT INTO public.leads (job_id, customer_name, customer_phone, status, address, latitude, longitude)
 VALUES ('ZZ-COV-NEAR', 'Coverage probe near', '9990000001', 'urgent_job',
-        '1 Probe Rd Richwood, LA 71202', 32.5100, -92.0900),
+        NULL, 0, 0),
        ('ZZ-COV-30MI', 'Coverage probe 30mi', '9990000002', 'urgent_job',
-        '1 Probe Rd Ruston, LA 71270', 32.5290, -92.6370),
+        '1 Probe Road Coverage Probe City, TX 75000', 0, 0.7),
+       ('ZZ-COV-GOOD', 'Coverage probe ten', '9990000005', 'urgent_job',
+        '1 Probe Road Coverage Probe City, TX 75000', 0, 0.35),
        ('ZZ-COV-FAR', 'Coverage probe far', '9990000003', 'urgent_job',
-        '1 Probe Rd Somewhere, LA 70000', 30.4500, -91.0000);
+        '1 Probe Road Coverage Probe City, TX 75000', 0, 10);
+
+-- No address at creation means no badge. Adding the address later must trigger
+-- the same count without the extension or web client calling an extra RPC.
+DO $$
+DECLARE
+  v_count integer;
+  v_level text;
+BEGIN
+  SELECT coverage_tech_count, coverage_level INTO v_count, v_level
+    FROM public.leads WHERE job_id = 'ZZ-COV-NEAR';
+
+  INSERT INTO _results
+  SELECT 4,
+         'new lead without address starts without a coverage badge',
+         v_count IS NULL AND v_level IS NULL,
+         format('count=%s level=%s', coalesce(v_count::text, 'NULL'), coalesce(v_level, 'NULL'));
+END $$;
+
+UPDATE public.leads
+   SET address = '1 Probe Road Coverage Probe City, TX 75000'
+ WHERE job_id = 'ZZ-COV-NEAR';
 
 DO $$
 DECLARE
   v_near integer;
   v_near_level text;
   v_mid  integer;
+  v_good integer;
+  v_good_level text;
   v_far  integer;
   v_far_level text;
   v_bad integer := 0;
@@ -227,35 +272,46 @@ BEGIN
   SELECT coverage_tech_count, coverage_level INTO v_near, v_near_level
     FROM public.leads WHERE job_id = 'ZZ-COV-NEAR';
   SELECT coverage_tech_count INTO v_mid FROM public.leads WHERE job_id = 'ZZ-COV-30MI';
+  SELECT coverage_tech_count, coverage_level INTO v_good, v_good_level
+    FROM public.leads WHERE job_id = 'ZZ-COV-GOOD';
   SELECT coverage_tech_count, coverage_level INTO v_far, v_far_level
     FROM public.leads WHERE job_id = 'ZZ-COV-FAR';
 
-  IF v_near IS DISTINCT FROM 3 OR v_near_level IS DISTINCT FROM 'normal' THEN
+  IF v_near IS DISTINCT FROM 9 OR v_near_level IS DISTINCT FROM 'normal' THEN
     v_bad := v_bad + 1;
-    v_detail := v_detail || ' lead on top of 3 technicians read count='
+    v_detail := v_detail || ' lead on top of the 9-technician group read count='
       || coalesce(v_near::text, 'NULL') || ' level=' || coalesce(v_near_level, 'NULL')
-      || ' (expected 3 / normal);';
+      || ' (expected 9 / normal);';
   END IF;
 
-  IF v_mid IS NULL OR v_mid < 1 THEN
+  IF v_mid IS DISTINCT FROM 1 THEN
     v_bad := v_bad + 1;
-    v_detail := v_detail || ' lead 30 miles away read ' || coalesce(v_mid::text, 'NULL') || ' (expected >= 1);';
+    v_detail := v_detail || ' lead 48 miles from the main group read '
+      || coalesce(v_mid::text, 'NULL') || ' (expected 1);';
   END IF;
 
-  -- The regression. Same state, three technicians, and none of them reachable.
+  IF v_good IS DISTINCT FROM 10 OR v_good_level IS DISTINCT FROM 'good' THEN
+    v_bad := v_bad + 1;
+    v_detail := v_detail || ' lead between groups read count='
+      || coalesce(v_good::text, 'NULL') || ' level=' || coalesce(v_good_level, 'NULL')
+      || ' (expected 10 / good);';
+  END IF;
+
+  -- The regression. The same city and state as the nearby techs, but they are
+  -- outside 40 miles. A text/state fallback would incorrectly count all three.
   IF v_far IS DISTINCT FROM 0 OR v_far_level IS DISTINCT FROM 'bad' THEN
     v_bad := v_bad + 1;
-    v_detail := v_detail || ' lead 600 miles away in the same state read count='
+    v_detail := v_detail || ' far lead in the same state read count='
       || coalesce(v_far::text, 'NULL') || ' level=' || coalesce(v_far_level, 'NULL')
-      || ' (expected 0 / bad - this is the state-wide substring bug);';
+      || ' (expected 0 / bad - this is the city/state substring bug);';
   END IF;
 
   INSERT INTO _results
-  SELECT 4,
+  SELECT 5,
          'coverage counts by distance, not by state substring',
          v_bad = 0,
          CASE WHEN v_bad = 0
-              THEN 'near=3 normal, 30mi>=1, far=0 bad'
+              THEN 'address added -> 9 normal, 48mi=1 normal, between=10 good, far=0 bad'
               ELSE v_detail
          END;
 END $$;
@@ -296,7 +352,7 @@ BEGIN
   END IF;
 
   INSERT INTO _results
-  SELECT 5,
+  SELECT 6,
          'an unreadable address yields no badge, not a false zero',
          v_bad = 0,
          CASE WHEN v_bad = 0 THEN 'both NULL' ELSE v_detail END;
@@ -323,10 +379,10 @@ BEGIN
     SELECT coverage_tech_count INTO v_per_lead
       FROM public.leads WHERE job_id = 'ZZ-COV-NEAR';
 
-    IF v_per_lead IS DISTINCT FROM 3 THEN
+    IF v_per_lead IS DISTINCT FROM 9 THEN
       v_bad := v_bad + 1;
       v_detail := v_detail || ' after a full recalc the near lead read '
-        || coalesce(v_per_lead::text, 'NULL') || ' (expected 3);';
+        || coalesce(v_per_lead::text, 'NULL') || ' (expected 9);';
     END IF;
 
     -- The spread must account for every lead it claims to have checked.
@@ -338,7 +394,7 @@ BEGIN
   END IF;
 
   INSERT INTO _results
-  SELECT 6,
+  SELECT 7,
          'full recalc agrees with the per-lead trigger',
          v_bad = 0,
          CASE WHEN v_bad = 0
