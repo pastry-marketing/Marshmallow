@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useCallback } from "react";
 import type { ChangeEvent, ElementType } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -112,6 +112,7 @@ const SectionHeader = ({
 export default function LeadDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user, role, profile, canAccess } = useAuth();
 
   const isNew = id === "new";
@@ -150,6 +151,12 @@ export default function LeadDetailPage() {
   const [adminCancelOpen, setAdminCancelOpen] = useState(false);
   const [adminCancelLoading, setAdminCancelLoading] = useState(false);
   const [urgentCheckOpen, setUrgentCheckOpen] = useState(false);
+  // ?urgentCheck=1 opens the conversation review on arrival. The Chrome extension
+  // links here when it withheld an urgent status, so the review starts without the
+  // CS member having to find the status dropdown. Set once per link click, so a
+  // refetch while the dialog is open cannot reopen it.
+  const urgentCheckHandled = useRef(false);
+  const urgentCheckRequested = searchParams.get("urgentCheck") === "1";
   const [cancelReviewLoading, setCancelReviewLoading] = useState(false);
   const [pendingCancellationRequest, setPendingCancellationRequest] = useState<LeadCancellationRequest | null>(null);
 
@@ -440,6 +447,37 @@ export default function LeadDetailPage() {
   useEffect(() => {
     setShowAllPhotos(false);
   }, [leadId]);
+
+  const clearUrgentCheckParam = () => {
+    if (searchParams.get("urgentCheck") === null) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete("urgentCheck");
+    setSearchParams(next, { replace: true });
+  };
+
+  const handleUrgentCheckOpenChange = (open: boolean) => {
+    setUrgentCheckOpen(open);
+    // Dropped on close, so a refresh or a back-navigation does not re-run a
+    // review that has already been answered.
+    if (!open) clearUrgentCheckParam();
+  };
+
+  // Opens the review for a deep link, once the record has loaded. Runs after the
+  // dialog has content to read, and never before the caller has been asked, so it
+  // is gated on the same role rule as the status dropdown.
+  useEffect(() => {
+    if (!urgentCheckRequested || urgentCheckHandled.current) return;
+    if (isNew || !originalLead) return;
+    urgentCheckHandled.current = true;
+
+    if (originalLead.status === "urgent_job" || !showsUrgentCheck(role)) {
+      // Nothing to review: already urgent, or this role is never asked.
+      clearUrgentCheckParam();
+      return;
+    }
+
+    setUrgentCheckOpen(true);
+  }, [urgentCheckRequested, isNew, originalLead, role]);
 
   const update = (key: string, value: string) => {
     if (key === "status" && value === "urgent_job" && leadId && showsUrgentCheck(role)) {
@@ -1925,12 +1963,13 @@ export default function LeadDetailPage() {
 
       <UrgentAICheckDialog
         open={urgentCheckOpen}
-        onOpenChange={setUrgentCheckOpen}
+        onOpenChange={handleUrgentCheckOpenChange}
         leadId={leadId ?? ""}
         onProceed={() => {
           setForm((previous) => ({ ...previous, status: "urgent_job" }));
           setOriginalLead((previous) => previous ? { ...previous, status: "urgent_job" } : previous);
           setSaved(true);
+          clearUrgentCheckParam();
         }}
       />
 
