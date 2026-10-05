@@ -10,8 +10,8 @@
 --   harness asserts behaviour, not existence.
 --
 -- HOW TO RUN
---   Apply 20261102000000_google_sheets_sync_health.sql first, then run this in
---   the Supabase SQL editor.
+--   Apply the Sheets health, watermark, and reliable-outbox migrations first,
+--   then run this in the Supabase SQL editor as postgres.
 --
 --   It returns one row per check with an OK column. A check that fails is
 --   caught and recorded rather than raised, so one failure never hides the
@@ -23,6 +23,23 @@
 -- =============================================================================
 
 BEGIN;
+
+-- SECURITY DEFINER RPCs now verify the caller. Impersonate a real Admin JWT
+-- claim for the behavioral checks while remaining the SQL editor owner so the
+-- harness can inspect and roll back internal tables.
+DO $$
+DECLARE v_admin uuid;
+BEGIN
+  SELECT user_id INTO v_admin FROM public.user_roles WHERE role = 'admin' LIMIT 1;
+  IF v_admin IS NULL THEN
+    RAISE EXCEPTION 'This harness requires at least one Admin user';
+  END IF;
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
+  PERFORM set_config('request.jwt.claim.role', 'authenticated', true);
+  PERFORM set_config('request.jwt.claims', jsonb_build_object(
+    'sub', v_admin::text, 'role', 'authenticated'
+  )::text, true);
+END $$;
 
 CREATE TEMP TABLE _results (
   seq    integer PRIMARY KEY,
@@ -493,6 +510,15 @@ BEGIN
         JOIN pg_namespace n ON n.oid = p.pronamespace
        WHERE n.nspname = 'public'
          AND p.proname LIKE '%sheets_sync%'
+         AND p.proname NOT IN (
+           'enqueue_google_sheets_sync',
+           'trg_sheets_enqueue_lead',
+           'trg_sheets_enqueue_child',
+           'cron_google_sheets_sync_worker',
+           'claim_sheets_sync_queue',
+           'finish_sheets_sync_job',
+           'retry_sheets_sync_queue_now'
+         )
          AND NOT has_function_privilege('authenticated', p.oid, 'EXECUTE')
     ) missing;
 
@@ -505,6 +531,15 @@ BEGIN
     JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public'
      AND p.proname LIKE '%sheets_sync%'
+     AND p.proname NOT IN (
+       'enqueue_google_sheets_sync',
+       'trg_sheets_enqueue_lead',
+       'trg_sheets_enqueue_child',
+       'cron_google_sheets_sync_worker',
+       'claim_sheets_sync_queue',
+       'finish_sheets_sync_job',
+       'retry_sheets_sync_queue_now'
+     )
      AND has_function_privilege('authenticated', p.oid, 'EXECUTE');
 
   INSERT INTO _results VALUES (15, 'authenticated can execute all', true,
