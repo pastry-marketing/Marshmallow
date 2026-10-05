@@ -226,14 +226,14 @@ UPDATE public.technicians
 -- The leads trigger computes coverage on insert; the addresses carry the state in
 -- the shape the old parser mishandled, and the coordinates make the expected
 -- distance unambiguous.
-INSERT INTO public.leads (job_id, customer_name, customer_phone, status, address, latitude, longitude)
-VALUES ('ZZ-COV-NEAR', 'Coverage probe near', '9990000001', 'urgent_job',
+INSERT INTO public.leads (job_id, customer_name, customer_phone, service_type, status, address, latitude, longitude)
+VALUES ('ZZ-COV-NEAR', 'Coverage probe near', '9990000001', 'General', 'urgent_job',
         NULL, 0, 0),
-       ('ZZ-COV-30MI', 'Coverage probe 30mi', '9990000002', 'urgent_job',
+       ('ZZ-COV-30MI', 'Coverage probe 30mi', '9990000002', 'General', 'urgent_job',
         '1 Probe Road Coverage Probe City, TX 75000', 0, 0.7),
-       ('ZZ-COV-GOOD', 'Coverage probe ten', '9990000005', 'urgent_job',
+       ('ZZ-COV-GOOD', 'Coverage probe ten', '9990000005', 'General', 'urgent_job',
         '1 Probe Road Coverage Probe City, TX 75000', 0, 0.35),
-       ('ZZ-COV-FAR', 'Coverage probe far', '9990000003', 'urgent_job',
+       ('ZZ-COV-FAR', 'Coverage probe far', '9990000003', 'General', 'urgent_job',
         '1 Probe Road Coverage Probe City, TX 75000', 0, 10);
 
 -- No address at creation means no badge. Adding the address later must trigger
@@ -329,8 +329,8 @@ DECLARE
   v_level text;
 BEGIN
   -- No coordinates, and an address whose city is not a place name.
-  INSERT INTO public.leads (job_id, customer_name, customer_phone, status, address)
-  VALUES ('ZZ-COV-UNREADABLE', 'Coverage probe unreadable', '9990000004', 'urgent_job',
+  INSERT INTO public.leads (job_id, customer_name, customer_phone, service_type, status, address)
+  VALUES ('ZZ-COV-UNREADABLE', 'Coverage probe unreadable', '9990000004', 'General', 'urgent_job',
           'ZZ-9 Some Rd Not A Real Town');
 
   SELECT coverage_tech_count, coverage_level INTO v_count, v_level
