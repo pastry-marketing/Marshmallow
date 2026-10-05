@@ -137,6 +137,12 @@ export interface Lead {
   for_us_amount: number | null;
   cancellation_reason?: string | null;
   source_url?: string | null;
+  /** Active technicians near the job address. Derived in the database, never set by a user. */
+  coverage_tech_count?: number | null;
+  /** good = 10+, normal = 1-9, bad = 0, null when the address cannot be resolved. */
+  coverage_level?: 'good' | 'normal' | 'bad' | null;
+  coverage_area_label?: string | null;
+  coverage_checked_at?: string | null;
   // Joined fields
   creator_name?: string;
   editor_name?: string;

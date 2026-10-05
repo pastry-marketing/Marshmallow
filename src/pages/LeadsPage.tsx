@@ -75,7 +75,7 @@ interface LeadNoteExportRow {
 // list payload small instead of pulling that blob for every lead.
 // NOTE: if a new leads column needs to appear on the card/list, add it here.
 const LEAD_LIST_COLUMNS =
-  "address, amount, assigned_cs, booked_at, cancellation_reason, city, created_at, created_by, created_by_name, cs_notes, cs_tag, customer_email, customer_landline, customer_name, customer_phone, customer_schedule_requirements, direction, expected_completion_date, for_us_amount, for_you_amount, general_notes, half_address, id, job_id, labor_amount, last_edited_at, last_edited_by, last_edited_by_name, latitude, longitude, material_amount, number_name, payment_amount, payment_screenshot_url, processor_notes, quote, quote_requested_by, reference_name, scheduled_date, scheduled_time_end, scheduled_time_start, service_details, service_type, show_quote_to_opr, source_url, state, status, tech_name, tech_number, terms, updated_at, urgent_at, zip_code";
+  "address, amount, assigned_cs, booked_at, cancellation_reason, city, coverage_area_label, coverage_level, coverage_tech_count, created_at, created_by, created_by_name, cs_notes, cs_tag, customer_email, customer_landline, customer_name, customer_phone, customer_schedule_requirements, direction, expected_completion_date, for_us_amount, for_you_amount, general_notes, half_address, id, job_id, labor_amount, last_edited_at, last_edited_by, last_edited_by_name, latitude, longitude, material_amount, number_name, payment_amount, payment_screenshot_url, processor_notes, quote, quote_requested_by, reference_name, scheduled_date, scheduled_time_end, scheduled_time_start, service_details, service_type, show_quote_to_opr, source_url, state, status, tech_name, tech_number, terms, updated_at, urgent_at, zip_code";
 
 // Only the few columns the Urgent-leads overview table shows (plus zip/city for
 // the "Urgent in area" proximity count) — kept tiny so its frequent live refresh
@@ -370,7 +370,7 @@ export default function LeadsPage() {
       return;
     }
 
-    setSharedLeads((leadsData ?? []) as Lead[]);
+    setSharedLeads((leadsData ?? []) as unknown as Lead[]);
   }, [role, user]);
 
   useEffect(() => {

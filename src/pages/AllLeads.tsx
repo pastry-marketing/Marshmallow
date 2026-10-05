@@ -13,6 +13,7 @@ import { useNotepad } from "@/contexts/NotepadContext";
 import StatusBadge from "@/components/leads/StatusBadge";
 import AddLeadDialog from "@/components/leads/AddLeadDialog";
 import LeadDetailPanel from "@/components/leads/LeadDetailPanel";
+import LeadCoverageBadge from "@/components/leads/LeadCoverageBadge";
 import UrgentAICheckDialog from "@/components/leads/UrgentAICheckDialog";
 import { showsUrgentCheck } from "@/lib/urgent-verification";
 import type { Lead } from "@/types";
@@ -22,7 +23,7 @@ import { useAllowedStatuses } from "@/hooks/useAllowedStatuses";
 import { compareLeadDisplayPriority } from "@/lib/constants";
 
 const ALL_LEADS_TABLE_COLUMNS =
-  "id, job_id, customer_name, customer_phone, address, status, service_type, created_at, last_edited_at, cs_tag, created_by, quote_requested_by, urgent_at";
+  "id, job_id, customer_name, customer_phone, address, status, service_type, created_at, last_edited_at, cs_tag, created_by, quote_requested_by, urgent_at, coverage_level, coverage_tech_count, coverage_area_label";
 
 /**
  * Everything this table renders, plus every field the sort needs.
@@ -43,6 +44,7 @@ type AllLeadsRow = Pick<
   | "id" | "job_id" | "customer_name" | "customer_phone" | "address" | "status"
   | "service_type" | "created_at" | "last_edited_at" | "cs_tag" | "created_by"
   | "quote_requested_by" | "urgent_at"
+  | "coverage_level" | "coverage_tech_count" | "coverage_area_label"
 >;
 
 const AllLeads = () => {
@@ -309,7 +311,14 @@ const AllLeads = () => {
                   <TableCell className="font-mono text-xs px-5 py-4">{lead.job_id}</TableCell>
                   <TableCell className="font-medium px-5 py-4">{lead.customer_name}</TableCell>
                   <TableCell className="px-5 py-4">
-                    <StatusBadge status={lead.status} />
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <StatusBadge status={lead.status} />
+                      <LeadCoverageBadge
+                        level={lead.coverage_level}
+                        count={lead.coverage_tech_count}
+                        areaLabel={lead.coverage_area_label}
+                      />
+                    </div>
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground px-5 py-4">{lead.service_type}</TableCell>
                   <TableCell className="text-xs text-muted-foreground px-5 py-4">

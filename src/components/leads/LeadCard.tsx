@@ -91,6 +91,7 @@ import { useQuoAttention } from "@/hooks/useQuoAttention";
 import { History } from "lucide-react";
 import LeadStatusHistoryDialog from "./LeadStatusHistoryDialog";
 import ImageLightbox from "./ImageLightbox";
+import LeadCoverageBadge from "./LeadCoverageBadge";
 import UrgentAICheckDialog from "./UrgentAICheckDialog";
 import { showsUrgentCheck } from "@/lib/urgent-verification";
 
@@ -1912,21 +1913,35 @@ function LeadCard({
                 ))}
               </SelectContent>
             </Select>
+            {/* Coverage sits with the tag rather than inside the tag dropdown,
+                because it is derived and never assignable, and it must survive a
+                status change that clears the workflow tag. */}
+            <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+              {currentTag && (
+                <>
+                  <p
+                    className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                      currentTag === "booked"
+                        ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-400/20 dark:text-emerald-200"
+                        : currentTag === "ready_to_schedule"
+                          ? "bg-indigo-100 text-indigo-800 dark:bg-indigo-400/20 dark:text-indigo-200"
+                          : currentTag === "incomplete_details"
+                            ? "bg-rose-100 text-rose-800 dark:bg-rose-400/20 dark:text-rose-200"
+                            : "bg-amber-100 text-amber-800 dark:bg-amber-400/20 dark:text-amber-200"
+                    }`}
+                  >
+                    📌 {CS_TAG_LABELS[currentTag] ?? currentTag}
+                  </p>
+                </>
+              )}
+              <LeadCoverageBadge
+                level={lead.coverage_level}
+                count={lead.coverage_tech_count}
+                areaLabel={lead.coverage_area_label}
+              />
+            </div>
             {currentTag && (
               <div className="mt-1 flex items-center gap-1.5 flex-wrap">
-                <p
-                  className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                    currentTag === "booked"
-                      ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-400/20 dark:text-emerald-200"
-                      : currentTag === "ready_to_schedule"
-                        ? "bg-indigo-100 text-indigo-800 dark:bg-indigo-400/20 dark:text-indigo-200"
-                        : currentTag === "incomplete_details"
-                          ? "bg-rose-100 text-rose-800 dark:bg-rose-400/20 dark:text-rose-200"
-                          : "bg-amber-100 text-amber-800 dark:bg-amber-400/20 dark:text-amber-200"
-                  }`}
-                >
-                  📌 {CS_TAG_LABELS[currentTag] ?? currentTag}
-                </p>
                 {currentTag === "booked" && lead.booked_at && (
                   isOpr ? (
                     <span
