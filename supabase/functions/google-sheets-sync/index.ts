@@ -234,9 +234,47 @@ async function postToSheet(webhookUrl: string, payload: JsonObject, timeoutMs = 
     throw new Error(`Apps Script returned an unreadable response (HTTP ${response.status}).`);
   }
   if (!response.ok || result.success !== true) {
-    throw new Error(asString(result.error || result.message) || `Apps Script rejected the write (HTTP ${response.status}).`);
+    const remoteMessage = asString(result.error || result.message);
+    throw new Error(
+      `Apps Script returned HTTP ${response.status}${remoteMessage ? `: ${remoteMessage}` : "."}`,
+    );
   }
   return result;
+}
+
+function isRetryableMirrorFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return error instanceof Error && error.name === "AbortError"
+    || /signal has been aborted|HTTP (?:404|408|429|5\d\d)|Server busy, another sync is still running|MIRROR_ACK_MISMATCH/i.test(message);
+}
+
+async function postMirrorBatch(
+  webhookUrl: string,
+  ops: JsonObject[],
+): Promise<JsonObject> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const result = await postToSheet(webhookUrl, {
+        action: "sync_mirror",
+        source: "supabase-outbox",
+        ops,
+      });
+      if (Number(result.processedOps) !== ops.length) {
+        const responseFields = Object.keys(result).sort().join(", ") || "none";
+        throw new Error(
+          `MIRROR_ACK_MISMATCH: Apps Script did not confirm all ${ops.length} operations (processedOps=${String(result.processedOps ?? "missing")}; response fields: ${responseFields}). The batch remains queued for a safe retry.`,
+        );
+      }
+      return result;
+    } catch (err) {
+      if (attempt > 0 || !isRetryableMirrorFailure(err)) throw err;
+      // sync_mirror applies idempotent upserts/deletes. A single retry helps
+      // recover from transient Apps Script 404s, lock contention, and lost
+      // responses without acknowledging the durable jobs prematurely.
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+    }
+  }
+  throw new Error("Apps Script delivery retry ended unexpectedly.");
 }
 
 async function verifyMirrorDeployment(webhookUrl: string): Promise<void> {
@@ -412,12 +450,7 @@ async function processQueue(
   }
 
   try {
-    const result = await postToSheet(webhookUrl, { action: "sync_mirror", source: "supabase-outbox", ops });
-    if (Number(result.processedOps) !== ops.length) {
-      throw new Error(
-        `Apps Script deployment is outdated: it acknowledged ${String(result.processedOps ?? "no count")} of ${ops.length} operations. Copy the current Apps Script from Settings and deploy a new Web App version.`,
-      );
-    }
+    const result = await postMirrorBatch(webhookUrl, ops);
     const acknowledgements = await Promise.all(jobs.map((job) => admin.rpc("finish_sheets_sync_job", {
       p_lead_id: job.lead_id,
       p_generation: job.generation,
