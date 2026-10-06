@@ -57,12 +57,25 @@ SELECT 0,
    AND to_regprocedure('public.haversine_miles(double precision,double precision,double precision,double precision)') IS NOT NULL
    AND to_regprocedure('public.technician_area_place(text)') IS NOT NULL
    AND to_regprocedure('public.lead_technician_coverage(uuid)') IS NOT NULL
-   AND to_regprocedure('public.trg_lead_coverage_refresh()') IS NOT NULL
-   AND to_regprocedure('public.compute_all_lead_coverage()') IS NOT NULL
-   AND to_regprocedure('public.recalculate_all_lead_coverage()') IS NOT NULL
-   AND (SELECT p.prosecdef FROM pg_proc p
-         WHERE p.oid = 'public.trg_lead_coverage_refresh()'::regprocedure),
-       'the distance-based implementation is installed';
+    AND to_regprocedure('public.trg_lead_coverage_refresh()') IS NOT NULL
+    AND to_regprocedure('public.compute_all_lead_coverage()') IS NOT NULL
+    AND to_regprocedure('public.recalculate_all_lead_coverage()') IS NOT NULL
+    AND EXISTS (
+      SELECT 1 FROM pg_trigger
+       WHERE tgrelid = 'public.leads'::regclass
+         AND tgname = 'leads_refresh_coverage_insert'
+         AND NOT tgisinternal
+    )
+    AND EXISTS (
+      SELECT 1 FROM pg_trigger
+       WHERE tgrelid = 'public.leads'::regclass
+         AND tgname = 'leads_refresh_coverage_location_update'
+         AND NOT tgisinternal
+         AND pg_get_triggerdef(oid) LIKE '%WHEN%'
+    )
+    AND (SELECT p.prosecdef FROM pg_proc p
+          WHERE p.oid = 'public.trg_lead_coverage_refresh()'::regprocedure),
+       'distance calculation and changed-location triggers are installed';
 
 -- -----------------------------------------------------------------------------
 -- 01  The city parser reads the shapes these leads actually have
@@ -168,7 +181,7 @@ VALUES ('ZZ-COV-PROBE', 'Coverage Probe City', 'TX', 'Texas', 100, 0, 0);
 
 INSERT INTO public.us_places
   (geoid, name, state_code, state_name, population, latitude, longitude)
-VALUES ('ZZ-COV-FAR-PROBE', 'Coverage Far City', 'TX', 'Texas', 100, 30, -97);
+VALUES ('ZZ-COV-FAR-PROBE', 'Coverage Far City', 'TX', 'Texas', 100, 89, -179);
 
 DO $$
 DECLARE
@@ -331,7 +344,9 @@ BEGIN
   -- Editing the address a second time must replace the old stored result; a
   -- trigger that only handles initial creation or first address entry is stale.
   UPDATE public.leads
-     SET address = '1 Probe Road Coverage Far City, TX 75000'
+     SET address = '1 Probe Road Coverage Far City, TX 75000',
+         latitude = NULL,
+         longitude = NULL
    WHERE job_id = 'ZZ-COV-NEAR';
   SELECT coverage_tech_count, coverage_level INTO v_near, v_near_level
     FROM public.leads WHERE job_id = 'ZZ-COV-NEAR';
@@ -345,7 +360,9 @@ BEGIN
   -- Restore the original location so the set-based consistency check below
   -- continues to compare against the same 9-technician case.
   UPDATE public.leads
-     SET address = '1 Probe Road Coverage Probe City, TX 75000'
+     SET address = '1 Probe Road Coverage Probe City, TX 75000',
+         latitude = 0,
+         longitude = 0
    WHERE job_id = 'ZZ-COV-NEAR';
   SELECT coverage_tech_count, coverage_level INTO v_near, v_near_level
     FROM public.leads WHERE job_id = 'ZZ-COV-NEAR';
