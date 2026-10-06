@@ -50,8 +50,7 @@ import { updateLeadById } from "@/lib/lead-updates";
 import { requestQuoteApproval } from "@/lib/quote-approval-requests";
 import StatusBadge from "@/components/leads/StatusBadge";
 import LeadCoverageBadge from "@/components/leads/LeadCoverageBadge";
-import LeadCoveragePreview from "@/components/leads/LeadCoveragePreview";
-import { geocodeLeadAddress } from "@/lib/lead-address-geocoding";
+import { geocodeAndPersistLeadAddress } from "@/lib/lead-address-geocoding";
 import CancelledStatusBadge from "@/components/leads/CancelledStatusBadge";
 import NearbyUrgentLeads from "@/components/leads/NearbyUrgentLeads";
 import LeadTagControl from "@/components/leads/LeadTagControl";
@@ -739,18 +738,6 @@ export default function LeadDetailPage() {
       addressCity = null;
       addressState = null;
       addressZip = null;
-      if (form.address.trim()) {
-        try {
-          const geocodedAddress = await geocodeLeadAddress(form.address);
-          addressLatitude = geocodedAddress?.latitude ?? null;
-          addressLongitude = geocodedAddress?.longitude ?? null;
-          addressCity = geocodedAddress?.city ?? null;
-          addressState = geocodedAddress?.state ?? null;
-          addressZip = geocodedAddress?.zip ?? null;
-        } catch (geocodeError) {
-          console.warn("Address geocoding failed; saving the lead without coordinates:", geocodeError);
-        }
-      }
     }
 
     const payload = {
@@ -829,6 +816,11 @@ export default function LeadDetailPage() {
         const newLeadId = data.id;
         setLeadId(newLeadId);
         setOriginalLead(data as Lead);
+        void geocodeAndPersistLeadAddress(newLeadId, form.address).then(async (updated) => {
+          if (!updated) return;
+          const { data: refreshedLead } = await supabase.from("leads").select("*").eq("id", newLeadId).maybeSingle();
+          if (refreshedLead) setOriginalLead(refreshedLead as Lead);
+        });
 
         // The coverage trigger stores its result in a follow-up UPDATE. The
         // INSERT ... RETURNING payload can therefore contain the pre-trigger
@@ -932,6 +924,14 @@ export default function LeadDetailPage() {
         } else {
           throw saveErr;
         }
+      }
+
+      if (addressChanged && form.address.trim()) {
+        void geocodeAndPersistLeadAddress(leadId, form.address).then(async (updated) => {
+          if (!updated) return;
+          const { data: refreshedLead } = await supabase.from("leads").select("*").eq("id", leadId).maybeSingle();
+          if (refreshedLead) setOriginalLead(refreshedLead as Lead);
+        });
       }
 
       if (quoteApprovalRequested && previousStatus) {
@@ -1506,14 +1506,6 @@ export default function LeadDetailPage() {
                   className={fieldClass}
                   readOnly={isProcessor || isOpr}
                 />
-                {isNew && (
-                  <LeadCoveragePreview
-                    address={form.address}
-                    city={form.city}
-                    state={form.state}
-                    zip={form.zip_code}
-                  />
-                )}
               </div>
 
 

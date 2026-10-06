@@ -43,6 +43,42 @@ export async function geocodeLeadAddress(address: string | null | undefined): Pr
   return result;
 }
 
+/** Resolve and persist location fields after a lead save without delaying the save itself. */
+export async function geocodeAndPersistLeadAddress(
+  leadId: string,
+  address: string | null | undefined,
+): Promise<boolean> {
+  const addressToMatch = address ?? "";
+  const normalized = addressToMatch.trim();
+  if (!normalized) return false;
+
+  try {
+    const point = await geocodeLeadAddress(normalized);
+    if (!point) return false;
+
+    const { data, error } = await supabase
+      .from("leads")
+      .update({
+        city: point.city,
+        state: point.state,
+        zip_code: point.zip,
+        latitude: point.latitude,
+        longitude: point.longitude,
+      })
+      .eq("id", leadId)
+      // Do not let a slow geocode response overwrite a newer address edit.
+      .eq("address", addressToMatch)
+      .select("id")
+      .maybeSingle();
+
+    if (error) throw error;
+    return Boolean(data);
+  } catch (error) {
+    console.warn("Background lead address geocoding failed:", error);
+    return false;
+  }
+}
+
 function remember(key: string, value: LeadCoordinates | null) {
   if (geocodeCache.size >= CACHE_LIMIT) {
     const oldest = geocodeCache.keys().next().value;
