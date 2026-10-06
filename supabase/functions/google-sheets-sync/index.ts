@@ -242,12 +242,12 @@ async function postToSheet(webhookUrl: string, payload: JsonObject, timeoutMs = 
 async function verifyMirrorDeployment(webhookUrl: string): Promise<void> {
   let ping: JsonObject;
   try {
-    // Apps Script web apps can need a slow cold start, so allow well over a
-    // typical ping before treating the deployment as unreachable.
-    ping = await postToSheet(webhookUrl, { action: "ping" }, 30_000);
+    // Apps Script web apps stall for tens of seconds while a version spins up,
+    // so allow a generous budget before treating the deployment as unreachable.
+    ping = await postToSheet(webhookUrl, { action: "ping" }, 45_000);
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
-      throw new Error("Google Apps Script did not answer the health ping within 30s. The Web App may be paused, still deploying, or restricted to your own account.");
+      throw new Error("Google Apps Script did not answer the health ping within 45s. The Web App may be paused, still deploying, or restricted to your own account.");
     }
     throw err;
   }
@@ -520,8 +520,20 @@ Deno.serve(async (req) => {
       if (config.autoSync !== true) {
         return jsonResponse({ success: false, error: "Enable automatic sync before rebuilding the Sheet." }, 409);
       }
+      const { data: mirrorHealth } = await admin
+        .from("google_sheets_sync_health")
+        .select("last_success_at")
+        .eq("id", "global")
+        .maybeSingle();
       try {
-        await verifyMirrorDeployment(config.webhookUrl);
+        // A mirror that delivered moments ago is trusted, so a slow cold start
+        // cannot block a rebuild the user is waiting on. Anything else has to
+        // answer before the workbook is cleared.
+        const recentSuccess = asString(mirrorHealth?.last_success_at);
+        const recentSuccessMs = recentSuccess ? Date.parse(recentSuccess) : Number.NaN;
+        if (!Number.isFinite(recentSuccessMs) || Date.now() - recentSuccessMs > 10 * 60_000) {
+          await verifyMirrorDeployment(config.webhookUrl);
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return jsonResponse({ success: false, error: message }, 409);
