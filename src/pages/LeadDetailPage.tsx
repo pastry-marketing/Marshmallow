@@ -726,6 +726,9 @@ export default function LeadDetailPage() {
 
     let addressLatitude = originalLead?.latitude ?? null;
     let addressLongitude = originalLead?.longitude ?? null;
+    let addressCity = form.city || null;
+    let addressState = form.state || null;
+    let addressZip = form.zip_code || null;
     const addressChanged = isNew
       || form.address.trim() !== (originalLead?.address ?? "").trim()
       || originalLead?.latitude == null
@@ -733,11 +736,17 @@ export default function LeadDetailPage() {
     if (addressChanged) {
       addressLatitude = null;
       addressLongitude = null;
+      addressCity = null;
+      addressState = null;
+      addressZip = null;
       if (form.address.trim()) {
         try {
           const geocodedAddress = await geocodeLeadAddress(form.address);
           addressLatitude = geocodedAddress?.latitude ?? null;
           addressLongitude = geocodedAddress?.longitude ?? null;
+          addressCity = geocodedAddress?.city ?? null;
+          addressState = geocodedAddress?.state ?? null;
+          addressZip = geocodedAddress?.zip ?? null;
         } catch (geocodeError) {
           console.warn("Address geocoding failed; saving the lead without coordinates:", geocodeError);
         }
@@ -753,9 +762,9 @@ export default function LeadDetailPage() {
         : {}),
       number_name: form.number_name || null,
       address: form.address || null,
-      city: form.city || null,
-      state: form.state || null,
-      zip_code: form.zip_code || null,
+      city: addressCity,
+      state: addressState,
+      zip_code: addressZip,
       latitude: addressLatitude,
       longitude: addressLongitude,
       service_type: form.service_type || null,

@@ -105,7 +105,10 @@ BEGIN
        ('4618   Burney Dr  Mariposa   CA 95338',            'Mariposa',        'CA','95338',    'repeated spaces'),
        ('4618 Burney Dr, Mariposa., California. 95338, USA','Mariposa',        'CA','95338',    'punctuation after city/state'),
        ('715 Indiana Ave St. Charles, Illinois 60174, USA', 'Saint Charles',   'IL','60174',    'St. city prefix'),
-       ('1230 Cedar Brook Dr NE Lawrenceville, Georgia 30043, USA','Lawrenceville','GA','30043', 'street direction before city')
+       ('1230 Cedar Brook Dr NE Lawrenceville, Georgia 30043, USA','Lawrenceville','GA','30043', 'street direction before city'),
+       ('Clayton, CA',                                       'Clayton',        'CA',NULL,       'city/state without ZIP'),
+       ('Area Dallas, TX',                                   'Dallas',         'TX',NULL,       'area marker with city/state'),
+       ('High Point, NC',                                    'High Point',     'NC',NULL,       'multi-word city/state without ZIP')
     ) AS t(address, want_city, want_state, want_zip, old_rule)
   LOOP
     DECLARE got record;
@@ -130,7 +133,7 @@ BEGIN
          'city parser reads every real address shape',
          v_bad = 0,
          CASE WHEN v_bad = 0
-              THEN '15 shapes resolved, including punctuation, St. city abbreviation and street direction'
+              THEN '18 shapes resolved, including punctuation, St. city, street direction and city/state-only forms'
               ELSE 'failed=' || v_bad || v_bad_detail
          END;
 END $$;

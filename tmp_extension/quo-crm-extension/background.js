@@ -174,9 +174,9 @@ async function previewLeadCoverage(address) {
       "preview_lead_technician_coverage_at_point",
       {
         _address: normalizedAddress,
-        _city: null,
-        _state: null,
-        _zip: null,
+        _city: point.city,
+        _state: point.state,
+        _zip: point.zip,
         _latitude: point.latitude,
         _longitude: point.longitude
       }
@@ -221,7 +221,10 @@ async function geocodeCensusAddress(address) {
   const point = {
     latitude,
     longitude,
-    matchedAddress: typeof match?.matchedAddress === "string" ? match.matchedAddress.trim() : null
+    matchedAddress: typeof match?.matchedAddress === "string" ? match.matchedAddress.trim() : null,
+    city: typeof match?.addressComponents?.city === "string" ? match.addressComponents.city.trim() : null,
+    state: typeof match?.addressComponents?.state === "string" ? match.addressComponents.state.trim().toUpperCase() : null,
+    zip: typeof match?.addressComponents?.zip === "string" ? match.addressComponents.zip.trim() : null
   };
   if (CENSUS_GEOCODE_CACHE.size >= 100) {
     CENSUS_GEOCODE_CACHE.delete(CENSUS_GEOCODE_CACHE.keys().next().value);
@@ -615,10 +618,16 @@ async function createLead() {
   if (insertData.address) {
     try {
       const point = await geocodeCensusAddress(insertData.address);
+      insertData.city = point?.city ?? null;
+      insertData.state = point?.state ?? null;
+      insertData.zip_code = point?.zip ?? null;
       insertData.latitude = point?.latitude ?? null;
       insertData.longitude = point?.longitude ?? null;
     } catch (error) {
       console.warn("Census geocoding failed; creating lead without map coordinates:", error);
+      insertData.city = null;
+      insertData.state = null;
+      insertData.zip_code = null;
       insertData.latitude = null;
       insertData.longitude = null;
     }

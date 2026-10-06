@@ -554,17 +554,26 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
 
       let addressLatitude = lead?.latitude ?? null;
       let addressLongitude = lead?.longitude ?? null;
+      let addressCity = form.city || null;
+      let addressState = form.state || null;
+      let addressZip = form.zip_code || null;
       const addressChanged = form.address.trim() !== (lead?.address ?? "").trim()
         || lead?.latitude == null
         || lead?.longitude == null;
       if (addressChanged) {
         addressLatitude = null;
         addressLongitude = null;
+        addressCity = null;
+        addressState = null;
+        addressZip = null;
         if (form.address.trim()) {
           try {
             const geocodedAddress = await geocodeLeadAddress(form.address);
             addressLatitude = geocodedAddress?.latitude ?? null;
             addressLongitude = geocodedAddress?.longitude ?? null;
+            addressCity = geocodedAddress?.city ?? null;
+            addressState = geocodedAddress?.state ?? null;
+            addressZip = geocodedAddress?.zip ?? null;
           } catch (geocodeError) {
             console.warn("Address geocoding failed; saving the lead without coordinates:", geocodeError);
           }
@@ -580,9 +589,9 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
         latitude: addressLatitude,
         longitude: addressLongitude,
         half_address: form.half_address,
-        city: form.city,
-        state: form.state,
-        zip_code: form.zip_code,
+        city: addressCity,
+        state: addressState,
+        zip_code: addressZip,
         status: savedStatus,
         scheduled_date: form.scheduled_date,
         scheduled_time_start: form.scheduled_time_start,
