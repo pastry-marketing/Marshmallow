@@ -76,6 +76,15 @@ Deno.serve(async (req) => {
         matchedAddress: typeof match?.matchedAddress === "string"
           ? match.matchedAddress.trim()
           : null,
+        city: typeof match?.addressComponents?.city === "string"
+          ? match.addressComponents.city.trim()
+          : null,
+        state: typeof match?.addressComponents?.state === "string"
+          ? match.addressComponents.state.trim().toUpperCase()
+          : null,
+        zip: typeof match?.addressComponents?.zip === "string"
+          ? match.addressComponents.zip.trim()
+          : null,
       },
     });
   } catch (error) {

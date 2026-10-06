@@ -56,9 +56,9 @@ export function useLeadCoveragePreview({
       if (point) {
         const { data, error } = await supabase.rpc("preview_lead_technician_coverage_at_point", {
           _address: normalizedAddress,
-          _city: normalizedCity,
-          _state: normalizedState,
-          _zip: normalizedZip,
+          _city: point.city ?? normalizedCity,
+          _state: point.state ?? normalizedState,
+          _zip: point.zip ?? normalizedZip,
           _latitude: point.latitude,
           _longitude: point.longitude,
         });

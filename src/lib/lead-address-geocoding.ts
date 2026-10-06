@@ -4,6 +4,9 @@ export interface LeadCoordinates {
   latitude: number;
   longitude: number;
   matchedAddress: string | null;
+  city: string | null;
+  state: string | null;
+  zip: string | null;
 }
 
 const CACHE_LIMIT = 100;
@@ -32,6 +35,9 @@ export async function geocodeLeadAddress(address: string | null | undefined): Pr
     latitude: point.latitude,
     longitude: point.longitude,
     matchedAddress: typeof point.matchedAddress === "string" ? point.matchedAddress : null,
+    city: typeof point.city === "string" ? point.city : null,
+    state: typeof point.state === "string" ? point.state : null,
+    zip: typeof point.zip === "string" ? point.zip : null,
   };
   remember(cacheKey, result);
   return result;
