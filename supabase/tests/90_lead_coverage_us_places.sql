@@ -99,8 +99,11 @@ BEGIN
       ('30 Norfolk Dr E, Elmont, NY 11003',                'Elmont',          'NY', '11003',    'Elmont'),
       ('8800 Roswell Rd, Sandy Springs, GA 30350',         'Sandy Springs',   'GA', '30350',    'Sandy Springs'),
       ('815 Allerton St Redwood City, California 94063',  'Redwood City',    'CA', '94063',    'Redwood City'),
-      ('500 Congress Ave, Austin, Texas',                  'Austin',          NULL,NULL,       'NULL'),
-      ('77002',                                            NULL,              NULL,'77002',     'NULL')
+       ('500 Congress Ave, Austin, Texas',                  'Austin',          NULL,NULL,       'NULL'),
+       ('77002',                                            NULL,              NULL,'77002',     'NULL'),
+       ('4618 Burney Dr,, mARIPOSA. California. 95338 USA', 'Mariposa',        'CA','95338',    'punctuation / duplicate commas'),
+       ('4618   Burney Dr  Mariposa   CA 95338',            'Mariposa',        'CA','95338',    'repeated spaces'),
+       ('4618 Burney Dr, Mariposa., California. 95338, USA','Mariposa',        'CA','95338',    'punctuation after city/state')
     ) AS t(address, want_city, want_state, want_zip, old_rule)
   LOOP
     DECLARE got record;
@@ -125,7 +128,7 @@ BEGIN
          'city parser reads every real address shape',
          v_bad = 0,
          CASE WHEN v_bad = 0
-              THEN '10 shapes resolved, including the 4 the previous rule returned NULL for'
+              THEN '13 shapes resolved, including punctuation, repeated spaces and prior NULL cases'
               ELSE 'failed=' || v_bad || v_bad_detail
          END;
 END $$;
@@ -432,7 +435,7 @@ END $$;
 INSERT INTO public.leads
   (job_id, customer_name, customer_phone, service_type, status, address)
 VALUES ('ZZ-COV-ALIAS', 'Coverage alias probe', '9990000007', 'General', 'urgent_job',
-        '4618 Burney Dr Mariposa, CA 95338, USA');
+        '4618 Burney Dr,, Mariposa. California. 95338 USA');
 
 DO $$
 DECLARE
@@ -440,22 +443,40 @@ DECLARE
   v_level text;
   v_label text;
   v_checked timestamptz;
+  v_preview_count integer;
+  v_preview_label text;
+  v_admin_id uuid;
 BEGIN
+  SELECT user_id INTO v_admin_id
+    FROM public.user_roles WHERE role = 'admin' ORDER BY user_id LIMIT 1;
+  IF v_admin_id IS NOT NULL THEN
+    PERFORM set_config('request.jwt.claim.sub', v_admin_id::text, true);
+    PERFORM set_config('request.jwt.claim.role', 'authenticated', true);
+  END IF;
+
   SELECT coverage_tech_count, coverage_level, coverage_area_label, coverage_checked_at
     INTO v_count, v_level, v_label, v_checked
     FROM public.leads WHERE job_id = 'ZZ-COV-ALIAS';
 
+  SELECT tech_count, area_label INTO v_preview_count, v_preview_label
+    FROM public.preview_lead_technician_coverage(
+      '4618 Burney Dr,, Mariposa. California. 95338 USA', NULL, NULL, NULL
+    );
+
   INSERT INTO _results
   SELECT 7,
-         'Mariposa Census CDP alias resolves coverage',
+         'messy address and pre-save coverage preview resolve consistently',
          v_checked IS NOT NULL
            AND v_label IS NOT DISTINCT FROM 'Mariposa, CA'
+           AND v_preview_count IS NOT DISTINCT FROM v_count
+           AND v_preview_label IS NOT DISTINCT FROM v_label
            AND v_level IN ('good', 'normal', 'bad')
            AND ((v_count >= 10 AND v_level = 'good')
              OR (v_count BETWEEN 1 AND 9 AND v_level = 'normal')
              OR (v_count = 0 AND v_level = 'bad')),
-         format('count=%s level=%s area=%s checked=%s',
+         format('stored=%s/%s preview=%s/%s area=%s checked=%s',
            coalesce(v_count::text, 'NULL'), coalesce(v_level, 'NULL'),
+           coalesce(v_preview_count::text, 'NULL'), coalesce(v_preview_label, 'NULL'),
            coalesce(v_label, 'NULL'), coalesce(v_checked::text, 'NULL'));
 END $$;
 

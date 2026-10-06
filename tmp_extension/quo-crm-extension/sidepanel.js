@@ -158,6 +158,7 @@ const matchingLeadsList = document.getElementById("matching-leads-list");
 const updateScheduleRequirementBtn = document.getElementById("update-schedule-requirement");
 const autoPickPhotosBtn = document.getElementById("auto-pick-photos");
 const findAddressBtn = document.getElementById("find-address");
+const coveragePreview = document.getElementById("coverage-preview");
 const checkExpectedAreaBtn = document.getElementById("check-expected-area");
 const expectedAreaResult = document.getElementById("expected-area-result");
 const photosPreviewContainer = document.getElementById("photos-preview-container");
@@ -209,6 +210,8 @@ const reportQuickPills = document.querySelectorAll(".report-pill");
 
 let currentDraft = null;
 let addressSuggestionTimer = null;
+let coveragePreviewTimer = null;
+let coveragePreviewRequest = 0;
 let suppressAddressLookup = false;
 let npaNxxDatabasePromise = null;
 let checkedLeads = [];
@@ -820,7 +823,55 @@ async function handleFormInput(event) {
 
   if (target.name === "customerAddress") {
     hideAddressSuggestions();
+    queueCoveragePreview(value);
   }
+}
+
+function queueCoveragePreview(rawAddress) {
+  if (!coveragePreview) return;
+  if (coveragePreviewTimer) clearTimeout(coveragePreviewTimer);
+
+  const address = String(rawAddress || "").trim();
+  const requestId = ++coveragePreviewRequest;
+  if (!address) {
+    coveragePreview.hidden = true;
+    coveragePreview.textContent = "";
+    return;
+  }
+
+  coveragePreview.hidden = false;
+  coveragePreview.className = "inline-area-badge coverage-preview--loading";
+  coveragePreview.textContent = "Coverage preview will appear when you finish typing…";
+
+  coveragePreviewTimer = setTimeout(async () => {
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: "PREVIEW_LEAD_COVERAGE",
+        address
+      });
+      if (requestId !== coveragePreviewRequest) return;
+      if (!response?.success) throw new Error(response?.error || "Coverage preview failed.");
+
+      const result = response.coverage;
+      if (!result) {
+        coveragePreview.className = "inline-area-badge coverage-preview--unknown";
+        coveragePreview.textContent = "Couldn’t place address — check the city/state before creating.";
+        return;
+      }
+
+      const count = Number(result.tech_count);
+      const level = count >= 10 ? "good" : count >= 1 ? "normal" : "bad";
+      const label = level === "good" ? "Good Coverage" : level === "normal" ? "Normal Coverage" : "Bad Coverage";
+      const where = result.area_label ? ` near ${result.area_label}` : "";
+      coveragePreview.className = `inline-area-badge coverage-preview--${level}`;
+      coveragePreview.textContent = `${label} · ${count} active technician${count === 1 ? "" : "s"}${where} · preview`;
+    } catch (error) {
+      if (requestId !== coveragePreviewRequest) return;
+      console.warn("Lead coverage preview failed:", error);
+      coveragePreview.className = "inline-area-badge coverage-preview--unknown";
+      coveragePreview.textContent = "Coverage preview unavailable; lead creation is unaffected.";
+    }
+  }, 500);
 }
 
 async function handleClearForm() {
@@ -829,6 +880,7 @@ async function handleClearForm() {
   suppressAddressLookup = false;
   renderDraft(currentDraft);
   resetTransientFormState();
+  queueCoveragePreview("");
   showFeedback("Draft cleared.", "info");
 }
 
@@ -844,7 +896,7 @@ function renderUrgentIssues(issues) {
     .slice(0, 6)
     .map((issue) => {
       const field = issue && issue.field ? `${escapeHtml(String(issue.field))}: ` : "";
-      const problem = escapeHtml(String((issue && issue.problem) || "")); 
+      const problem = escapeHtml(String((issue && issue.problem) || ""));
       return `<li>${field}${problem}</li>`;
     })
     .join("");
@@ -1207,6 +1259,7 @@ function renderDraft(draft) {
 
   // Render chat pictures preview
   renderPhotos(draft.photos || []);
+  queueCoveragePreview(draft.customerAddress || "");
 }
 
 
@@ -1334,6 +1387,8 @@ async function handleAddressSuggestionClick(event) {
     }
     throw error;
   }
+
+  queueCoveragePreview(nextAddress);
 
   // Show confirmation inside the dropdown area, not the global toast
   if (addressSuggestions && addressSuggestionsStatus) {

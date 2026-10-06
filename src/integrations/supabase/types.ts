@@ -2075,6 +2075,18 @@ export type Database = {
         }[]
       }
       org_role: { Args: { _org_id: string }; Returns: string }
+      preview_lead_technician_coverage: {
+        Args: {
+          _address: string
+          _city?: string | null
+          _state?: string | null
+          _zip?: string | null
+        }
+        Returns: {
+          area_label: string
+          tech_count: number
+        }[]
+      }
       quo_conversation_counts_by_number: {
         Args: never
         Returns: {

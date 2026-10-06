@@ -1,7 +1,7 @@
 /* ==========================================================================
    QUO CRM LEAD CAPTURE — "DISPATCH CONSOLE" DESIGN SYSTEM
    Supports crisp modern Light Mode (default) and sleek Dispatch Console Dark Mode.
-   
+
    NOTE: --text-muted and --primary-teal are referenced directly by
    sidepanel.js (inline style="background-color: var(--text-secondary)" etc.
    for history status dots) — keep both defined.
@@ -27,7 +27,7 @@
   --btn-secondary-bg: #F1F5F9;
   --btn-secondary-text: #475569;
   --btn-secondary-border: #E2E8F0;
-  
+
   --shadow-glow: 0 0 0 1px var(--accent);
   --theme-transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
   --radius-xs: 4px;
@@ -989,6 +989,31 @@ html, body {
   border: 1px solid transparent;
 }
 
+.coverage-preview--good {
+  background: rgba(5, 150, 105, 0.12);
+  color: #059669;
+  border-color: rgba(5, 150, 105, 0.3);
+}
+.coverage-preview--normal {
+  background: rgba(217, 119, 6, 0.12);
+  color: #d97706;
+  border-color: rgba(217, 119, 6, 0.3);
+}
+.coverage-preview--bad {
+  background: rgba(220, 38, 38, 0.12);
+  color: #dc2626;
+  border-color: rgba(220, 38, 38, 0.3);
+}
+.coverage-preview--loading,
+.coverage-preview--unknown {
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  border-color: var(--border-subtle);
+}
+[data-theme="dark"] .coverage-preview--good { color: #6ee7b7; }
+[data-theme="dark"] .coverage-preview--normal { color: #fcd34d; }
+[data-theme="dark"] .coverage-preview--bad { color: #fca5a5; }
+
 .expected-area-result--success {
   background: rgba(5, 150, 105, 0.12);
   color: #059669;
@@ -1526,7 +1551,7 @@ body.photo-lightbox-open {
   display: none !important;
 }
 
-/* ========================================================================== 
+/* ==========================================================================
    BUTTONS & ACTION BAR
    ========================================================================== */
 .btn {

@@ -35,6 +35,7 @@ import { requestQuoteApproval } from "@/lib/quote-approval-requests";
 import { motion, AnimatePresence } from "framer-motion";
 import NumberNameCombobox from "./NumberNameCombobox";
 import MultiDateTimePicker from "./MultiDateTimePicker";
+import LeadCoveragePreview from "./LeadCoveragePreview";
 
 interface Props {
   open: boolean;
@@ -649,6 +650,7 @@ const AddLeadDialog = ({ open, onOpenChange, onSuccess, initialData, onUrgentChe
                     placeholder="123 Main St, City, State, Zip"
                     className={fieldClass}
                   />
+                  <LeadCoveragePreview address={form.address} />
                 </div>
 
                 <div className="space-y-1.5">

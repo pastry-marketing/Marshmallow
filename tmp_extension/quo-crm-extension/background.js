@@ -123,6 +123,8 @@ async function handleMessage(message, sender) {
       return checkAuth();
     case "CREATE_LEAD":
       return createLead();
+    case "PREVIEW_LEAD_COVERAGE":
+      return previewLeadCoverage(message.address);
     case "CHECK_LEAD_EXISTS":
       return checkLeadExists(message.phone);
     case "UPDATE_LEAD_SCHEDULE_REQUIREMENT":
@@ -152,6 +154,30 @@ async function handleMessage(message, sender) {
     default:
       throw new Error("Unsupported message type.");
   }
+}
+
+async function previewLeadCoverage(address) {
+  const normalizedAddress = String(address || "").trim();
+  if (!normalizedAddress) {
+    return { success: true, coverage: null };
+  }
+
+  const { data: { user }, error: userError } = await supabaseClient.auth.getUser();
+  if (userError) throw new Error(userError.message);
+  if (!user) throw new Error("Sign in to preview technician coverage.");
+
+  const { data, error } = await supabaseClient.rpc("preview_lead_technician_coverage", {
+    _address: normalizedAddress,
+    _city: null,
+    _state: null,
+    _zip: null
+  });
+  if (error) throw new Error(error.message);
+
+  return {
+    success: true,
+    coverage: Array.isArray(data) ? (data[0] || null) : null
+  };
 }
 
 async function ensureDraft() {

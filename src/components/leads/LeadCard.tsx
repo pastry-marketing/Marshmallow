@@ -67,7 +67,6 @@ import CopyValueButton from "./CopyValueButton";
 import CancellationRequestSheet from "./CancellationRequestSheet";
 import QuoPhoneTrigger from "./QuoPhoneTrigger";
 import { adminApi } from "@/lib/admin-api";
-import { syncLeadDeleteToGoogleSheets } from "@/lib/google-sheets";
 import { logActivity } from "@/lib/activity";
 import { buildCompleteLeadCopyText, copyTextToClipboard } from "@/lib/lead-copy";
 import {
@@ -1223,11 +1222,6 @@ function LeadCard({
       },
     });
 
-    const { syncLeadUpsertToGoogleSheets } = await import("@/lib/google-sheets");
-    void syncLeadUpsertToGoogleSheets({ ...lead, status: newStatus } as never, lead.status, lead.cs_tag ?? undefined).catch((err) => {
-      console.error("Failed to sync status update to Google Sheets", err);
-    });
-
     onRefresh();
     
     // Job in Progress reminders stay owned by the detail views, same as before.
@@ -1351,11 +1345,6 @@ function LeadCard({
         status_to: "paid",
       });
 
-      const { syncLeadUpsertToGoogleSheets } = await import("@/lib/google-sheets");
-      void syncLeadUpsertToGoogleSheets({ ...lead, status: "paid" as never, amount, payment_amount: amount, payment_screenshot_url: screenshotUrl } as never, lead.status, lead.cs_tag ?? undefined).catch((err) => {
-        console.error("Failed to sync payment to Google Sheets", err);
-      });
-
       toast.success("Payment recorded & status updated to Paid");
       setPaymentOpen(false);
       onRefresh();
@@ -1379,13 +1368,6 @@ function LeadCard({
       });
       onDeleted?.(lead.id);
       onRefresh();
-
-      // Bookkeeping runs after, on its own. A failed sheet sync or activity log must not make a
-      // delete that already happened look like it failed - which is what it did before, showing
-      // an error toast and skipping the refresh while the lead was gone from the database.
-      void syncLeadDeleteToGoogleSheets(lead.id, lead.job_id).catch((sheetErr) => {
-        console.warn("Google Sheets delete sync warning:", sheetErr);
-      });
 
       void logActivity(user!.id, "deleted", "lead", lead.id, {
         target_name: lead.job_id,
@@ -1426,11 +1408,6 @@ function LeadCard({
       toast.error("Failed to update schedule requirement");
       return;
     }
-
-    const { syncLeadUpsertToGoogleSheets } = await import("@/lib/google-sheets");
-    void syncLeadUpsertToGoogleSheets({ ...lead, ...patch } as never, undefined, lead.cs_tag ?? undefined).catch((err) => {
-      console.error("Failed to sync schedule requirement to Google Sheets", err);
-    });
 
     toast.success(next ? "Schedule requirement updated" : "Schedule requirement cleared");
     setScheduleOpen(false);
@@ -1710,6 +1687,12 @@ function LeadCard({
                   <span>CX Quick Chat</span>
                 </QuoPhoneTrigger>
               )}
+              <LeadCoverageBadge
+                level={lead.coverage_level}
+                count={lead.coverage_tech_count}
+                areaLabel={lead.coverage_area_label}
+                className="max-w-full"
+              />
               {hasTechQuickChatAccess && lead.tech_number && (
                 <QuoPhoneTrigger
                   contactName={lead.tech_name || "Technician"}
@@ -1934,11 +1917,6 @@ function LeadCard({
                   </p>
                 </>
               )}
-              <LeadCoverageBadge
-                level={lead.coverage_level}
-                count={lead.coverage_tech_count}
-                areaLabel={lead.coverage_area_label}
-              />
             </div>
             {currentTag && (
               <div className="mt-1 flex items-center gap-1.5 flex-wrap">
