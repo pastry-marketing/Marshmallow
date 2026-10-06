@@ -6,6 +6,16 @@ window.addEventListener("message", (event) => {
   if (event.source !== window) return;
 
   const data = event.data;
+  if (data?.action === "QUO_PREPARE_CHAT" && data.chatUrl) {
+    chrome.runtime.sendMessage({
+      type: "QUO_PREPARE_CHAT",
+      chatUrl: data.chatUrl
+    }).catch(() => {
+      // Preparation is optional; the normal Send path remains the fallback.
+    });
+    return;
+  }
+
   if (data && (data.action === "QUO_SEND_MESSAGE" || data.action === "QUO_SCHEDULE_MESSAGE")) {
     console.log(`Quo CRM Extension: Received ${data.action} from CRM page`, data);
     
