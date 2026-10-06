@@ -207,7 +207,7 @@ async function authorize(
   return { kind: "admin" };
 }
 
-async function postToSheet(webhookUrl: string, payload: JsonObject, timeoutMs = 45_000): Promise<JsonObject> {
+async function postToSheet(webhookUrl: string, payload: JsonObject, timeoutMs = 55_000): Promise<JsonObject> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let response: Response;
@@ -228,12 +228,31 @@ async function postToSheet(webhookUrl: string, payload: JsonObject, timeoutMs = 
   try {
     result = JSON.parse(text) as JsonObject;
   } catch {
+    if (response.status === 404) {
+      throw new Error("Google Apps Script returned HTTP 404. Check that the saved URL is the deployed Web App URL ending in /exec, then deploy the latest script version.");
+    }
     throw new Error(`Apps Script returned an unreadable response (HTTP ${response.status}).`);
   }
   if (!response.ok || result.success !== true) {
     throw new Error(asString(result.error || result.message) || `Apps Script rejected the write (HTTP ${response.status}).`);
   }
   return result;
+}
+
+async function verifyMirrorDeployment(webhookUrl: string): Promise<void> {
+  let ping: JsonObject;
+  try {
+    ping = await postToSheet(webhookUrl, { action: "ping" }, 15_000);
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error("Google Apps Script did not answer the health ping within 15s. The Web App may be paused, still deploying, or restricted to your own account.");
+    }
+    throw err;
+  }
+  const capabilities = Array.isArray(ping.capabilities) ? ping.capabilities : [];
+  if (!capabilities.includes("sync_mirror")) {
+    throw new Error("The deployed Apps Script is outdated: it does not support sync_mirror. Copy the current script from Settings and deploy a new version of the existing Web App.");
+  }
 }
 
 async function makeOps(admin: ReturnType<typeof createClient>, jobs: QueueJob[]) {
@@ -314,10 +333,30 @@ async function processQueue(
 ) {
   const { data: runState, error: stateError } = await admin
     .from("google_sheets_sync_health")
-    .select("reconcile_lock_token,reconcile_clear_pending,reconcile_active")
+    .select("reconcile_lock_token,reconcile_clear_pending,reconcile_active,last_success_at")
     .eq("id", "global")
     .maybeSingle();
   if (stateError) throw new Error(`Could not read reconciliation state: ${stateError.message}`);
+
+  // Fail before claiming or clearing anything when the configured deployment
+  // is missing, points at an obsolete version, or cannot acknowledge writes.
+  // A mirror that delivered successfully in the last few minutes is trusted so
+  // the scheduled worker does not spend a second Apps Script request per minute.
+  const lastSuccessAt = asString(runState?.last_success_at);
+  const lastSuccessMs = lastSuccessAt ? Date.parse(lastSuccessAt) : Number.NaN;
+  const mirrorNeedsPreflight = !Number.isFinite(lastSuccessMs) || Date.now() - lastSuccessMs > 5 * 60_000;
+  try {
+    if (mirrorNeedsPreflight) await verifyMirrorDeployment(webhookUrl);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await admin.rpc("record_sheets_sync_failure", {
+      p_message: message,
+      p_lead_id: null,
+      p_action: "apps_script_preflight",
+      p_detail: { stage: "mirror_capability_check" },
+    });
+    return { success: false, claimed: 0, processed: 0, failed: 0, error: message };
+  }
 
   if (runState?.reconcile_clear_pending) {
     const lockToken = asString(runState.reconcile_lock_token);
@@ -464,7 +503,9 @@ Deno.serve(async (req) => {
       if (config.autoSync !== true && !force && !runState?.reconcile_active) {
         return jsonResponse({ success: true, paused: true, claimed: 0, processed: 0, failed: 0 });
       }
-      const result = await processQueue(admin, config.webhookUrl, Number(body.limit ?? 25), force);
+      const requestedLimit = Number(body.limit ?? 10);
+      const limit = Math.max(1, Math.min(Number.isFinite(requestedLimit) ? Math.floor(requestedLimit) : 10, 10));
+      const result = await processQueue(admin, config.webhookUrl, limit, force);
       return jsonResponse(result, result.success ? 200 : 502);
     }
 
@@ -476,6 +517,12 @@ Deno.serve(async (req) => {
       }
       if (config.autoSync !== true) {
         return jsonResponse({ success: false, error: "Enable automatic sync before rebuilding the Sheet." }, 409);
+      }
+      try {
+        await verifyMirrorDeployment(config.webhookUrl);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return jsonResponse({ success: false, error: message }, 409);
       }
       const { data: reconcile, error: beginError } = await admin.rpc("begin_google_sheets_full_reconcile");
       if (beginError) return jsonResponse({ success: false, error: beginError.message }, 409);

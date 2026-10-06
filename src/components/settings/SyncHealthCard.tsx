@@ -90,7 +90,9 @@ export function SyncHealthCard({ autoSync = true }: { autoSync?: boolean }) {
   });
 
   const retryQueue = useMutation({
-    mutationFn: () => retrySyncQueueNow(50),
+    // Keep an on-demand batch comfortably below the Apps Script request
+    // timeout; the scheduled worker continues with the rest of the queue.
+    mutationFn: () => retrySyncQueueNow(10),
     onSuccess: (result) => {
       void queryClient.invalidateQueries({ queryKey: ["google-sheets-sync-health"] });
       if (result.failed > 0) {

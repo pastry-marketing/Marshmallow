@@ -6,8 +6,8 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { SyncHealthCard } from "@/components/settings/SyncHealthCard";
- import APPS_SCRIPT_SNIPPET from "@/lib/google-apps-script.gs?raw";
- import { toast } from "sonner";
+import APPS_SCRIPT_SNIPPET from "@/lib/google-apps-script.gs?raw";
+import { toast } from "sonner";
 import {
   FileSpreadsheet,
   ExternalLink,
@@ -232,7 +232,7 @@ export function GoogleSheetsTab() {
 
             <div className="rounded-2xl border border-border/60 bg-card/60 p-3.5">
               <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Background worker</p>
-              <p className="mt-1 font-semibold text-sm text-foreground">Every 3 minutes</p>
+              <p className="mt-1 font-semibold text-sm text-foreground">Every minute</p>
               <p className="mt-1 text-[11px] text-muted-foreground">Retries continue with the browser closed.</p>
             </div>
           </div>
@@ -264,7 +264,7 @@ export function GoogleSheetsTab() {
                 </Button>
               </div>
               <p className="text-[11px] text-muted-foreground">
-                Generated from your Google Sheet by clicking <b>Extensions &gt; Apps Script &gt; Deploy &gt; New deployment &gt; Web app</b>.
+                After deploying the latest script, test the connection here and confirm it reports sync-mirror support.
               </p>
             </div>
 
@@ -366,9 +366,9 @@ export function GoogleSheetsTab() {
 
             <div className="rounded-xl border border-border/60 bg-card/50 p-3 space-y-1">
               <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/10 text-[11px] font-bold text-primary">4</span>
-              <p className="text-xs font-medium text-foreground">Deploy as Web App</p>
+              <p className="text-xs font-medium text-foreground">Update Web App</p>
               <p className="text-[11px] text-muted-foreground">
-                Deploy &gt; New deployment &gt; Web app. Execute as: <b>Me</b>, Access: <b>Anyone</b>. Paste URL here!
+                Deploy &gt; Manage deployments &gt; Edit. Select <b>New version</b> and Deploy; keep the existing URL.
               </p>
             </div>
           </div>

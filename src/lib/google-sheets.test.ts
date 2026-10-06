@@ -226,5 +226,33 @@ describe("formatLeadForGoogleSheet", () => {
       else delete (supabase as any).functions;
     }
   });
+
+  it("shows the Edge Function response body when an HTTP error is returned", async () => {
+    const { testGoogleSheetsWebhook } = await import("./google-sheets");
+    const { supabase } = await import("@/integrations/supabase/client");
+    const proto = Object.getPrototypeOf(supabase);
+    const originalDescriptor = Object.getOwnPropertyDescriptor(proto, "functions")
+      || Object.getOwnPropertyDescriptor(supabase, "functions");
+    const response = new Response(
+      JSON.stringify({ success: false, error: "A delivery batch is in flight; retry the rebuild in a moment." }),
+      { status: 409, headers: { "Content-Type": "application/json" } },
+    );
+    Object.defineProperty(supabase, "functions", {
+      configurable: true,
+      value: {
+        invoke: () => Promise.resolve({
+          data: null,
+          error: { message: "Edge Function returned a non-2xx status code", context: response },
+        }),
+      },
+    });
+    try {
+      await expect(testGoogleSheetsWebhook("https://script.google.com/macros/s/test/exec"))
+        .rejects.toThrow("A delivery batch is in flight; retry the rebuild in a moment.");
+    } finally {
+      if (originalDescriptor) Object.defineProperty(supabase, "functions", originalDescriptor);
+      else delete (supabase as any).functions;
+    }
+  });
 });
 
