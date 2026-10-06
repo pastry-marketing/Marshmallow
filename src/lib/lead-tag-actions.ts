@@ -5,8 +5,9 @@ import { CS_TAG_LABELS, type CsTag, type Lead } from "@/types";
 
 /**
  * Saving a lead tag, shared by the lead card and the lead detail page so the two cannot drift:
- * the booked_at bookkeeping, the Google Sheets sync and the Incomplete details alert all live
- * here rather than in each screen.
+ * the booked_at bookkeeping and the Incomplete details alert all live here
+ * rather than in each screen. Google Sheets is updated from the database
+ * outbox trigger, not from this browser action.
  */
 
 type TaggableLead = Pick<Lead, "id" | "customer_name" | "created_by"> & {
@@ -51,13 +52,6 @@ export async function saveLeadTag(params: {
     toast.error("Failed to update tag");
     return { ok: false, patch };
   }
-
-  const { syncLeadUpsertToGoogleSheets } = await import("@/lib/google-sheets");
-  void syncLeadUpsertToGoogleSheets({ ...lead, ...patch } as never, undefined, lead.cs_tag ?? undefined).catch(
-    (err) => {
-      console.error("Failed to sync tag update to Google Sheets", err);
-    },
-  );
 
   if (newTag === "incomplete_details" && lead.cs_tag !== "incomplete_details") {
     const notified = await dispatchIncompleteDetailsNotification({

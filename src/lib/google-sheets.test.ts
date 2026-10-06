@@ -162,12 +162,10 @@ describe("formatLeadForGoogleSheet", () => {
     }
   });
 
-  it("should dispatch correct delete payload with job_id and db_id", async () => {
-    const { syncLeadDeleteToGoogleSheets } = await import("./google-sheets");
+  it("requires an explicit Apps Script success response for a connection test", async () => {
+    const { testGoogleSheetsWebhook } = await import("./google-sheets");
     const { supabase } = await import("@/integrations/supabase/client");
 
-    let dispatchedBody: any = null;
-    const originalFrom = supabase.from;
     const proto = Object.getPrototypeOf(supabase);
     const originalDescriptor =
       Object.getOwnPropertyDescriptor(proto, "functions") ||
@@ -178,59 +176,54 @@ describe("formatLeadForGoogleSheet", () => {
       value: {
         invoke: (fnName: string, options: any) => {
           if (fnName === "google-sheets-sync") {
-            dispatchedBody = options.body;
-            return Promise.resolve({ data: { success: true }, error: null });
+            expect(options.body).toEqual({
+              action: "ping",
+              webhookUrl: "https://script.google.com/macros/s/test/exec",
+            });
+            return Promise.resolve({
+              data: {
+                success: true,
+                message: "Connected",
+                sheets: ["All Leads"],
+                capabilities: ["ping", "sync_mirror", "clear_all"],
+                version: "2.0.0",
+              },
+              error: null,
+            });
           }
           return Promise.resolve({ data: null, error: null });
         },
       },
     });
 
-    (supabase as any).from = (table: string) => {
-      if (table === "quo_ai_settings") {
-        return {
-          select: () => ({
-            eq: () => ({
-              maybeSingle: () =>
-                Promise.resolve({
-                  data: {
-                    value: {
-                      autoSync: true,
-                      webhookUrl: "https://script.google.com/macros/s/test/exec",
-                    },
-                  },
-                  error: null,
-                }),
-            }),
-          }),
-        };
-      }
-      return originalFrom.call(supabase, table as any);
-    };
-
-    localStorage.setItem(
-      "marshmallow_google_sheets_config",
-      JSON.stringify({
-        autoSync: true,
-        webhookUrl: "https://script.google.com/macros/s/test/exec",
-      })
-    );
-
     try {
-      await syncLeadDeleteToGoogleSheets("uuid-abc-123", "JOB-5544");
-      expect(dispatchedBody).not.toBeNull();
-      expect(dispatchedBody.action).toBe("delete");
-      expect(dispatchedBody.lead_id).toBe("JOB-5544");
-      expect(dispatchedBody.job_id).toBe("JOB-5544");
-      expect(dispatchedBody.db_id).toBe("uuid-abc-123");
+      await expect(testGoogleSheetsWebhook("https://script.google.com/macros/s/test/exec"))
+        .resolves.toMatchObject({ success: true, message: "Connected", sheets: ["All Leads"], version: "2.0.0" });
     } finally {
       if (originalDescriptor) {
         Object.defineProperty(supabase, "functions", originalDescriptor);
       } else {
         delete (supabase as any).functions;
       }
-      (supabase as any).from = originalFrom;
-      localStorage.removeItem("marshmallow_google_sheets_config");
+    }
+  });
+
+  it("does not call an opaque-success fallback when Apps Script rejects a request", async () => {
+    const { testGoogleSheetsWebhook } = await import("./google-sheets");
+    const { supabase } = await import("@/integrations/supabase/client");
+    const proto = Object.getPrototypeOf(supabase);
+    const originalDescriptor = Object.getOwnPropertyDescriptor(proto, "functions")
+      || Object.getOwnPropertyDescriptor(supabase, "functions");
+    Object.defineProperty(supabase, "functions", {
+      configurable: true,
+      value: { invoke: () => Promise.resolve({ data: { success: false, error: "Quota exceeded" }, error: null }) },
+    });
+    try {
+      await expect(testGoogleSheetsWebhook("https://script.google.com/macros/s/test/exec"))
+        .rejects.toThrow("Quota exceeded");
+    } finally {
+      if (originalDescriptor) Object.defineProperty(supabase, "functions", originalDescriptor);
+      else delete (supabase as any).functions;
     }
   });
 });

@@ -3,38 +3,15 @@ import { supabase } from "@/integrations/supabase/client";
 /**
  * Client for the sync health layer in the database.
  *
- * Why this is not a local React state: sync runs in an admin's browser, so
- * anything tracked only in the tab disappears when the tab closes. A tab that
- * stops listening looks exactly like a healthy idle system. Health that lives
- * in the database is still true after everyone has gone home, which is the
- * only version of it that can tell you sync broke.
+ * Delivery is owned by a transactional database outbox and scheduled Edge
+ * worker, so health/retries continue when every browser is closed.
  *
  * Every function here is admin-only at the database. The grants were revoked
  * from PUBLIC because these are SECURITY DEFINER, so RLS on the tables does
  * not protect them.
  */
 
-export type SyncStatus = "healthy" | "degraded" | "down" | "idle";
-
-/**
- * Dispatch actions that actually move lead data into the sheet.
- *
- * Two actions go through the same dispatcher but are not a sync: "ping" is the
- * connectivity test behind the Test Connection button, and "clear_all" resets
- * the sheet during a bulk sync.
- *
- * Reporting either of those as a success would mark the sync healthy and
- * increment "leads synced" without a single lead being written, which is
- * precisely the false all-clear this layer exists to prevent. A failed ping is
- * also not worth recording, because a real lead sync will record its own
- * failure and queue the lead.
- */
-const SYNC_ACTIONS = new Set(["upsert", "delete", "sync_batch", "sync_all"]);
-
-/** True when an action represents a real write of lead data. */
-export function isSyncAction(action: string): boolean {
-  return SYNC_ACTIONS.has(action);
-}
+export type SyncStatus = "healthy" | "syncing" | "degraded" | "down" | "idle";
 
 export interface SyncErrorEntry {
   occurred_at: string;
@@ -66,13 +43,9 @@ export interface SyncHealth {
   leads_behind: number | null;
   behind_seconds: number | null;
   watermark_at: string | null;
-}
-
-export interface QueuedSyncItem {
-  lead_id: string;
-  op: "upsert" | "delete";
-  job_id: string | null;
-  attempts: number;
+  queue_oldest_at: string | null;
+  queue_oldest_seconds: number | null;
+  failed_jobs: number;
 }
 
 const DEFAULT_STALE_AFTER_SECONDS = 900; // 15 minutes
@@ -101,7 +74,10 @@ export async function fetchSyncHealth(
 
   if (error) throw error;
 
-  const row = (data as unknown as Record<string, unknown> | null) ?? {};
+  // Postgres functions declared RETURNS TABLE are serialized by PostgREST as
+  // a one-row array. Accept an object too for older functions and unit mocks.
+  const payload = data && Array.isArray(data) ? data[0] : data;
+  const row = (payload as unknown as Record<string, unknown> | null) ?? {};
   return {
     status: (row.status as SyncStatus) ?? "idle",
     last_attempt_at: (row.last_attempt_at as string | null) ?? null,
@@ -127,121 +103,43 @@ export async function fetchSyncHealth(
         ? null
         : Number(row.behind_seconds),
     watermark_at: (row.watermark_at as string | null) ?? null,
+    queue_oldest_at: (row.queue_oldest_at as string | null) ?? null,
+    queue_oldest_seconds:
+      row.queue_oldest_seconds === null || row.queue_oldest_seconds === undefined
+        ? null
+        : Number(row.queue_oldest_seconds),
+    failed_jobs: Number(row.failed_jobs ?? 0),
   };
 }
 
-/** Records a successful dispatch. Clears any queued retry for the lead. */
-export async function recordSyncSuccess(leadId?: string | null): Promise<void> {
-  const { error } = await supabase.rpc("record_sheets_sync_success" as never, {
-    p_lead_id: leadId ?? null,
-  } as never);
-  if (error) throw error;
-}
-
-/**
- * Records a failed dispatch. Logs it and queues the lead for retry, so a
- * closed tab cannot discard it.
- *
- * Never throws: health bookkeeping must not turn a recoverable sync failure
- * into a broken sync, and callers are already on an error path.
- */
-export async function recordSyncFailure(options: {
-  message: string;
-  leadId?: string | null;
-  action?: string;
-  detail?: Record<string, unknown>;
-}): Promise<void> {
-  try {
-    const { error } = await supabase.rpc("record_sheets_sync_failure" as never, {
-      p_message: options.message,
-      p_lead_id: options.leadId ?? null,
-      p_action: options.action ?? "sync",
-      p_detail: (options.detail ?? null) as never,
-    } as never);
-    if (error) throw error;
-  } catch {
-    // Swallowed deliberately. The failure is already being reported by the
-    // caller, and a bookkeeping error must not mask it or retry it.
+/** Ask the server worker to retry queued jobs now; claiming alone is not a retry. */
+export async function retrySyncQueueNow(limit = 50): Promise<{
+  claimed: number;
+  processed: number;
+  acknowledged: number;
+  failed: number;
+  queueDepth: number;
+}> {
+  const { data, error } = await supabase.functions.invoke("google-sheets-sync", {
+    body: { action: "process_queue", force: true, limit },
+  });
+  if (error) throw new Error(error.message || "Could not start the Google Sheets retry worker.");
+  if (!data || data.success !== true) {
+    throw new Error(String(data?.error || "The Google Sheets retry worker did not confirm completion."));
   }
-}
-
-/**
- * Records an outcome without ever rejecting, for the same reason.
- * Success also swallows: a failed heartbeat write should not fail the sync it
- * was describing.
- */
-export async function recordSyncOutcome(
-  ok: boolean,
-  leadId: string | null,
-  action: string,
-  message?: string,
-): Promise<void> {
-  if (ok) {
-    try {
-      await recordSyncSuccess(leadId);
-    } catch {
-      // ignored
-    }
-    return;
-  }
-  await recordSyncFailure({ message: message ?? "Unknown sync failure", leadId, action });
-}
-
-/**
- * Marks the sheet complete up to now.
- *
- * Call after a full or delta sync, never after a single-lead upsert. Until
- * this has been called at least once the backup has never been reconciled and
- * every lead counts as missing, which is why the panel shows the whole table
- * rather than a reassuring zero.
- *
- * Never throws. The sheet has already been written by the time this runs, and
- * failing to record that must not turn a completed sync into an error. If it
- * does fail the watermark simply stays where it was, so the panel keeps
- * reporting leads behind until the next successful reconcile.
- */
-export async function advanceSyncWatermark(): Promise<string | null> {
-  try {
-    const { data, error } = await supabase.rpc("advance_sheets_sync_watermark" as never);
-    if (error) throw error;
-    return (data as string | null) ?? null;
-  } catch {
-    return null;
-  }
-}
-
-/** Claims due retries for this browser session. Respects the backoff window. */
-export async function claimSyncQueue(limit = 25): Promise<QueuedSyncItem[]> {
-  const { data, error } = await supabase.rpc("claim_sheets_sync_queue" as never, {
-    p_limit: limit,
-  } as never);
-  if (error) throw error;
-  return (data as unknown as QueuedSyncItem[]) ?? [];
+  return {
+    claimed: Number(data.claimed ?? 0),
+    processed: Number(data.processed ?? 0),
+    acknowledged: Number(data.acknowledged ?? 0),
+    failed: Number(data.failed ?? 0),
+    queueDepth: Number(data.queueDepth ?? 0),
+  };
 }
 
 /** Bounds the error log. Call occasionally, not on every failure. */
 export async function pruneSyncErrorLog(keep = 500): Promise<number> {
   const { data, error } = await supabase.rpc("prune_sheets_sync_errors" as never, {
     p_keep: keep,
-  } as never);
-  if (error) throw error;
-  return Number(data ?? 0);
-}
-
-/**
- * Raises the stale alert for admins if the sync is degraded or down.
- *
- * The database also does this on a schedule; calling it from the UI means an
- * admin who is already looking at the problem does not have to wait.
- * Throttled server-side to once per 15 minutes.
- */
-export async function raiseSyncStaleAlert(
-  staleAfterSeconds: number = DEFAULT_STALE_AFTER_SECONDS,
-  throttleMinutes = 15,
-): Promise<number> {
-  const { data, error } = await supabase.rpc("raise_sheets_sync_stale_alert" as never, {
-    p_stale_after_seconds: staleAfterSeconds,
-    p_throttle_minutes: throttleMinutes,
   } as never);
   if (error) throw error;
   return Number(data ?? 0);
@@ -263,6 +161,8 @@ export function describeSyncStatus(status: SyncStatus): { label: string; tone: s
       return { label: "Healthy", tone: "text-emerald-600 dark:text-emerald-400" };
     case "degraded":
       return { label: "Degraded", tone: "text-amber-600 dark:text-amber-400" };
+    case "syncing":
+      return { label: "Syncing", tone: "text-sky-600 dark:text-sky-400" };
     case "down":
       return { label: "Down", tone: "text-destructive" };
     default:

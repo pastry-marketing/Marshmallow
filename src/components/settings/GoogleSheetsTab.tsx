@@ -34,22 +34,23 @@ export function GoogleSheetsTab() {
   const queryClient = useQueryClient();
   const [config, setConfig] = useState<GoogleSheetsConfig>({
     webhookUrl: "",
-    autoSync: true,
+    autoSync: false,
     spreadsheetUrl: TARGET_SPREADSHEET_URL,
-    lastSyncedAt: null,
-    lastSyncStatus: "idle",
   });
 
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [syncingAll, setSyncingAll] = useState(false);
   const [copiedScript, setCopiedScript] = useState(false);
-  const [syncProgress, setSyncProgress] = useState<{ synced: number; total: number } | null>(null);
 
   useEffect(() => {
     void getGoogleSheetsConfig().then((data) => {
       setConfig(data);
+      setLoading(false);
+    }).catch((err: unknown) => {
+      setLoadError(err instanceof Error ? err.message : "Could not load server sync settings.");
       setLoading(false);
     });
   }, []);
@@ -58,6 +59,7 @@ export function GoogleSheetsTab() {
     setSaving(true);
     try {
       await saveGoogleSheetsConfig(config);
+      setLoadError(null);
       toast.success("Google Sheets configuration saved");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to save configuration");
@@ -75,55 +77,32 @@ export function GoogleSheetsTab() {
     setTesting(true);
     try {
       const res = await testGoogleSheetsWebhook(config.webhookUrl);
-      toast.success(res.message || "Connection successful!");
-      const updated = {
-        ...config,
-        lastSyncStatus: "success" as const,
-        lastSyncMessage: `Connected to ${res.spreadsheetName || "Google Sheet"}.`,
-      };
-      setConfig(updated);
-      await saveGoogleSheetsConfig(updated);
+      toast.success(
+        `Connected to ${res.spreadsheetName || "Google Sheet"} with sync-mirror support${res.version ? ` (v${res.version})` : ""}.`,
+      );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Connection test failed");
-      const updated = {
-        ...config,
-        lastSyncStatus: "error" as const,
-        lastSyncMessage: err instanceof Error ? err.message : "Connection failed",
-      };
-      setConfig(updated);
-      await saveGoogleSheetsConfig(updated);
     } finally {
       setTesting(false);
     }
   };
 
   const handleSyncAll = async () => {
-    if (!config.webhookUrl) {
-      toast.error("Please configure and test your Webhook URL before syncing.");
+    if (!config.webhookUrl || !config.autoSync) {
+      toast.error("Save a valid Apps Script URL and enable Automatic Server Sync before rebuilding.");
       return;
     }
 
     setSyncingAll(true);
-    setSyncProgress(null);
     try {
-      const res = await syncAllLeadsToGoogleSheets((synced, total) => {
-        setSyncProgress({ synced, total });
-      });
-      toast.success(res.message || `Successfully synced ${res.leadsCount} leads!`);
-      const updated = await getGoogleSheetsConfig();
-      setConfig(updated);
-      // A full sync advances the watermark, so the panel is now showing stale
-      // numbers. Without this it kept rendering the values fetched before the
-      // sync started, which reads as though nothing happened.
+      const res = await syncAllLeadsToGoogleSheets();
+      toast.success(res.message || `Queued ${res.leadsCount} leads for a full reconcile.`);
       void queryClient.invalidateQueries({ queryKey: ["google-sheets-sync-health"] });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Sync failed");
-      const updated = await getGoogleSheetsConfig();
-      setConfig(updated);
       void queryClient.invalidateQueries({ queryKey: ["google-sheets-sync-health"] });
     } finally {
       setSyncingAll(false);
-      setSyncProgress(null);
     }
   };
 
@@ -158,7 +137,16 @@ export function GoogleSheetsTab() {
   return (
     <div className="space-y-6">
       {/* Live health first: before anything else, is the sync actually working? */}
-      <SyncHealthCard />
+      <SyncHealthCard autoSync={config.autoSync} />
+
+      {loadError && (
+        <Card className="border-destructive/30 bg-destructive/5">
+          <CardContent className="flex items-start gap-2 p-4 text-sm text-destructive">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{loadError} Settings are not trusted from this browser; retry loading before changing them.</span>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Overview Card */}
       <Card className="glass-panel border-border/60 shadow-premium-sm">
@@ -169,9 +157,9 @@ export function GoogleSheetsTab() {
                 <FileSpreadsheet className="h-6 w-6" />
               </div>
               <div>
-                <CardTitle className="text-lg font-semibold">Google Sheets Live Sync</CardTitle>
+                <CardTitle className="text-lg font-semibold">Google Sheets Backup</CardTitle>
                 <CardDescription className="text-xs">
-                  Real-time bidirectional synchronization with your Google Sheet
+                  One-way CRM mirror with a durable server queue and scheduled retries
                 </CardDescription>
               </div>
             </div>
@@ -179,22 +167,22 @@ export function GoogleSheetsTab() {
             <div className="flex items-center gap-2">
               <span
                 className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${
-                  isConfigured && config.lastSyncStatus === "success"
+                  isConfigured && config.autoSync
                     ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
-                    : isConfigured
+                    : isConfigured && !config.autoSync
                     ? "bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20"
                     : "bg-muted text-muted-foreground border border-border/50"
                 }`}
               >
-                {isConfigured && config.lastSyncStatus === "success" ? (
+                {isConfigured && config.autoSync ? (
                   <>
                     <CheckCircle2 className="h-3.5 w-3.5" />
-                    Connected & Active
+                    Automatic delivery configured
                   </>
-                ) : isConfigured ? (
+                ) : isConfigured && !config.autoSync ? (
                   <>
                     <AlertCircle className="h-3.5 w-3.5" />
-                    Pending Test
+                    Sync paused
                   </>
                 ) : (
                   <>
@@ -235,21 +223,17 @@ export function GoogleSheetsTab() {
             <div className="rounded-2xl border border-border/60 bg-card/60 p-3.5">
               <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Sync Engine</p>
               <p className="mt-1 font-semibold text-sm text-foreground">
-                {config.autoSync ? "Instant Realtime" : "Manual Bulk"}
+                {config.autoSync ? "Server outbox" : "Paused"}
               </p>
               <p className="mt-1 text-[11px] text-muted-foreground">
-                {config.autoSync ? "Triggers on create, edit & delete" : "Syncs on demand"}
+                {config.autoSync ? "Database captures leads, notes & photos; cron retries" : "Changes queue until sync is enabled"}
               </p>
             </div>
 
             <div className="rounded-2xl border border-border/60 bg-card/60 p-3.5">
-              <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Last Bulk Sync</p>
-              <p className="mt-1 font-semibold text-sm text-foreground">
-                {config.lastSyncedAt ? new Date(config.lastSyncedAt).toLocaleString() : "Never"}
-              </p>
-              <p className="mt-1 text-[11px] text-muted-foreground truncate">
-                {config.lastSyncMessage || "Ready to sync"}
-              </p>
+              <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Background worker</p>
+              <p className="mt-1 font-semibold text-sm text-foreground">Every 3 minutes</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">Retries continue with the browser closed.</p>
             </div>
           </div>
 
@@ -272,7 +256,7 @@ export function GoogleSheetsTab() {
                   variant="secondary"
                   size="sm"
                   onClick={handleTestConnection}
-                  disabled={testing || !config.webhookUrl}
+                  disabled={testing || loadError !== null || !config.webhookUrl}
                   className="gap-1.5 shrink-0 text-xs"
                 >
                   {testing ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5 text-amber-500" />}
@@ -293,10 +277,10 @@ export function GoogleSheetsTab() {
                 />
                 <div>
                   <Label htmlFor="auto-sync" className="text-xs font-medium text-foreground cursor-pointer">
-                    Automatic Realtime Sync
+                    Automatic Server Sync
                   </Label>
                   <p className="text-[11px] text-muted-foreground">
-                    Instantly syncs lead creation, updates, status changes, and deletions to Google Sheets.
+                    The database queues lead, note, and photo changes. A scheduled server worker retries delivery without a browser open.
                   </p>
                 </div>
               </div>
@@ -306,7 +290,7 @@ export function GoogleSheetsTab() {
                   variant="outline"
                   size="sm"
                   onClick={handleSave}
-                  disabled={saving}
+                  disabled={saving || loadError !== null}
                   className="text-xs h-9"
                 >
                   {saving ? "Saving..." : "Save Settings"}
@@ -315,42 +299,15 @@ export function GoogleSheetsTab() {
                 <Button
                   size="sm"
                   onClick={handleSyncAll}
-                  disabled={syncingAll || !config.webhookUrl}
+                  disabled={syncingAll || loadError !== null || !config.webhookUrl || !config.autoSync}
                   className="gap-1.5 text-xs h-9 bg-primary hover:bg-primary/90 text-primary-foreground"
+                  title={!config.autoSync ? "Enable automatic sync before rebuilding the Sheet" : "Rebuild all Sheet tabs from CRM data"}
                 >
                   <RefreshCw className={`h-3.5 w-3.5 ${syncingAll ? "animate-spin" : ""}`} />
-                  {syncingAll
-                    ? syncProgress
-                      ? `Syncing... ${syncProgress.synced}/${syncProgress.total}`
-                      : "Preparing..."
-                    : "Sync All Leads Now"}
+                  {syncingAll ? "Starting server rebuild..." : "Rebuild Sheet from CRM"}
                 </Button>
               </div>
             </div>
-
-            {/* Progress bar shown during batched sync */}
-            {syncingAll && (
-              <div className="mt-3 space-y-1.5">
-                <div className="flex items-center justify-between text-xs text-muted-foreground">
-                  <span>
-                    {syncProgress
-                      ? `Batch syncing ${syncProgress.synced.toLocaleString()} of ${syncProgress.total.toLocaleString()} leads…`
-                      : "Fetching all leads from database…"}
-                  </span>
-                  {syncProgress && (
-                    <span className="font-mono font-semibold text-foreground">
-                      {Math.round((syncProgress.synced / syncProgress.total) * 100)}%
-                    </span>
-                  )}
-                </div>
-                <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
-                  <div
-                    className="h-full rounded-full bg-primary transition-all duration-300"
-                    style={{ width: syncProgress ? `${Math.round((syncProgress.synced / syncProgress.total) * 100)}%` : "5%" }}
-                  />
-                </div>
-              </div>
-            )}
           </div>
         </CardContent>
       </Card>

@@ -10,6 +10,7 @@ import {
   CircleSlash,
   Database,
   Layers,
+  LoaderCircle,
   RefreshCw,
   RotateCcw,
   Timer,
@@ -21,11 +22,11 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 
 import {
-  claimSyncQueue,
   describeSyncStatus,
   fetchSyncHealth,
   formatSyncAge,
   pruneSyncErrorLog,
+  retrySyncQueueNow,
   type SyncStatus,
 } from "@/lib/sheets-sync-health";
 import { premiumEase, silkySpring, smoothSpring } from "@/lib/motion";
@@ -35,6 +36,7 @@ const HEALTH_POLL_MS = 30_000;
 /** Ring and dot colours, keyed to theme tokens so both themes stay readable. */
 const TONE_RING: Record<SyncStatus, string> = {
   healthy: "stroke-emerald-500",
+  syncing: "stroke-sky-500",
   degraded: "stroke-amber-500",
   down: "stroke-destructive",
   idle: "stroke-muted-foreground/40",
@@ -42,6 +44,7 @@ const TONE_RING: Record<SyncStatus, string> = {
 
 const TONE_DOT: Record<SyncStatus, string> = {
   healthy: "bg-emerald-500",
+  syncing: "bg-sky-500",
   degraded: "bg-amber-500",
   down: "bg-destructive",
   idle: "bg-muted-foreground/40",
@@ -49,6 +52,7 @@ const TONE_DOT: Record<SyncStatus, string> = {
 
 const TONE_TEXT: Record<SyncStatus, string> = {
   healthy: "text-emerald-600 dark:text-emerald-400",
+  syncing: "text-sky-600 dark:text-sky-400",
   degraded: "text-amber-600 dark:text-amber-400",
   down: "text-destructive",
   idle: "text-muted-foreground",
@@ -56,6 +60,7 @@ const TONE_TEXT: Record<SyncStatus, string> = {
 
 const STATUS_ICON: Record<SyncStatus, typeof CheckCircle2> = {
   healthy: CheckCircle2,
+  syncing: LoaderCircle,
   degraded: AlertTriangle,
   down: AlertCircle,
   idle: CircleSlash,
@@ -64,16 +69,15 @@ const STATUS_ICON: Record<SyncStatus, typeof CheckCircle2> = {
 /**
  * Live state of the Google Sheets backup.
  *
- * Reads from the database rather than component state, because sync runs in
- * someone's browser. Anything held only here is true for exactly as long as the
- * tab stays open, and the tab closing is one of the ways sync breaks.
+ * Reads from the database rather than component state. Delivery is owned by a
+ * scheduled server worker, so health and retries survive every browser closing.
  *
  * The headline figure is how many leads the sheet is missing, not how long ago
  * anything last synced. A backup that is 40 minutes idle but fully current is
  * healthy; one that synced a second ago while three thousand leads are
  * outstanding is not.
  */
-export function SyncHealthCard() {
+export function SyncHealthCard({ autoSync = true }: { autoSync?: boolean }) {
   const queryClient = useQueryClient();
   const [showErrors, setShowErrors] = useState(false);
   const reduceMotion = useReducedMotion();
@@ -86,14 +90,18 @@ export function SyncHealthCard() {
   });
 
   const retryQueue = useMutation({
-    mutationFn: async () => (await claimSyncQueue(50)).length,
-    onSuccess: (count) => {
+    mutationFn: () => retrySyncQueueNow(50),
+    onSuccess: (result) => {
       void queryClient.invalidateQueries({ queryKey: ["google-sheets-sync-health"] });
-      toast.success(
-        count > 0
-          ? `Processing ${count} queued lead${count === 1 ? "" : "s"}`
-          : "Nothing is waiting to sync",
-      );
+      if (result.failed > 0) {
+        toast.error(`${result.failed} job${result.failed === 1 ? "" : "s"} still failed. They remain queued for automatic retry.`);
+      } else if (result.acknowledged > 0) {
+        toast.success(`Confirmed ${result.acknowledged} queued change${result.acknowledged === 1 ? "" : "s"}.`);
+      } else if (result.claimed > 0) {
+        toast.info("The worker claimed queued changes; refresh shortly for the confirmed result.");
+      } else {
+        toast.info("No due jobs. The server worker will retry scheduled items automatically.");
+      }
     },
     onError: (err: Error) => toast.error(`Could not read the retry queue: ${err.message}`),
   });
@@ -123,7 +131,10 @@ export function SyncHealthCard() {
   // Null means the watermark migration has not been applied, which is not the
   // same as zero outstanding. It is shown as unknown rather than as "current".
   const currencyKnown = typeof behind === "number";
-  const isCurrent = currencyKnown && behind === 0;
+  const isCurrent = currencyKnown && behind === 0 && (health?.queue_depth ?? 0) === 0 && status === "healthy";
+  const watermarkAge = health?.watermark_at
+    ? Math.max(0, Math.floor((Date.now() - new Date(health.watermark_at).getTime()) / 1000))
+    : null;
 
   return (
     <Card className="glass-panel overflow-hidden border-border/60">
@@ -184,13 +195,19 @@ export function SyncHealthCard() {
                   <span className={`relative inline-flex h-2 w-2 rounded-full ${TONE_DOT[status]}`} />
                 </span>
                 <h3 className="text-base font-semibold text-foreground">
-                  {isCurrent ? "Backup current" : label}
+                  {!autoSync
+                    ? "Automatic sync paused"
+                    : isCurrent
+                      ? "Backup current"
+                      : label}
                 </h3>
               </div>
               <p className="max-w-xs text-xs leading-relaxed text-muted-foreground">
                 {isUnavailable
-                  ? "Could not read sync health. If the sync health migration has not been applied, get_sheets_sync_health does not exist."
-                  : isPending
+                  ? "Could not read server sync health. Check that the outbox migration was applied and the worker is deployed."
+                  : !autoSync
+                    ? "Lead changes are being retained in the database queue. Turn automatic sync on to deliver them."
+                    : isPending
                     ? "Checking the backup against the database."
                     : !currencyKnown
                       ? "Lead counts appear once the sync watermark migration is applied."
@@ -201,10 +218,10 @@ export function SyncHealthCard() {
               {isPending || isUnavailable ? null : (
                 <Badge
                   variant="outline"
-                  className={`gap-1.5 border-border/50 bg-muted/40 ${TONE_TEXT[status]}`}
+                  className={`gap-1.5 border-border/50 bg-muted/40 ${autoSync ? TONE_TEXT[status] : "text-amber-600 dark:text-amber-400"}`}
                 >
-                  <StatusIcon className="h-3 w-3" />
-                  {label}
+                  <StatusIcon className={`h-3 w-3 ${status === "syncing" && !reduceMotion ? "animate-spin" : ""}`} />
+                  {!autoSync ? "Paused" : label}
                 </Badge>
               )}
             </div>
@@ -234,23 +251,29 @@ export function SyncHealthCard() {
         </div>
 
         {/* Tiles */}
-        <div className="grid gap-px bg-border/40 sm:grid-cols-4">
+        <div className="grid gap-px bg-border/40 sm:grid-cols-2 lg:grid-cols-5">
           <Tile
             icon={Timer}
-            label="Last reconcile"
-            value={formatSyncAge(health?.seconds_since_success ?? null)}
+            label="Last full reconcile"
+            value={formatSyncAge(watermarkAge)}
           />
           <Tile
             icon={Layers}
-            label="Queued"
-            value={String(health?.queue_depth ?? 0)}
+            label="Pending jobs"
+            value={`${health?.queue_depth ?? 0} · ${formatSyncAge(health?.queue_oldest_seconds ?? null)}`}
             highlight={(health?.queue_depth ?? 0) > 0}
           />
           <Tile
+            icon={Activity}
+            label="Leads behind"
+            value={currencyKnown ? String(behind) : "Unknown"}
+            highlight={currencyKnown && (behind ?? 0) > 0}
+          />
+          <Tile
             icon={AlertCircle}
-            label="Failed attempts"
-            value={String(health?.consecutive_failures ?? 0)}
-            highlight={(health?.consecutive_failures ?? 0) > 0}
+            label="Failed jobs"
+            value={String(health?.failed_jobs ?? 0)}
+            highlight={(health?.failed_jobs ?? 0) > 0}
           />
           <Tile
             icon={Database}
@@ -272,8 +295,8 @@ export function SyncHealthCard() {
             >
               <div className="mx-6 my-4 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-400">
                 {status === "down"
-                  ? "Sync has failed repeatedly. Affected leads are queued and retry automatically."
-                  : "Sync is not keeping up. Affected leads are queued and retry automatically."}
+                  ? `${health?.consecutive_failures ?? 0} consecutive failure(s); ${health?.failed_jobs ?? 0} failed job(s) remain queued for retry.`
+                  : `${health?.failed_jobs ?? 0} failed job(s) remain queued; new changes are still being captured and retried.`}
                 {health?.last_error_message ? (
                   <p className="mt-1 opacity-85">Last error: {health.last_error_message}</p>
                 ) : null}

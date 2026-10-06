@@ -32,14 +32,14 @@
  *    Every action counts as one Apps Script execution, and consumer accounts
  *    allow 500 per day. Syncing one lead per edit needs roughly 600-700
  *    executions a day at current volume, which overruns that. Batching many
- *    leads into one call is the fix: the client coalesces changes and sends
- *    one mirror call instead of one per edit.
+ *    leads into one call is the fix: the database outbox coalesces changes and
+ *    sends one mirror call instead of one per edit.
  *
  * 4. VERIFIABLE RESULTS
  *    Every action now returns counts. Previously a 200 response was treated
  *    as proof the write happened, so a script that did nothing looked
- *    identical to a successful sync. The client now compares these counts
- *    against what it sent and reports a mismatch as a failure.
+ *    identical to a successful sync. The server worker compares processedOps
+ *    against the batch it sent and retries a mismatch as a failure.
  *
  * All previous actions still work: ping, clear_all, sync_batch, sync_all,
  * upsert, delete. Nothing existing breaks.
@@ -68,6 +68,7 @@ var HEADERS = [
 var ALL_LEADS = "All Leads";
 var TAGGED_LEADS = "Tagged Leads";
 var MAX_LOCK_WAIT_MS = 25000;
+var SCRIPT_VERSION = "2.0.0";
 
 
 // =============================================================================
@@ -77,6 +78,8 @@ var MAX_LOCK_WAIT_MS = 25000;
 function doGet(e) {
   return jsonResponse({
     success: true,
+    version: SCRIPT_VERSION,
+    capabilities: ["ping", "sync_mirror", "clear_all"],
     message: "Marshmallow Sheets mirror is live.",
     hint: "POST JSON with an action of ping, sync_mirror, upsert, delete, sync_batch, sync_all or clear_all."
   });
@@ -118,6 +121,8 @@ function doPost(e) {
       return jsonResponse({
         success: true,
         action: "ping",
+        version: SCRIPT_VERSION,
+        capabilities: ["ping", "sync_mirror", "clear_all"],
         spreadsheetName: ss.getName(),
         leadRows: countDataRows(getOrCreateSheet(ss, ALL_LEADS)),
         sheets: ss.getSheets().map(function (s) { return s.getName(); })
@@ -143,6 +148,9 @@ function doPost(e) {
         action: "sync_mirror",
         source: payload.source || "unknown",
         received: (payload.ops || []).length,
+        // Worker acknowledgement is logical jobs processed, not physical rows:
+        // one lead is written to All Leads + its status tab + Tagged Leads.
+        processedOps: mirror.processedOps,
         upserted: mirror.upserted,
         deleted: mirror.deleted,
         rowsWritten: mirror.rowsWritten,
@@ -234,13 +242,22 @@ function doPost(e) {
 function handleSyncMirror(ss, ops, source) {
   var upserts = [];
   var deletes = [];
+  var processedOps = 0;
 
   ops.forEach(function (op) {
-    if (!op) return;
+    if (!op || typeof op !== "object") {
+      throw new Error("Every sync_mirror operation must be an object.");
+    }
     if (op.op === "delete") {
+      if (!collectIds({}, op).length) throw new Error("Delete operation is missing all lead identifiers.");
       deletes.push(op);
-    } else if (op.lead) {
+      processedOps++;
+    } else if (op.op === "upsert" && op.lead && typeof op.lead === "object") {
+      if (!collectIds(op.lead, op).length) throw new Error("Upsert operation is missing all lead identifiers.");
       upserts.push(op);
+      processedOps++;
+    } else {
+      throw new Error("Unsupported sync_mirror operation: " + String(op.op));
     }
   });
 
@@ -268,6 +285,27 @@ function handleSyncMirror(ss, ops, source) {
     }
   });
 
+  // The database outbox retains each previous status while edits coalesce.
+  // Remove only from those former tabs rather than scanning every status sheet
+  // for every batch (which scaled as the full workbook grew).
+  var staleStatusIds = Object.create(null);
+  upserts.forEach(function (op) {
+    var currentStatus = sanitizeSheetName((op.lead["Status"] || "").trim());
+    var oldStatuses = Array.isArray(op.previousStatuses)
+      ? op.previousStatuses
+      : (op.previousStatus ? [op.previousStatus] : []);
+    oldStatuses.forEach(function (oldStatusValue) {
+      var oldStatus = sanitizeSheetName(String(oldStatusValue || "").trim());
+      if (!oldStatus || oldStatus === currentStatus || oldStatus === ALL_LEADS || oldStatus === TAGGED_LEADS) return;
+      if (!staleStatusIds[oldStatus]) staleStatusIds[oldStatus] = [];
+      staleStatusIds[oldStatus] = staleStatusIds[oldStatus].concat(collectIds(op.lead, op));
+    });
+  });
+  Object.keys(staleStatusIds).forEach(function (sheetName) {
+    var oldSheet = ss.getSheetByName(sheetName);
+    if (oldSheet) deleteIdsFromSheet(oldSheet, staleStatusIds[sheetName]);
+  });
+
   var upserted = 0;
   var deleted = 0;
   var skipped = 0;
@@ -276,7 +314,7 @@ function handleSyncMirror(ss, ops, source) {
 
   Object.keys(bySheet).forEach(function (sheetName) {
     var sheet = getOrCreateSheet(ss, sheetName);
-    if (sheetName === ALL_LEADS) setupSheetHeaders(sheet);
+    setupSheetHeaders(sheet);
     var outcome = applyUpsertsToSheet(sheet, bySheet[sheetName]);
     upserted += outcome.upserted;
     rowsWritten += outcome.rowsWritten;
@@ -306,8 +344,35 @@ function handleSyncMirror(ss, ops, source) {
     deleted: deleted,
     skipped: skipped,
     rowsWritten: rowsWritten,
-    sheetsTouched: sheetsTouched
+    sheetsTouched: sheetsTouched,
+    processedOps: processedOps
   };
+}
+
+/** Remove a batch of identifiers from one sheet with one column read. */
+function deleteIdsFromSheet(sheet, identifiers) {
+  if (sheet.getLastRow() < 2) return 0;
+  var targets = Object.create(null);
+  identifiers.forEach(function (id) {
+    var normalized = normalizeId(id);
+    if (normalized) targets[normalized] = true;
+  });
+  if (!Object.keys(targets).length) return 0;
+
+  var range = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1);
+  var values = range.getValues();
+  var display = range.getDisplayValues();
+  var rows = [];
+  for (var i = 0; i < values.length; i++) {
+    if (values[i][0] === "" && display[i][0] === "") continue;
+    var key = normalizeId(values[i][0]);
+    if (targets[key]) rows.push(i + 2);
+  }
+  rows.sort(function (a, b) { return b - a; });
+  rows.forEach(function (row) {
+    if (row >= 2 && row <= sheet.getLastRow()) sheet.deleteRow(row);
+  });
+  return rows.length;
 }
 
 /**
