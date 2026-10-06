@@ -292,11 +292,34 @@ async function invokeAppsScript(
   const body = { ...payload };
   if (explicitWebhookUrl) body.webhookUrl = explicitWebhookUrl;
   const { data, error } = await supabase.functions.invoke("google-sheets-sync", { body });
-  if (error) throw new Error(`Google Sheets Edge Function failed: ${error.message}`);
+  if (error) throw new Error(`Google Sheets Edge Function failed: ${await describeFunctionError(error)}`);
   if (!data || data.success !== true) {
     throw new Error(String(data?.error ?? "Google Sheets did not confirm the write."));
   }
   return data;
+}
+
+async function describeFunctionError(error: unknown): Promise<string> {
+  const candidate = error as { message?: unknown; context?: unknown };
+  const context = candidate?.context;
+  if (context instanceof Response) {
+    let responseMessage = "";
+    try {
+      const text = await context.clone().text();
+      if (text) {
+        try {
+          const body = JSON.parse(text) as { error?: unknown; message?: unknown };
+          responseMessage = String(body.error ?? body.message ?? "");
+        } catch {
+          responseMessage = text.slice(0, 300);
+        }
+      }
+    } catch {
+      // Keep the HTTP status and SDK message when a response body is unreadable.
+    }
+    return responseMessage || `HTTP ${context.status}${candidate.message ? `: ${String(candidate.message)}` : ""}`;
+  }
+  return typeof candidate?.message === "string" ? candidate.message : String(error);
 }
 
 /**
@@ -315,7 +338,7 @@ export async function syncAllLeadsToGoogleSheets(): Promise<{
   const { data, error } = await supabase.functions.invoke("google-sheets-sync", {
     body: { action: "reconcile_all" },
   });
-  if (error) throw new Error(`Could not start full reconciliation: ${error.message}`);
+  if (error) throw new Error(`Could not start full reconciliation: ${await describeFunctionError(error)}`);
   if (!data || data.success !== true) {
     throw new Error(String(data?.error ?? "The server did not confirm the reconciliation request."));
   }
