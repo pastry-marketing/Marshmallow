@@ -50,6 +50,7 @@ import { updateLeadById } from "@/lib/lead-updates";
 import { requestQuoteApproval } from "@/lib/quote-approval-requests";
 import StatusBadge from "@/components/leads/StatusBadge";
 import LeadCoverageBadge from "@/components/leads/LeadCoverageBadge";
+import LeadCoveragePreview from "@/components/leads/LeadCoveragePreview";
 import CancelledStatusBadge from "@/components/leads/CancelledStatusBadge";
 import NearbyUrgentLeads from "@/components/leads/NearbyUrgentLeads";
 import LeadTagControl from "@/components/leads/LeadTagControl";
@@ -1473,6 +1474,14 @@ export default function LeadDetailPage() {
                   className={fieldClass}
                   readOnly={isProcessor || isOpr}
                 />
+                {isNew && (
+                  <LeadCoveragePreview
+                    address={form.address}
+                    city={form.city}
+                    state={form.state}
+                    zip={form.zip_code}
+                  />
+                )}
               </div>
 
 
