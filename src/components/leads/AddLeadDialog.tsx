@@ -35,8 +35,7 @@ import { requestQuoteApproval } from "@/lib/quote-approval-requests";
 import { motion, AnimatePresence } from "framer-motion";
 import NumberNameCombobox from "./NumberNameCombobox";
 import MultiDateTimePicker from "./MultiDateTimePicker";
-import LeadCoveragePreview from "./LeadCoveragePreview";
-import { geocodeLeadAddress } from "@/lib/lead-address-geocoding";
+import { geocodeAndPersistLeadAddress } from "@/lib/lead-address-geocoding";
 
 interface Props {
   open: boolean;
@@ -276,15 +275,6 @@ const AddLeadDialog = ({ open, onOpenChange, onSuccess, initialData, onUrgentChe
       scheduled_time_end = parseTime(form.end_hour, form.end_minute, form.end_ampm);
     }
 
-    let geocodedAddress: Awaited<ReturnType<typeof geocodeLeadAddress>> = null;
-    if (form.address.trim()) {
-      try {
-        geocodedAddress = await geocodeLeadAddress(form.address);
-      } catch (geocodeError) {
-        console.warn("Address geocoding failed; saving the lead without coordinates:", geocodeError);
-      }
-    }
-
     const insertData = {
       job_id: jobId,
       customer_name: form.customer_name,
@@ -293,11 +283,6 @@ const AddLeadDialog = ({ open, onOpenChange, onSuccess, initialData, onUrgentChe
       number_name: form.number_name || null,
       direction: form.direction || null,
       address: form.address || null,
-      city: geocodedAddress?.city ?? null,
-      state: geocodedAddress?.state ?? null,
-      zip_code: geocodedAddress?.zip ?? null,
-      latitude: geocodedAddress?.latitude ?? null,
-      longitude: geocodedAddress?.longitude ?? null,
       half_address: form.half_address || null,
       service_type: form.service_type?.trim() || "",
       status: createdStatus,
@@ -334,6 +319,9 @@ const AddLeadDialog = ({ open, onOpenChange, onSuccess, initialData, onUrgentChe
     }
 
     if (data) {
+      // Save first; address lookup is best-effort and must never hold up lead creation.
+      void geocodeAndPersistLeadAddress(data.id, form.address);
+
       let quoteApprovalRequested = false;
       if (requestsQuoteApproval) {
         try {
@@ -665,7 +653,6 @@ const AddLeadDialog = ({ open, onOpenChange, onSuccess, initialData, onUrgentChe
                     placeholder="123 Main St, City, State, Zip"
                     className={fieldClass}
                   />
-                  <LeadCoveragePreview address={form.address} />
                 </div>
 
                 <div className="space-y-1.5">

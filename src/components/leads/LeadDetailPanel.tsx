@@ -33,7 +33,7 @@ import {
 } from "lucide-react";
 import StatusBadge from "./StatusBadge";
 import LeadCoverageBadge from "./LeadCoverageBadge";
-import { geocodeLeadAddress } from "@/lib/lead-address-geocoding";
+import { geocodeAndPersistLeadAddress } from "@/lib/lead-address-geocoding";
 import LeadStatusHistoryDialog from "./LeadStatusHistoryDialog";
 import UrgentAICheckDialog from "./UrgentAICheckDialog";
 import { showsUrgentCheck } from "@/lib/urgent-verification";
@@ -566,18 +566,6 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
         addressCity = null;
         addressState = null;
         addressZip = null;
-        if (form.address.trim()) {
-          try {
-            const geocodedAddress = await geocodeLeadAddress(form.address);
-            addressLatitude = geocodedAddress?.latitude ?? null;
-            addressLongitude = geocodedAddress?.longitude ?? null;
-            addressCity = geocodedAddress?.city ?? null;
-            addressState = geocodedAddress?.state ?? null;
-            addressZip = geocodedAddress?.zip ?? null;
-          } catch (geocodeError) {
-            console.warn("Address geocoding failed; saving the lead without coordinates:", geocodeError);
-          }
-        }
       }
 
       const updateData: Record<string, unknown> = {
@@ -637,6 +625,15 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
         } else {
           throw saveErr;
         }
+      }
+
+      if (addressChanged && form.address.trim()) {
+        void geocodeAndPersistLeadAddress(leadId, form.address).then((updated) => {
+          if (updated) {
+            queryClient.invalidateQueries({ queryKey: ["lead", leadId] });
+            onUpdate();
+          }
+        });
       }
 
       if (quoteApprovalRequested && lead) {
