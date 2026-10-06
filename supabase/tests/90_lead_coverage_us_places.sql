@@ -424,7 +424,43 @@ BEGIN
 END $$;
 
 -- -----------------------------------------------------------------------------
--- 06  Recalculating everything agrees with the per-lead answer
+-- 06  Census suffix aliases resolve from a real address
+--     This address parses as Mariposa, CA, while the Census table names its
+--     coordinate row "Mariposa CDP". The coverage resolver must treat those as
+--     the same place and store a real result instead of leaving coverage NULL.
+-- -----------------------------------------------------------------------------
+INSERT INTO public.leads
+  (job_id, customer_name, customer_phone, service_type, status, address)
+VALUES ('ZZ-COV-ALIAS', 'Coverage alias probe', '9990000007', 'General', 'urgent_job',
+        '4618 Burney Dr Mariposa, CA 95338, USA');
+
+DO $$
+DECLARE
+  v_count integer;
+  v_level text;
+  v_label text;
+  v_checked timestamptz;
+BEGIN
+  SELECT coverage_tech_count, coverage_level, coverage_area_label, coverage_checked_at
+    INTO v_count, v_level, v_label, v_checked
+    FROM public.leads WHERE job_id = 'ZZ-COV-ALIAS';
+
+  INSERT INTO _results
+  SELECT 7,
+         'Mariposa Census CDP alias resolves coverage',
+         v_checked IS NOT NULL
+           AND v_label IS NOT DISTINCT FROM 'Mariposa, CA'
+           AND v_level IN ('good', 'normal', 'bad')
+           AND ((v_count >= 10 AND v_level = 'good')
+             OR (v_count BETWEEN 1 AND 9 AND v_level = 'normal')
+             OR (v_count = 0 AND v_level = 'bad')),
+         format('count=%s level=%s area=%s checked=%s',
+           coalesce(v_count::text, 'NULL'), coalesce(v_level, 'NULL'),
+           coalesce(v_label, 'NULL'), coalesce(v_checked::text, 'NULL'));
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- 08  Recalculating everything agrees with the per-lead answer
 --     A set-based pass and a per-lead trigger pass must not disagree; that
 --     disagreement is how a badge ends up showing a number nobody can reproduce.
 -- -----------------------------------------------------------------------------
@@ -434,7 +470,11 @@ DECLARE
   v_bad integer := 0;
   v_detail text := '';
   v_per_lead integer;
+  v_alias_before integer;
+  v_alias_after integer;
 BEGIN
+  SELECT coverage_tech_count INTO v_alias_before
+    FROM public.leads WHERE job_id = 'ZZ-COV-ALIAS';
   SELECT * INTO v_spread FROM public.compute_all_lead_coverage();
 
   IF v_spread IS NULL THEN
@@ -450,6 +490,15 @@ BEGIN
         || coalesce(v_per_lead::text, 'NULL') || ' (expected 9);';
     END IF;
 
+    SELECT coverage_tech_count INTO v_alias_after
+      FROM public.leads WHERE job_id = 'ZZ-COV-ALIAS';
+    IF v_alias_after IS DISTINCT FROM v_alias_before THEN
+      v_bad := v_bad + 1;
+      v_detail := v_detail || format(
+        ' full recalc changed alias coverage from %s to %s;',
+        coalesce(v_alias_before::text, 'NULL'), coalesce(v_alias_after::text, 'NULL'));
+    END IF;
+
     -- The spread must account for every lead it claims to have checked.
     IF v_spread.good + v_spread.normal + v_spread.bad <> v_spread.checked - v_spread.unlocated THEN
       v_bad := v_bad + 1;
@@ -459,7 +508,7 @@ BEGIN
   END IF;
 
   INSERT INTO _results
-  SELECT 7,
+  SELECT 8,
          'full recalc agrees with the per-lead trigger',
          v_bad = 0,
          CASE WHEN v_bad = 0
