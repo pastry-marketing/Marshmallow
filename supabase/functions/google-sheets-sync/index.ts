@@ -240,7 +240,15 @@ async function postToSheet(webhookUrl: string, payload: JsonObject, timeoutMs = 
 }
 
 async function verifyMirrorDeployment(webhookUrl: string): Promise<void> {
-  const ping = await postToSheet(webhookUrl, { action: "ping" }, 15_000);
+  let ping: JsonObject;
+  try {
+    ping = await postToSheet(webhookUrl, { action: "ping" }, 15_000);
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error("Google Apps Script did not answer the health ping within 15s. The Web App may be paused, still deploying, or restricted to your own account.");
+    }
+    throw err;
+  }
   const capabilities = Array.isArray(ping.capabilities) ? ping.capabilities : [];
   if (!capabilities.includes("sync_mirror")) {
     throw new Error("The deployed Apps Script is outdated: it does not support sync_mirror. Copy the current script from Settings and deploy a new version of the existing Web App.");
@@ -325,15 +333,20 @@ async function processQueue(
 ) {
   const { data: runState, error: stateError } = await admin
     .from("google_sheets_sync_health")
-    .select("reconcile_lock_token,reconcile_clear_pending,reconcile_active")
+    .select("reconcile_lock_token,reconcile_clear_pending,reconcile_active,last_success_at")
     .eq("id", "global")
     .maybeSingle();
   if (stateError) throw new Error(`Could not read reconciliation state: ${stateError.message}`);
 
   // Fail before claiming or clearing anything when the configured deployment
   // is missing, points at an obsolete version, or cannot acknowledge writes.
+  // A mirror that delivered successfully in the last few minutes is trusted so
+  // the scheduled worker does not spend a second Apps Script request per minute.
+  const lastSuccessAt = asString(runState?.last_success_at);
+  const lastSuccessMs = lastSuccessAt ? Date.parse(lastSuccessAt) : Number.NaN;
+  const mirrorNeedsPreflight = !Number.isFinite(lastSuccessMs) || Date.now() - lastSuccessMs > 5 * 60_000;
   try {
-    await verifyMirrorDeployment(webhookUrl);
+    if (mirrorNeedsPreflight) await verifyMirrorDeployment(webhookUrl);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await admin.rpc("record_sheets_sync_failure", {
