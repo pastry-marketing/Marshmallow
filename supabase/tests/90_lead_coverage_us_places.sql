@@ -103,7 +103,9 @@ BEGIN
        ('77002',                                            NULL,              NULL,'77002',     'NULL'),
        ('4618 Burney Dr,, mARIPOSA. California. 95338 USA', 'Mariposa',        'CA','95338',    'punctuation / duplicate commas'),
        ('4618   Burney Dr  Mariposa   CA 95338',            'Mariposa',        'CA','95338',    'repeated spaces'),
-       ('4618 Burney Dr, Mariposa., California. 95338, USA','Mariposa',        'CA','95338',    'punctuation after city/state')
+       ('4618 Burney Dr, Mariposa., California. 95338, USA','Mariposa',        'CA','95338',    'punctuation after city/state'),
+       ('715 Indiana Ave St. Charles, Illinois 60174, USA', 'Saint Charles',   'IL','60174',    'St. city prefix'),
+       ('1230 Cedar Brook Dr NE Lawrenceville, Georgia 30043, USA','Lawrenceville','GA','30043', 'street direction before city')
     ) AS t(address, want_city, want_state, want_zip, old_rule)
   LOOP
     DECLARE got record;
@@ -128,7 +130,7 @@ BEGIN
          'city parser reads every real address shape',
          v_bad = 0,
          CASE WHEN v_bad = 0
-              THEN '13 shapes resolved, including punctuation, repeated spaces and prior NULL cases'
+              THEN '15 shapes resolved, including punctuation, St. city abbreviation and street direction'
               ELSE 'failed=' || v_bad || v_bad_detail
          END;
 END $$;
@@ -481,7 +483,37 @@ BEGIN
 END $$;
 
 -- -----------------------------------------------------------------------------
--- 08  Recalculating everything agrees with the per-lead answer
+-- 08  A Census-geocoded point works even when no city can be parsed
+--     This is the fallback used for neighborhoods and alternate city names.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE
+  v_count integer;
+  v_level text;
+  v_label text;
+BEGIN
+  SELECT tech_count, area_label INTO v_count, v_label
+    FROM public.preview_lead_technician_coverage_at_point(
+      '77002', NULL, NULL, NULL, 0, 0
+    );
+  v_level := CASE
+    WHEN v_count >= 10 THEN 'good'
+    WHEN v_count >= 1 THEN 'normal'
+    ELSE 'bad'
+  END;
+
+  INSERT INTO _results
+  SELECT 8,
+         'geocoded location previews without parsed city text',
+         v_count IS NOT DISTINCT FROM 9
+           AND v_level IS NOT DISTINCT FROM 'normal'
+           AND v_label IS NOT NULL,
+         format('count=%s level=%s area=%s (expected 9/normal)',
+           coalesce(v_count::text, 'NULL'), coalesce(v_level, 'NULL'), coalesce(v_label, 'NULL'));
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- 09  Recalculating everything agrees with the per-lead answer
 --     A set-based pass and a per-lead trigger pass must not disagree; that
 --     disagreement is how a badge ends up showing a number nobody can reproduce.
 -- -----------------------------------------------------------------------------
@@ -529,7 +561,7 @@ BEGIN
   END IF;
 
   INSERT INTO _results
-  SELECT 8,
+  SELECT 9,
          'full recalc agrees with the per-lead trigger',
          v_bad = 0,
          CASE WHEN v_bad = 0

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { geocodeLeadAddress } from "@/lib/lead-address-geocoding";
 
 export interface LeadCoveragePreviewResult {
   tech_count: number;
@@ -45,21 +46,45 @@ export function useLeadCoveragePreview({
     setPreview({ status: "checking", result: null });
 
     const timer = window.setTimeout(async () => {
-      const { data, error } = await supabase.rpc("preview_lead_technician_coverage", {
-        _address: normalizedAddress,
-        _city: normalizedCity,
-        _state: normalizedState,
-        _zip: normalizedZip,
+      let result: LeadCoveragePreviewResult | undefined;
+      const point = await geocodeLeadAddress(normalizedAddress).catch((geocodeError) => {
+        console.warn("Census address fallback failed:", geocodeError);
+        return null;
       });
-
       if (cancelled) return;
-      if (error) {
-        console.warn("Lead coverage preview failed:", error.message);
-        setPreview({ status: "error", result: null });
-        return;
+
+      if (point) {
+        const { data, error } = await supabase.rpc("preview_lead_technician_coverage_at_point", {
+          _address: normalizedAddress,
+          _city: normalizedCity,
+          _state: normalizedState,
+          _zip: normalizedZip,
+          _latitude: point.latitude,
+          _longitude: point.longitude,
+        });
+        if (error) {
+          console.warn("Located lead coverage preview failed:", error.message);
+          setPreview({ status: "error", result: null });
+          return;
+        }
+        result = data?.[0];
+      } else {
+        const { data, error } = await supabase.rpc("preview_lead_technician_coverage", {
+          _address: normalizedAddress,
+          _city: normalizedCity,
+          _state: normalizedState,
+          _zip: normalizedZip,
+        });
+        if (error) {
+          console.warn("Lead coverage preview failed:", error.message);
+          setPreview({ status: "error", result: null });
+          return;
+        }
+        result = data?.[0];
       }
 
-      const result = data?.[0];
+      if (cancelled) return;
+
       if (!result) {
         setPreview({ status: "unresolved", result: null });
         return;

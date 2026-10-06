@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 import StatusBadge from "./StatusBadge";
 import LeadCoverageBadge from "./LeadCoverageBadge";
+import { geocodeLeadAddress } from "@/lib/lead-address-geocoding";
 import LeadStatusHistoryDialog from "./LeadStatusHistoryDialog";
 import UrgentAICheckDialog from "./UrgentAICheckDialog";
 import { showsUrgentCheck } from "@/lib/urgent-verification";
@@ -551,12 +552,33 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
       if (!savedStatus) throw new Error("Current lead status is unavailable");
       if (quoteApprovalRequested) delete changes.status;
 
+      let addressLatitude = lead?.latitude ?? null;
+      let addressLongitude = lead?.longitude ?? null;
+      const addressChanged = form.address.trim() !== (lead?.address ?? "").trim()
+        || lead?.latitude == null
+        || lead?.longitude == null;
+      if (addressChanged) {
+        addressLatitude = null;
+        addressLongitude = null;
+        if (form.address.trim()) {
+          try {
+            const geocodedAddress = await geocodeLeadAddress(form.address);
+            addressLatitude = geocodedAddress?.latitude ?? null;
+            addressLongitude = geocodedAddress?.longitude ?? null;
+          } catch (geocodeError) {
+            console.warn("Address geocoding failed; saving the lead without coordinates:", geocodeError);
+          }
+        }
+      }
+
       const updateData: Record<string, unknown> = {
         customer_name: form.customer_name,
         customer_email: form.customer_email,
         customer_phone: form.customer_phone,
         service_type: form.service_type,
         address: form.address,
+        latitude: addressLatitude,
+        longitude: addressLongitude,
         half_address: form.half_address,
         city: form.city,
         state: form.state,
