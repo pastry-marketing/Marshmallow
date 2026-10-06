@@ -166,6 +166,10 @@ INSERT INTO public.us_places
   (geoid, name, state_code, state_name, population, latitude, longitude)
 VALUES ('ZZ-COV-PROBE', 'Coverage Probe City', 'TX', 'Texas', 100, 0, 0);
 
+INSERT INTO public.us_places
+  (geoid, name, state_code, state_name, population, latitude, longitude)
+VALUES ('ZZ-COV-FAR-PROBE', 'Coverage Far City', 'TX', 'Texas', 100, 30, -97);
+
 DO $$
 DECLARE
   v_city   record;
@@ -236,9 +240,15 @@ VALUES ('ZZ-COV-NEAR', 'Coverage probe near', '9990000001', 'General', 'urgent_j
        ('ZZ-COV-30MI', 'Coverage probe 30mi', '9990000002', 'General', 'urgent_job',
         '1 Probe Road Coverage Probe City, TX 75000', 0, 0.7),
        ('ZZ-COV-GOOD', 'Coverage probe ten', '9990000005', 'General', 'urgent_job',
-        '1 Probe Road Coverage Probe City, TX 75000', 0, 0.35),
+         '1 Probe Road Coverage Probe City, TX 75000', 0, 0.35),
        ('ZZ-COV-FAR', 'Coverage probe far', '9990000003', 'General', 'urgent_job',
-        '1 Probe Road Coverage Probe City, TX 75000', 0, 10);
+         '1 Probe Road Coverage Probe City, TX 75000', 0, 10);
+
+-- Extension-style insert: only the address is provided, with no pre-geocoded
+-- latitude/longitude. The trigger must place it via the city in us_places.
+INSERT INTO public.leads (job_id, customer_name, customer_phone, service_type, status, address)
+VALUES ('ZZ-COV-EXT', 'Coverage extension style', '9990000006', 'General', 'urgent_job',
+        '1 Probe Road Coverage Probe City, TX 75000');
 
 -- No address at creation means no badge. Adding the address later must trigger
 -- the same count without the extension or web client calling an extra RPC.
@@ -246,15 +256,23 @@ DO $$
 DECLARE
   v_count integer;
   v_level text;
+  v_ext_count integer;
+  v_ext_level text;
 BEGIN
   SELECT coverage_tech_count, coverage_level INTO v_count, v_level
     FROM public.leads WHERE job_id = 'ZZ-COV-NEAR';
+  SELECT coverage_tech_count, coverage_level INTO v_ext_count, v_ext_level
+    FROM public.leads WHERE job_id = 'ZZ-COV-EXT';
 
   INSERT INTO _results
   SELECT 4,
-         'new lead without address starts without a coverage badge',
-         v_count IS NULL AND v_level IS NULL,
-         format('count=%s level=%s', coalesce(v_count::text, 'NULL'), coalesce(v_level, 'NULL'));
+         'empty lead stays unbadged; extension-style insert is checked',
+         v_count IS NULL AND v_level IS NULL
+           AND v_ext_count IS NOT DISTINCT FROM 9
+           AND v_ext_level IS NOT DISTINCT FROM 'normal',
+         format('empty lead=%s/%s; address-only insert=%s/%s (expected NULL/NULL and 9/normal)',
+           coalesce(v_count::text, 'NULL'), coalesce(v_level, 'NULL'),
+           coalesce(v_ext_count::text, 'NULL'), coalesce(v_ext_level, 'NULL'));
 END $$;
 
 UPDATE public.leads
@@ -308,6 +326,32 @@ BEGIN
     v_detail := v_detail || ' far lead in the same state read count='
       || coalesce(v_far::text, 'NULL') || ' level=' || coalesce(v_far_level, 'NULL')
       || ' (expected 0 / bad - this is the city/state substring bug);';
+  END IF;
+
+  -- Editing the address a second time must replace the old stored result; a
+  -- trigger that only handles initial creation or first address entry is stale.
+  UPDATE public.leads
+     SET address = '1 Probe Road Coverage Far City, TX 75000'
+   WHERE job_id = 'ZZ-COV-NEAR';
+  SELECT coverage_tech_count, coverage_level INTO v_near, v_near_level
+    FROM public.leads WHERE job_id = 'ZZ-COV-NEAR';
+  IF v_near IS DISTINCT FROM 0 OR v_near_level IS DISTINCT FROM 'bad' THEN
+    v_bad := v_bad + 1;
+    v_detail := v_detail || ' second address edit was not recalculated: '
+      || coalesce(v_near::text, 'NULL') || '/' || coalesce(v_near_level, 'NULL')
+      || ' (expected 0/bad);';
+  END IF;
+
+  -- Restore the original location so the set-based consistency check below
+  -- continues to compare against the same 9-technician case.
+  UPDATE public.leads
+     SET address = '1 Probe Road Coverage Probe City, TX 75000'
+   WHERE job_id = 'ZZ-COV-NEAR';
+  SELECT coverage_tech_count, coverage_level INTO v_near, v_near_level
+    FROM public.leads WHERE job_id = 'ZZ-COV-NEAR';
+  IF v_near IS DISTINCT FROM 9 OR v_near_level IS DISTINCT FROM 'normal' THEN
+    v_bad := v_bad + 1;
+    v_detail := v_detail || ' restoring the address did not restore 9/normal;';
   END IF;
 
   INSERT INTO _results

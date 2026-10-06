@@ -5,6 +5,7 @@ import { Lead } from "@/lib/constants";
 import { Wrench, MapPin, FileText, Image as ImageIcon, Briefcase, ChevronDown, MessageSquare, DollarSign, CalendarClock } from "lucide-react";
 import { useIsLastMessageFromCustomer } from "@/hooks/useIsLastMessageFromCustomer";
 import StatusBadge from "./StatusBadge";
+import LeadCoverageBadge from "./LeadCoverageBadge";
 import ImageLightbox from "./ImageLightbox";
 import NoteThread from "./NoteThread";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -120,7 +121,14 @@ export default function OprLeadCard({ lead, initialPhotoPaths, initialHasOprNote
               <p className="font-mono text-[10px] text-muted-foreground">{lead.job_id}</p>
             </div>
           </div>
-          <StatusBadge status={lead.status} size="sm" />
+          <div className="flex flex-wrap items-center justify-end gap-1.5">
+            <StatusBadge status={lead.status} size="sm" />
+            <LeadCoverageBadge
+              level={lead.coverage_level}
+              count={lead.coverage_tech_count}
+              areaLabel={lead.coverage_area_label}
+            />
+          </div>
         </div>
 
         <div className="grid gap-2 px-4 pb-3">
