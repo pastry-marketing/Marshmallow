@@ -2087,6 +2087,20 @@ export type Database = {
           tech_count: number
         }[]
       }
+      preview_lead_technician_coverage_at_point: {
+        Args: {
+          _address: string
+          _city: string | null
+          _latitude: number
+          _longitude: number
+          _state: string | null
+          _zip: string | null
+        }
+        Returns: {
+          area_label: string
+          tech_count: number
+        }[]
+      }
       quo_conversation_counts_by_number: {
         Args: never
         Returns: {

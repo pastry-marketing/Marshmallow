@@ -61,6 +61,7 @@ const DRAFT_STORAGE_KEY = "leadDraft";
 const SETTINGS_STORAGE_KEY = "crmSettings";
 const CENSUS_GEOCODER_URL = "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress";
 const CENSUS_BENCHMARK = "Public_AR_Current";
+const CENSUS_GEOCODE_CACHE = new Map();
 
 chrome.runtime.onInstalled.addListener(async () => {
   await ensureDraft();
@@ -166,18 +167,67 @@ async function previewLeadCoverage(address) {
   if (userError) throw new Error(userError.message);
   if (!user) throw new Error("Sign in to preview technician coverage.");
 
-  const { data, error } = await supabaseClient.rpc("preview_lead_technician_coverage", {
-    _address: normalizedAddress,
-    _city: null,
-    _state: null,
-    _zip: null
-  });
-  if (error) throw new Error(error.message);
+  let coverage = null;
+  const point = await geocodeCensusAddress(normalizedAddress);
+  if (point) {
+    const { data, error } = await supabaseClient.rpc(
+      "preview_lead_technician_coverage_at_point",
+      {
+        _address: normalizedAddress,
+        _city: null,
+        _state: null,
+        _zip: null,
+        _latitude: point.latitude,
+        _longitude: point.longitude
+      }
+    );
+    if (error) throw new Error(error.message);
+    coverage = Array.isArray(data) ? (data[0] || null) : null;
+  } else {
+    const { data, error } = await supabaseClient.rpc("preview_lead_technician_coverage", {
+      _address: normalizedAddress,
+      _city: null,
+      _state: null,
+      _zip: null
+    });
+    if (error) throw new Error(error.message);
+    coverage = Array.isArray(data) ? (data[0] || null) : null;
+  }
 
   return {
     success: true,
-    coverage: Array.isArray(data) ? (data[0] || null) : null
+    coverage
   };
+}
+
+async function geocodeCensusAddress(address) {
+  const normalizedAddress = String(address || "").trim();
+  if (normalizedAddress.length < 8) return null;
+  const cacheKey = normalizedAddress.toLowerCase().replace(/\s+/g, " ");
+  if (CENSUS_GEOCODE_CACHE.has(cacheKey)) return CENSUS_GEOCODE_CACHE.get(cacheKey);
+
+  const url = `${CENSUS_GEOCODER_URL}?address=${encodeURIComponent(normalizedAddress)}&benchmark=${encodeURIComponent(CENSUS_BENCHMARK)}&format=json`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Census geocoder returned ${response.status}`);
+  const payload = await response.json();
+  const match = payload?.result?.addressMatches?.[0];
+  const latitude = Number(match?.coordinates?.y);
+  const longitude = Number(match?.coordinates?.x);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)
+      || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+    CENSUS_GEOCODE_CACHE.set(cacheKey, null);
+    return null;
+  }
+  const point = {
+    latitude,
+    longitude,
+    matchedAddress: typeof match?.matchedAddress === "string" ? match.matchedAddress.trim() : null
+  };
+  if (CENSUS_GEOCODE_CACHE.size >= 100) {
+    CENSUS_GEOCODE_CACHE.delete(CENSUS_GEOCODE_CACHE.keys().next().value);
+  }
+  CENSUS_GEOCODE_CACHE.set(cacheKey, point);
+  return point;
 }
 
 async function ensureDraft() {
@@ -561,6 +611,18 @@ async function createLead() {
     created_by: user.id,
     source_url: draft.sourceUrl.trim() || null
   };
+
+  if (insertData.address) {
+    try {
+      const point = await geocodeCensusAddress(insertData.address);
+      insertData.latitude = point?.latitude ?? null;
+      insertData.longitude = point?.longitude ?? null;
+    } catch (error) {
+      console.warn("Census geocoding failed; creating lead without map coordinates:", error);
+      insertData.latitude = null;
+      insertData.longitude = null;
+    }
+  }
 
   const leadStatus = normalizeLeadStatus(draft.leadStatus);
 

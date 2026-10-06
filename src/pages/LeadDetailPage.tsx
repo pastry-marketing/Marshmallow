@@ -51,6 +51,7 @@ import { requestQuoteApproval } from "@/lib/quote-approval-requests";
 import StatusBadge from "@/components/leads/StatusBadge";
 import LeadCoverageBadge from "@/components/leads/LeadCoverageBadge";
 import LeadCoveragePreview from "@/components/leads/LeadCoveragePreview";
+import { geocodeLeadAddress } from "@/lib/lead-address-geocoding";
 import CancelledStatusBadge from "@/components/leads/CancelledStatusBadge";
 import NearbyUrgentLeads from "@/components/leads/NearbyUrgentLeads";
 import LeadTagControl from "@/components/leads/LeadTagControl";
@@ -723,6 +724,26 @@ export default function LeadDetailPage() {
       scheduled_time_end = parseTime(form.end_hour, form.end_minute, form.end_ampm);
     }
 
+    let addressLatitude = originalLead?.latitude ?? null;
+    let addressLongitude = originalLead?.longitude ?? null;
+    const addressChanged = isNew
+      || form.address.trim() !== (originalLead?.address ?? "").trim()
+      || originalLead?.latitude == null
+      || originalLead?.longitude == null;
+    if (addressChanged) {
+      addressLatitude = null;
+      addressLongitude = null;
+      if (form.address.trim()) {
+        try {
+          const geocodedAddress = await geocodeLeadAddress(form.address);
+          addressLatitude = geocodedAddress?.latitude ?? null;
+          addressLongitude = geocodedAddress?.longitude ?? null;
+        } catch (geocodeError) {
+          console.warn("Address geocoding failed; saving the lead without coordinates:", geocodeError);
+        }
+      }
+    }
+
     const payload = {
       customer_name: form.customer_name,
       customer_phone: form.customer_phone || "",
@@ -735,6 +756,8 @@ export default function LeadDetailPage() {
       city: form.city || null,
       state: form.state || null,
       zip_code: form.zip_code || null,
+      latitude: addressLatitude,
+      longitude: addressLongitude,
       service_type: form.service_type || null,
       status: savedStatus,
       scheduled_date: form.scheduled_date || null,

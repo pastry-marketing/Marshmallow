@@ -98,6 +98,9 @@ export interface Lead {
   city: string;
   state: string;
   zip_code: string;
+  /** Census-geocoded point used for map placement and technician coverage. */
+  latitude?: number | null;
+  longitude?: number | null;
   scheduled_date: string | null;
   scheduled_time_start: string | null;
   scheduled_time_end: string | null;
