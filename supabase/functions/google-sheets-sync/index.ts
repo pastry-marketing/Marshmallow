@@ -242,10 +242,12 @@ async function postToSheet(webhookUrl: string, payload: JsonObject, timeoutMs = 
 async function verifyMirrorDeployment(webhookUrl: string): Promise<void> {
   let ping: JsonObject;
   try {
-    ping = await postToSheet(webhookUrl, { action: "ping" }, 15_000);
+    // Apps Script web apps can need a slow cold start, so allow well over a
+    // typical ping before treating the deployment as unreachable.
+    ping = await postToSheet(webhookUrl, { action: "ping" }, 30_000);
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
-      throw new Error("Google Apps Script did not answer the health ping within 15s. The Web App may be paused, still deploying, or restricted to your own account.");
+      throw new Error("Google Apps Script did not answer the health ping within 30s. The Web App may be paused, still deploying, or restricted to your own account.");
     }
     throw err;
   }
@@ -530,7 +532,10 @@ Deno.serve(async (req) => {
       if (!lock?.lock_token) return jsonResponse({ success: false, error: "The full reconcile could not acquire its lock." }, 409);
 
       try {
-        await postToSheet(config.webhookUrl, { action: "clear_all" }, 90_000);
+        // Keep the preflight plus this clear inside the function's wall-clock
+        // budget; clearing the workbook is a metadata operation, not a row
+        // rewrite, so it finishes well inside this window.
+        await postToSheet(config.webhookUrl, { action: "clear_all" }, 75_000);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         await admin.rpc("record_sheets_sync_failure", {
