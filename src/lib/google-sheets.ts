@@ -1,21 +1,14 @@
 import { supabase } from "@/integrations/supabase/client";
 import { LEAD_STATUS_CONFIG, CS_TAG_LABELS, type Lead, type LeadStatus, type CsTag } from "@/types";
 import { formatUSPhone } from "@/lib/phone";
-import { recordSyncOutcome, isSyncAction, advanceSyncWatermark } from "@/lib/sheets-sync-health";
 
 export const TARGET_SPREADSHEET_URL =
   "https://docs.google.com/spreadsheets/d/1zGnzG0ovA2ICiUNoOVgVjleVt0CDeN1yCfHEx83ucxs/edit?gid=0#gid=0";
-
-export const GOOGLE_SHEETS_CONFIG_STORAGE_KEY = "marshmallow_google_sheets_sync_config";
 
 export interface GoogleSheetsConfig {
   webhookUrl: string;
   autoSync: boolean;
   spreadsheetUrl: string;
-  lastSyncedAt?: string | null;
-  lastSyncStatus?: "success" | "error" | "idle";
-  lastSyncMessage?: string;
-  lastSyncedCount?: number;
 }
 
 export interface GoogleSheetLeadRow {
@@ -49,72 +42,55 @@ interface NoteSummary {
 
 /**
  * Get Google Sheets Configuration
- * Checks Supabase settings first, falls back to localStorage
+ * Reads the server-side configuration used by both the browser and cron worker.
  */
 export async function getGoogleSheetsConfig(): Promise<GoogleSheetsConfig> {
   const defaultConfig: GoogleSheetsConfig = {
-    webhookUrl: "https://script.google.com/macros/s/AKfycbzRAUa3Ea5mCEP_cXjf1IFuTmK4jglnIHO_sUz8zR1RIpFL-DulMMtABu6AAuMUbS1y/exec",
-    autoSync: true,
+    webhookUrl: "",
+    autoSync: false,
     spreadsheetUrl: TARGET_SPREADSHEET_URL,
-    lastSyncedAt: null,
-    lastSyncStatus: "idle",
   };
 
-  try {
-    const { data } = await supabase
-      .from("quo_ai_settings" as never)
-      .select("value")
-      .eq("key", "google_sheets_sync_config")
-      .maybeSingle();
+  const { data, error } = await supabase
+    .from("quo_ai_settings" as never)
+    .select("value")
+    .eq("key", "google_sheets_sync_config")
+    .maybeSingle();
+  if (error) throw new Error(`Could not load server-side Google Sheets settings: ${error.message}`);
 
-    const dbConfig = (data as { value?: Partial<GoogleSheetsConfig> } | null)?.value;
-    if (dbConfig && dbConfig.webhookUrl !== undefined) {
-      const merged = { ...defaultConfig, ...dbConfig };
-      try {
-        localStorage.setItem(GOOGLE_SHEETS_CONFIG_STORAGE_KEY, JSON.stringify(merged));
-      } catch {
-        // ignore storage errors
-      }
-      return merged;
-    }
-  } catch (err) {
-    console.warn("Could not load Google Sheets config from DB, checking local storage:", err);
-  }
-
-  try {
-    const saved = localStorage.getItem(GOOGLE_SHEETS_CONFIG_STORAGE_KEY);
-    if (saved) {
-      return { ...defaultConfig, ...JSON.parse(saved) };
-    }
-  } catch {
-    // ignore
-  }
-
-  return defaultConfig;
+  const dbConfig = (data as { value?: Partial<GoogleSheetsConfig> } | null)?.value;
+  return dbConfig ? { ...defaultConfig, ...dbConfig } : defaultConfig;
 }
 
 /**
  * Save Google Sheets Configuration
  */
 export async function saveGoogleSheetsConfig(config: GoogleSheetsConfig): Promise<void> {
-  try {
-    localStorage.setItem(GOOGLE_SHEETS_CONFIG_STORAGE_KEY, JSON.stringify(config));
-  } catch {
-    // ignore
+  if (config.autoSync && !isGoogleAppsScriptUrl(config.webhookUrl)) {
+    throw new Error("Enter a valid Google Apps Script Web App URL before enabling automatic sync.");
   }
+  if (config.webhookUrl && !isGoogleAppsScriptUrl(config.webhookUrl)) {
+    throw new Error("The webhook must be an HTTPS Google Apps Script Web App URL ending in /exec.");
+  }
+  const { error } = await supabase.from("quo_ai_settings" as never).upsert(
+    {
+      key: "google_sheets_sync_config",
+      value: config,
+      description: "Google Sheets transactional outbox configuration",
+      updated_at: new Date().toISOString(),
+    } as never,
+    { onConflict: "key" }
+  );
+  if (error) throw new Error(`Could not save server-side Google Sheets settings: ${error.message}`);
+}
 
+function isGoogleAppsScriptUrl(value: string): boolean {
   try {
-    await supabase.from("quo_ai_settings" as never).upsert(
-      {
-        key: "google_sheets_sync_config",
-        value: config,
-        description: "Google Sheets Live Webhook Sync configuration",
-        updated_at: new Date().toISOString(),
-      } as never,
-      { onConflict: "key" }
-    );
-  } catch (err) {
-    console.warn("Could not save Google Sheets config to DB:", err);
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname === "script.google.com"
+      && url.pathname.includes("/macros/s/") && url.pathname.endsWith("/exec");
+  } catch {
+    return false;
   }
 }
 
@@ -232,33 +208,25 @@ export async function fetchAllLeadsWithDetails(): Promise<GoogleSheetLeadRow[]> 
   const typedLeads = allLeads;
   const leadIds = typedLeads.map((l) => l.id);
 
-  // 2. Fetch all profiles for user name resolution in notes
-  const { data: profilesData } = await supabase
-    .from("profiles_public" as never)
-    .select("id, full_name");
-  const profileMap: Record<string, string> = {};
-  if (profilesData) {
-    (profilesData as { id: string; full_name: string | null }[]).forEach((p) => {
-      if (p.full_name) profileMap[p.id] = p.full_name;
-    });
-  }
-
-  // 3. Batch fetch lead_notes in chunks of 100
+  // 2. Batch fetch lead_notes in chunks of 100. A child-table query failure
+  //    must fail reconciliation rather than silently claiming notes were backed up.
   const noteSummaryByLead: Record<string, NoteSummary> = {};
   for (let i = 0; i < leadIds.length; i += 100) {
     const chunk = leadIds.slice(i, i + 100);
-    const { data: notes } = await supabase
+    const { data: notes, error: notesError } = await supabase
       .from("lead_notes")
       .select("lead_id, note_type, content, user_id, user_name, created_at")
       .in("lead_id", chunk)
       .order("created_at", { ascending: true });
+
+    if (notesError) throw new Error(`Failed to load lead notes: ${notesError.message}`);
 
     if (notes) {
       notes.forEach((note) => {
         if (!noteSummaryByLead[note.lead_id]) {
           noteSummaryByLead[note.lead_id] = { cs: "", processor: "", opr: "" };
         }
-        const author = (note.user_id ? profileMap[note.user_id] : null) || note.user_name || "Unknown";
+        const author = note.user_name || note.user_id || "Unknown";
         const time = note.created_at ? new Date(note.created_at).toLocaleString() : "";
         const line = time ? `[${time}] ${author}: ${note.content}` : `${author}: ${note.content}`;
 
@@ -279,15 +247,18 @@ export async function fetchAllLeadsWithDetails(): Promise<GoogleSheetLeadRow[]> 
     }
   }
 
-  // 4. Batch fetch photos in chunks of 100
+  // 3. Batch fetch photos in chunks of 100. Never report a successful backup
+  //    when the Pictures column could not be read.
   const photoUrlsByLead: Record<string, string[]> = {};
   for (let i = 0; i < leadIds.length; i += 100) {
     const chunk = leadIds.slice(i, i + 100);
-    const { data: photos } = await supabase
+    const { data: photos, error: photosError } = await supabase
       .from("lead_photos")
       .select("lead_id, photo_url")
       .in("lead_id", chunk)
       .order("created_at", { ascending: true });
+
+    if (photosError) throw new Error(`Failed to load lead photos: ${photosError.message}`);
 
     if (photos) {
       photos.forEach((p) => {
@@ -301,7 +272,7 @@ export async function fetchAllLeadsWithDetails(): Promise<GoogleSheetLeadRow[]> 
     }
   }
 
-  // 5. Combine everything
+  // 4. Combine everything
   return typedLeads.map((lead) => {
     const notes = noteSummaryByLead[lead.id];
     const photos = photoUrlsByLead[lead.id];
@@ -310,323 +281,50 @@ export async function fetchAllLeadsWithDetails(): Promise<GoogleSheetLeadRow[]> 
 }
 
 /**
- * Dispatch payload to Google Sheets Webhook
- * First tries Supabase Edge Function to bypass CORS.
- * If edge function is not deployed, sends direct fetch with mode: 'no-cors' fallback.
- *
- * Every dispatch goes through here, so health recording wraps this function
- * rather than each of its five call sites.
+ * Invoke a verified Apps Script action through the authenticated Edge Function.
+ * No browser fetch/no-cors fallback is allowed because an opaque response
+ * cannot confirm the write.
  */
-async function dispatchToWebhookInner(
+async function invokeAppsScript(
   payload: Record<string, unknown>,
   explicitWebhookUrl?: string
 ): Promise<{ success: boolean; message?: string; [key: string]: unknown }> {
-  const config = await getGoogleSheetsConfig();
-  const webhookUrl = explicitWebhookUrl || config.webhookUrl;
-
-  if (!webhookUrl) {
-    throw new Error("Google Sheets Webhook URL is not configured. Please paste your Web App URL in Settings > Google Sheets.");
+  const body = { ...payload };
+  if (explicitWebhookUrl) body.webhookUrl = explicitWebhookUrl;
+  const { data, error } = await supabase.functions.invoke("google-sheets-sync", { body });
+  if (error) throw new Error(`Google Sheets Edge Function failed: ${error.message}`);
+  if (!data || data.success !== true) {
+    throw new Error(String(data?.error ?? "Google Sheets did not confirm the write."));
   }
-
-  // 1. Try invoking Edge Function
-  try {
-    const { data: edgeData, error: edgeError } = await supabase.functions.invoke("google-sheets-sync", {
-      body: {
-        ...payload,
-        webhookUrl,
-      },
-    });
-
-    if (!edgeError && edgeData && edgeData.success !== false) {
-      return edgeData;
-    }
-
-    if (edgeError && !edgeError.message?.includes("FunctionsFetchError") && !edgeError.message?.includes("404")) {
-      console.warn("Edge function responded with error, attempting direct webhook dispatch:", edgeError);
-    }
-  } catch (edgeErr) {
-    console.warn("Edge function call failed, falling back to direct fetch:", edgeErr);
-  }
-
-  // 2. Direct fetch fallback
-  try {
-    const res = await fetch(webhookUrl, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" }, // Google Apps Script handles text/plain without preflight CORS
-      body: JSON.stringify(payload),
-    });
-
-    const text = await res.text();
-    try {
-      const parsed = JSON.parse(text);
-      return parsed;
-    } catch {
-      return { success: res.ok, message: text.substring(0, 200) };
-    }
-  } catch (directErr) {
-    // If browser CORS blocked reading response, Apps Script may still have received the request
-    console.warn("Direct fetch had CORS restriction, testing no-cors mode:", directErr);
-    try {
-      await fetch(webhookUrl, {
-        method: "POST",
-        mode: "no-cors",
-        headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify(payload),
-      });
-      return { success: true, message: "Dispatched to Google Sheet (opaque response)" };
-    } catch (finalErr) {
-      throw new Error(`Failed to contact Google Sheets Webhook: ${finalErr instanceof Error ? finalErr.message : String(finalErr)}`);
-    }
-  }
-}
-
-/** A dispatch is only a real lead if it carries a lead row id. */
-const LEAD_ID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/**
- * Pulls the database lead id out of a dispatch payload.
- *
- * Deletes carry db_id as the lead and lead_id as the job id, so db_id is
- * preferred. A delete that only has a job id must not be queued, which is why
- * the value is shape-checked rather than cast: a non-uuid would fail the
- * insert and lose the failure report entirely.
- */
-function leadIdFromPayload(payload: Record<string, unknown>): string | null {
-  for (const key of ["db_id", "lead_id"]) {
-    const value = payload[key];
-    if (typeof value === "string" && LEAD_ID_PATTERN.test(value)) return value;
-  }
-  return null;
+  return data;
 }
 
 /**
- * Dispatch and report the outcome.
- *
- * Previously the response from Apps Script was returned to callers that threw
- * the value away, so a script answering {success:false} looked identical to a
- * successful write. Both that soft failure and a thrown error are now recorded.
- *
- * Recording is fire-and-forget: a sync must not fail because the bookkeeping
- * call did, and vice versa.
+ * Request a server-side full rebuild. The Edge Function pauses outbox delivery,
+ * clears the workbook, replaces the queue with a fresh lead snapshot, then
+ * releases the worker. The browser only starts the job; it does not own it.
  */
-async function dispatchToWebhook(
-  payload: Record<string, unknown>,
-  explicitWebhookUrl?: string
-): Promise<{ success: boolean; message?: string; [key: string]: unknown }> {
-  const leadId = leadIdFromPayload(payload);
-  const action = typeof payload.action === "string" ? payload.action : "sync";
-
-  // A connectivity test or a sheet reset is not a sync. Recording either would
-  // report the pipeline healthy without a single lead being written.
-  if (!isSyncAction(action)) {
-    return dispatchToWebhookInner(payload, explicitWebhookUrl);
-  }
-
-  try {
-    const result = await dispatchToWebhookInner(payload, explicitWebhookUrl);
-    const ok = result?.success !== false;
-    void recordSyncOutcome(
-      ok,
-      leadId,
-      action,
-      ok ? undefined : String(result?.message ?? "Google Sheets reported a failure"),
-    );
-    return result;
-  } catch (err) {
-    void recordSyncOutcome(false, leadId, action, err instanceof Error ? err.message : String(err));
-    throw err;
-  }
-}
-
-/**
- * Bulk Sync all leads to Google Sheets in batches of 200 to avoid
- * Google Apps Script execution-time and payload-size limits.
- */
-export async function syncAllLeadsToGoogleSheets(
-  onProgress?: (synced: number, total: number) => void
-): Promise<{
+export async function syncAllLeadsToGoogleSheets(): Promise<{
   success: boolean;
   leadsCount: number;
   message?: string;
 }> {
-  const rows = await fetchAllLeadsWithDetails();
   const config = await getGoogleSheetsConfig();
-  const BATCH_SIZE = 200;
-  const total = rows.length;
-  let synced = 0;
-
-  // Send a "clear_all" command first so the sheet starts fresh
-  try {
-    await dispatchToWebhook({ action: "clear_all" });
-  } catch (err) {
-    console.warn("clear_all failed, proceeding with batched upsert anyway:", err);
+  if (!config.webhookUrl) throw new Error("Configure the Apps Script Web App URL before reconciling.");
+  if (!config.autoSync) throw new Error("Enable Automatic Server Sync before rebuilding the Sheet.");
+  const { data, error } = await supabase.functions.invoke("google-sheets-sync", {
+    body: { action: "reconcile_all" },
+  });
+  if (error) throw new Error(`Could not start full reconciliation: ${error.message}`);
+  if (!data || data.success !== true) {
+    throw new Error(String(data?.error ?? "The server did not confirm the reconciliation request."));
   }
-
-  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
-    const batch = rows.slice(i, i + BATCH_SIZE);
-    const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
-    const totalBatches = Math.ceil(total / BATCH_SIZE);
-
-    try {
-      await dispatchToWebhook({
-        action: "sync_batch",
-        leads: batch,
-        batchNumber,
-        totalBatches,
-        isLastBatch: i + BATCH_SIZE >= rows.length,
-      });
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      const updatedConfig: GoogleSheetsConfig = {
-        ...config,
-        lastSyncStatus: "error",
-        lastSyncMessage: `Failed at batch ${batchNumber}/${totalBatches}: ${errorMsg}`,
-      };
-      await saveGoogleSheetsConfig(updatedConfig);
-      throw new Error(`Sync failed at batch ${batchNumber}/${totalBatches}: ${errorMsg}`);
-    }
-
-    synced += batch.length;
-    onProgress?.(synced, total);
-  }
-
-  const updatedConfig: GoogleSheetsConfig = {
-    ...config,
-    lastSyncedAt: new Date().toISOString(),
-    lastSyncStatus: "success",
-    lastSyncMessage: `Successfully synced ${total} leads across all status and tag tabs.`,
-    lastSyncedCount: total,
-  };
-  await saveGoogleSheetsConfig(updatedConfig);
-
-  // Only now is the sheet known to be complete, so only now may the watermark
-  // move. A full sync covers every lead that existed when it started, which is
-  // what makes this safe: single-lead upserts deliberately do not advance it,
-  // because one lead syncing says nothing about the other three thousand.
-  //
-  // If this call fails the watermark stays put and the panel keeps reporting
-  // leads behind, which is the correct outcome - the sheet was written but we
-  // cannot prove it is complete, and claiming otherwise would silence the
-  // alarm on a backup that is actually incomplete.
-  await advanceSyncWatermark().catch(() => undefined);
 
   return {
     success: true,
-    leadsCount: total,
-    message: updatedConfig.lastSyncMessage,
+    leadsCount: Number(data.queued ?? 0),
+    message: String(data.message ?? `Full reconcile queued for ${Number(data.queued ?? 0)} leads.`),
   };
-}
-
-/**
- * Upsert a single lead into Google Sheets
- */
-export async function syncLeadUpsertToGoogleSheets(
-  lead: Lead,
-  previousStatus?: string,
-  previousTag?: string
-): Promise<void> {
-  const config = await getGoogleSheetsConfig();
-  if (!config.autoSync || !config.webhookUrl) {
-    return;
-  }
-
-  // Load photos for this single lead
-  let photoUrls: string[] = [];
-  try {
-    const { data: photos } = await supabase
-      .from("lead_photos")
-      .select("photo_url")
-      .eq("lead_id", lead.id)
-      .order("created_at", { ascending: true });
-    if (photos) {
-      photoUrls = photos.map((p) => supabase.storage.from("lead-photos").getPublicUrl(p.photo_url).data.publicUrl || p.photo_url);
-    }
-  } catch {
-    // ignore
-  }
-
-  // Load latest notes for this lead
-  const noteSummary: NoteSummary = { cs: "", processor: "", opr: "" };
-  try {
-    const { data: notes } = await supabase
-      .from("lead_notes")
-      .select("note_type, content, user_name, created_at")
-      .eq("lead_id", lead.id)
-      .order("created_at", { ascending: true });
-
-    if (notes) {
-      notes.forEach((note) => {
-        const time = note.created_at ? new Date(note.created_at).toLocaleString() : "";
-        const line = time ? `[${time}] ${note.user_name || "User"}: ${note.content}` : `${note.user_name || "User"}: ${note.content}`;
-        if (note.note_type === "cs") {
-          noteSummary.cs = noteSummary.cs ? `${noteSummary.cs}\n${line}` : line;
-        } else if (note.note_type === "processor") {
-          noteSummary.processor = noteSummary.processor ? `${noteSummary.processor}\n${line}` : line;
-        } else if (note.note_type === "opr" || note.note_type === "general") {
-          noteSummary.opr = noteSummary.opr ? `${noteSummary.opr}\n${line}` : line;
-        }
-      });
-    }
-  } catch {
-    // ignore
-  }
-
-  const formattedRow = formatLeadForGoogleSheet(lead, noteSummary, photoUrls);
-
-  const prevStatusLabel = previousStatus
-    ? LEAD_STATUS_CONFIG[previousStatus as LeadStatus]?.label || previousStatus
-    : undefined;
-
-  const prevTagLabel = previousTag
-    ? CS_TAG_LABELS[previousTag as CsTag] || previousTag
-    : undefined;
-
-  await dispatchToWebhook({
-    action: "upsert",
-    lead: formattedRow,
-    lead_id: lead.id,
-    job_id: lead.job_id || undefined,
-    previousStatus: prevStatusLabel,
-    previousTag: prevTagLabel,
-  });
-}
-
-/**
- * Delete a lead from Google Sheets (removes row and shifts rows below up)
- */
-export async function syncLeadDeleteToGoogleSheets(
-  leadId: string,
-  jobId?: string
-): Promise<void> {
-  const config = await getGoogleSheetsConfig();
-  if (!config.autoSync || !config.webhookUrl) {
-    return;
-  }
-
-  let resolvedJobId = jobId;
-  // If jobId is not provided, try to fetch it from Supabase in case lead hasn't been deleted yet
-  if (!resolvedJobId && leadId) {
-    try {
-      const { data } = await supabase
-        .from("leads")
-        .select("job_id")
-        .eq("id", leadId)
-        .maybeSingle();
-      if (data?.job_id) {
-        resolvedJobId = data.job_id;
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  await dispatchToWebhook({
-    action: "delete",
-    lead_id: resolvedJobId || leadId,
-    job_id: resolvedJobId || undefined,
-    db_id: leadId,
-  });
 }
 
 /**
@@ -637,16 +335,23 @@ export async function testGoogleSheetsWebhook(webhookUrl: string): Promise<{
   message: string;
   spreadsheetName?: string;
   sheets?: string[];
+  version?: string;
 }> {
   if (!webhookUrl || !webhookUrl.startsWith("http")) {
     throw new Error("Please provide a valid Webhook URL starting with https://");
   }
 
-  const res = await dispatchToWebhook({ action: "ping" }, webhookUrl);
+  const res = await invokeAppsScript({ action: "ping" }, webhookUrl);
+  if (res.success !== true) throw new Error(String(res.error || res.message || "Google Apps Script did not confirm the connection."));
+  const capabilities = Array.isArray(res.capabilities) ? res.capabilities : [];
+  if (!capabilities.includes("sync_mirror")) {
+    throw new Error("This Apps Script deployment is outdated. Copy the latest script from Settings and deploy a new Web App version.");
+  }
   return {
     success: true,
     message: String(res.message || "Connected successfully to Google Sheets!"),
     spreadsheetName: typeof res.spreadsheetName === "string" ? res.spreadsheetName : undefined,
     sheets: Array.isArray(res.sheets) ? res.sheets : undefined,
+    version: typeof res.version === "string" ? res.version : undefined,
   };
 }

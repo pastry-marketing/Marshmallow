@@ -19,9 +19,9 @@
 
 <br/>
 
-<img src="https://img.shields.io/badge/migrations-168-2563EB?style=for-the-badge&logo=supabase&logoColor=white" alt="156 migrations"/>
-<img src="https://img.shields.io/badge/unit_tests-27_files%20%C2%B7%20306_passing-16A34A?style=for-the-badge&logo=vitest&logoColor=white" alt="306 tests passing"/>
-<img src="https://img.shields.io/badge/db_harnesses-7_SQL-CFA874?style=for-the-badge&logo=postgresql&logoColor=white" alt="SQL harnesses"/>
+<img src="https://img.shields.io/badge/migrations-176-2563EB?style=for-the-badge&logo=supabase&logoColor=white" alt="176 migrations"/>
+<img src="https://img.shields.io/badge/unit_tests-27_files%20%C2%B7%20291_passing-16A34A?style=for-the-badge&logo=vitest&logoColor=white" alt="291 tests passing"/>
+<img src="https://img.shields.io/badge/db_harnesses-9_SQL-CFA874?style=for-the-badge&logo=postgresql&logoColor=white" alt="SQL harnesses"/>
 <img src="https://img.shields.io/badge/lead_statuses-25-9333EA?style=for-the-badge&logo=postgresql&logoColor=white" alt="25 lead statuses"/>
 
 </div>
@@ -236,7 +236,7 @@ against live data before and after the change.
 | `quo-admin-controls` | Admin-only pause/resume ingestion and deletion |
 | `admin-users` | Admin-only user API — create, set password, delete (cascades ~18 tables), TOTP |
 | `generate-nearby-areas` | Geocodes an address and returns top nearby populated places |
-| `google-sheets-sync` | Server-side Sheets push helper |
+| `google-sheets-sync` | Admin-protected Sheets proxy, transactional outbox worker, and full-reconcile controller |
 | `sync-us-places` | Syncs Census places and ACS population into `us_places` |
 | `check-urgent-lead` | Compares a lead against the customer's conversation before it goes urgent (`gpt-4o-mini`) |
 
@@ -386,10 +386,10 @@ npm run sb:link
 npm test
 ```
 
-**27 test files, 306 tests passing.** Vitest with jsdom, tests co-located beside source
+**27 test files, 291 tests passing.** Vitest with jsdom, tests co-located beside source
 as `*.test.ts`. Supabase is mocked rather than hitting a test database.
 
-Seven hand-run SQL harnesses in `supabase/tests/` cover what unit tests cannot — RLS and
+Nine hand-run SQL harnesses in `supabase/tests/` cover what unit tests cannot — RLS and
 role gates against real data:
 
 | Harness | Covers |
@@ -400,7 +400,9 @@ role gates against real data:
 | `50_tech_performance.sql` | Technician performance RPC and its admin gate |
 | `60_optimized_areas.sql` | Optimized areas, area performance, location parsing |
 | `70_google_sheets_sync_health.sql` | Sheets sync health, error pruning, lag watchdog |
+| `75_google_sheets_transactional_outbox.sql` | Transactional capture, retries, generation-safe acknowledgements, full rebuild locking |
 | `80_urgent_review_gate.sql` | Urgent gate behaviour: blocked and admitted transitions, self-approval, schedule preservation |
+| `90_lead_coverage_us_places.sql` | Technician coverage distance rules and trigger recalculation |
 
 These are **not** wired into any runner — run them in the Supabase SQL editor and read
 the `PASS`/`FAIL` rows.
@@ -497,8 +499,8 @@ src/
 
 supabase/
 ├── functions/         11 Deno Edge Functions (plus _shared/)
-├── migrations/        168 SQL migrations
-└── tests/             7 hand-run RLS harnesses
+├── migrations/        176 SQL migrations
+└── tests/             9 hand-run RLS harnesses
 ```
 
 ---

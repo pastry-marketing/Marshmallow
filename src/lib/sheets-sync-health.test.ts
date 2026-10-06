@@ -1,23 +1,16 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 vi.mock("@/integrations/supabase/client", () => ({
-  supabase: { rpc: vi.fn(), from: vi.fn() },
+  supabase: { rpc: vi.fn(), from: vi.fn(), functions: { invoke: vi.fn() } },
 }));
 
 import { supabase } from "@/integrations/supabase/client";
 import {
-  advanceSyncWatermark,
-
-  claimSyncQueue,
   describeSyncStatus,
   fetchSyncHealth,
   formatSyncAge,
-  isSyncAction,
   pruneSyncErrorLog,
-  raiseSyncStaleAlert,
-  recordSyncFailure,
-  recordSyncOutcome,
-  recordSyncSuccess,
+  retrySyncQueueNow,
 } from "./sheets-sync-health";
 
 const rpc = () => vi.mocked(supabase.rpc);
@@ -36,6 +29,9 @@ function healthRow(over: Record<string, unknown> = {}) {
     consecutive_failures: 0,
     synced_total: 12,
     queue_depth: 0,
+    queue_oldest_at: null,
+    queue_oldest_seconds: null,
+    failed_jobs: 0,
     seconds_since_success: 30,
     recent_errors: [],
     ...over,
@@ -70,6 +66,16 @@ describe("fetchSyncHealth", () => {
     expect(h.synced_total).toBe(12);
     expect(h.queue_depth).toBe(0);
     expect(h.seconds_since_success).toBe(30);
+  });
+
+  it("reads the single-row array returned by a Postgres RETURNS TABLE RPC", async () => {
+    rpc().mockResolvedValue({ data: [healthRow({ status: "degraded", queue_depth: 4111, leads_behind: 4125 })], error: null } as never);
+
+    const h = await fetchSyncHealth();
+
+    expect(h.status).toBe("degraded");
+    expect(h.queue_depth).toBe(4111);
+    expect(h.leads_behind).toBe(4125);
   });
 
   it("normalises a null payload into idle rather than throwing", async () => {
@@ -134,122 +140,26 @@ describe("fetchSyncHealth", () => {
   });
 });
 
-describe("recordSyncSuccess", () => {
-  it("sends a null lead id when the dispatch was not lead-specific", async () => {
-    rpc().mockResolvedValue({ data: null, error: null } as never);
-
-    await recordSyncSuccess();
-
-    expect(rpc()).toHaveBeenCalledWith("record_sheets_sync_success", { p_lead_id: null });
-  });
-
-  it("passes the lead so a queued retry is cleared", async () => {
-    rpc().mockResolvedValue({ data: null, error: null } as never);
-
-    await recordSyncSuccess("lead-1");
-
-    expect(rpc()).toHaveBeenCalledWith("record_sheets_sync_success", { p_lead_id: "lead-1" });
-  });
-});
-
-describe("recordSyncFailure", () => {
-  it("sends the lead id so the database can queue it for retry", async () => {
-    rpc().mockResolvedValue({ data: null, error: null } as never);
-
-    await recordSyncFailure({ message: "quota exceeded", leadId: "lead-1", action: "upsert" });
-
-    expect(rpc()).toHaveBeenCalledWith("record_sheets_sync_failure", {
-      p_message: "quota exceeded",
-      p_lead_id: "lead-1",
-      p_action: "upsert",
-      p_detail: null,
-    });
-  });
-
-  it("defaults the action so a caller cannot accidentally omit it", async () => {
-    rpc().mockResolvedValue({ data: null, error: null } as never);
-
-    await recordSyncFailure({ message: "boom" });
-
-    expect(rpc()).toHaveBeenCalledWith("record_sheets_sync_failure", expect.objectContaining({
-      p_action: "sync",
-    }));
-  });
-
-  it("never rejects, because it runs while already handling a failure", async () => {
-    rpc().mockResolvedValue({ data: null, error: new Error("db down") } as never);
-
-    await expect(recordSyncFailure({ message: "boom" })).resolves.toBeUndefined();
-  });
-
-  it("never rejects when rpc itself throws", async () => {
-    rpc().mockRejectedValue(new Error("network"));
-
-    await expect(recordSyncFailure({ message: "boom" })).resolves.toBeUndefined();
-  });
-});
-
-describe("recordSyncOutcome", () => {
-  it("records success", async () => {
-    rpc().mockResolvedValue({ data: null, error: null } as never);
-
-    await recordSyncOutcome(true, "lead-1", "upsert");
-
-    expect(rpc()).toHaveBeenCalledWith("record_sheets_sync_success", { p_lead_id: "lead-1" });
-  });
-
-  it("records failure with the supplied message", async () => {
-    rpc().mockResolvedValue({ data: null, error: null } as never);
-
-    await recordSyncOutcome(false, "lead-1", "upsert", "Apps Script said no");
-
-    expect(rpc()).toHaveBeenCalledWith("record_sheets_sync_failure", expect.objectContaining({
-      p_message: "Apps Script said no",
-      p_lead_id: "lead-1",
-    }));
-  });
-
-  it("supplies a message rather than sending an empty one", async () => {
-    rpc().mockResolvedValue({ data: null, error: null } as never);
-
-    await recordSyncOutcome(false, null, "sync");
-
-    expect(rpc()).toHaveBeenCalledWith("record_sheets_sync_failure", expect.objectContaining({
-      p_message: expect.any(String),
-    }));
-  });
-
-  it("does not reject when the success heartbeat write fails", async () => {
-    rpc().mockResolvedValue({ data: null, error: new Error("db down") } as never);
-
-    await expect(recordSyncOutcome(true, "lead-1", "upsert")).resolves.toBeUndefined();
-  });
-
-  it("does not reject when the failure write fails either", async () => {
-    rpc().mockRejectedValue(new Error("network"));
-
-    await expect(recordSyncOutcome(false, "lead-1", "upsert", "x")).resolves.toBeUndefined();
-  });
-});
-
-describe("claimSyncQueue", () => {
-  it("returns the claimed rows", async () => {
-    rpc().mockResolvedValue({
-      data: [{ lead_id: "l1", op: "upsert", job_id: null, attempts: 1 }],
+describe("retrySyncQueueNow", () => {
+  it("invokes the worker so retry means dispatch, not just claim", async () => {
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: { success: true, claimed: 4, processed: 4, acknowledged: 4, failed: 0, queueDepth: 0 },
       error: null,
     } as never);
 
-    const rows = await claimSyncQueue(10);
-
-    expect(rpc()).toHaveBeenCalledWith("claim_sheets_sync_queue", { p_limit: 10 });
-    expect(rows).toHaveLength(1);
-    expect(rows[0].lead_id).toBe("l1");
+    await expect(retrySyncQueueNow(40)).resolves.toEqual({
+      claimed: 4, processed: 4, acknowledged: 4, failed: 0, queueDepth: 0,
+    });
+    expect(supabase.functions.invoke).toHaveBeenCalledWith("google-sheets-sync", {
+      body: { action: "process_queue", force: true, limit: 40 },
+    });
   });
 
-  it("returns an empty list when there is nothing due", async () => {
-    rpc().mockResolvedValue({ data: null, error: null } as never);
-
-    await expect(claimSyncQueue()).resolves.toEqual([]);
+  it("rejects if the server worker does not confirm success", async () => {
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: { success: false, error: "Apps Script timeout" }, error: null,
+    } as never);
+    await expect(retrySyncQueueNow()).rejects.toThrow("Apps Script timeout");
   });
 });
 
@@ -259,81 +169,6 @@ describe("pruneSyncErrorLog", () => {
 
     await expect(pruneSyncErrorLog(5)).resolves.toBe(12);
     expect(rpc()).toHaveBeenCalledWith("prune_sheets_sync_errors", { p_keep: 5 });
-  });
-});
-
-describe("raiseSyncStaleAlert", () => {
-  it("returns how many admins were alerted", async () => {
-    rpc().mockResolvedValue({ data: 2, error: null } as never);
-
-    await expect(raiseSyncStaleAlert()).resolves.toBe(2);
-    expect(rpc()).toHaveBeenCalledWith("raise_sheets_sync_stale_alert", {
-      p_stale_after_seconds: 900,
-      p_throttle_minutes: 15,
-    });
-  });
-});
-
-describe("isSyncAction", () => {
-  it("counts the actions that actually write lead data", () => {
-    expect(isSyncAction("upsert")).toBe(true);
-    expect(isSyncAction("delete")).toBe(true);
-    expect(isSyncAction("sync_batch")).toBe(true);
-    expect(isSyncAction("sync_all")).toBe(true);
-  });
-
-  it("does not count the connectivity test as a sync", () => {
-    // Otherwise Test Connection would mark the pipeline healthy and bump
-    // "leads synced" without writing a single lead.
-    expect(isSyncAction("ping")).toBe(false);
-  });
-
-  it("does not count a sheet reset as a sync", () => {
-    expect(isSyncAction("clear_all")).toBe(false);
-  });
-
-  it("does not count an unknown action as a sync", () => {
-    expect(isSyncAction("something_new")).toBe(false);
-    expect(isSyncAction("")).toBe(false);
-  });
-
-  it("is case sensitive, so a renamed action cannot silently start reporting", () => {
-    expect(isSyncAction("UPSERT")).toBe(false);
-  });
-});
-
-describe("advanceSyncWatermark", () => {
-  it("calls the RPC that marks the sheet complete", async () => {
-    rpc().mockResolvedValue({ data: "2026-11-02T10:00:00Z", error: null } as never);
-
-    const mark = await advanceSyncWatermark();
-
-    // This one takes no arguments, so the client calls rpc(name) with a
-    // single argument rather than a name plus an empty parameter object.
-    expect(rpc()).toHaveBeenCalledTimes(1);
-    expect(rpc().mock.calls[0][0]).toBe("advance_sheets_sync_watermark");
-    expect(mark).toBe("2026-11-02T10:00:00Z");
-  });
-
-  it("returns null instead of throwing when the RPC fails", async () => {
-    // The sheet is already written by the time this runs, so failing to record
-    // that must not turn a completed sync into an error. The watermark simply
-    // stays put and the panel keeps reporting leads behind.
-    rpc().mockResolvedValue({ data: null, error: new Error("db down") } as never);
-
-    await expect(advanceSyncWatermark()).resolves.toBeNull();
-  });
-
-  it("returns null when rpc itself throws", async () => {
-    rpc().mockRejectedValue(new Error("network"));
-
-    await expect(advanceSyncWatermark()).resolves.toBeNull();
-  });
-
-  it("normalises a null timestamp", async () => {
-    rpc().mockResolvedValue({ data: null, error: null } as never);
-
-    await expect(advanceSyncWatermark()).resolves.toBeNull();
   });
 });
 
@@ -393,6 +228,17 @@ describe("backup currency fields", () => {
     expect(h.leads_behind).toBe(12);
     expect(h.behind_seconds).toBe(600);
   });
+
+  it("reports the age of the oldest queued job", async () => {
+    rpc().mockResolvedValue({
+      data: healthRow({ queue_depth: "4", queue_oldest_seconds: "1200", queue_oldest_at: "2026-11-02T09:00:00Z", failed_jobs: "2" }),
+      error: null,
+    } as never);
+    const h = await fetchSyncHealth();
+    expect(h.queue_oldest_seconds).toBe(1200);
+    expect(h.queue_oldest_at).toBe("2026-11-02T09:00:00Z");
+    expect(h.failed_jobs).toBe(2);
+  });
 });
 
 describe("formatSyncAge", () => {
@@ -419,10 +265,10 @@ describe("formatSyncAge", () => {
 
 describe("describeSyncStatus", () => {
   it("gives every status a distinct label", () => {
-    const labels = (["healthy", "degraded", "down", "idle"] as const).map(
+    const labels = (["healthy", "syncing", "degraded", "down", "idle"] as const).map(
       (s) => describeSyncStatus(s).label,
     );
-    expect(new Set(labels).size).toBe(4);
+    expect(new Set(labels).size).toBe(5);
   });
 
   it("uses the destructive token only for down", () => {
@@ -433,6 +279,7 @@ describe("describeSyncStatus", () => {
 
   it("keeps accent text readable in both themes", () => {
     expect(describeSyncStatus("healthy").tone).toContain("dark:");
+    expect(describeSyncStatus("syncing").tone).toContain("dark:");
     expect(describeSyncStatus("degraded").tone).toContain("dark:");
   });
 });
