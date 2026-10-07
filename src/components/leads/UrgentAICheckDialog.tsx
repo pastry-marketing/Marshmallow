@@ -9,32 +9,25 @@ import {
   applyUrgentAcknowledgement,
   applyUrgentVerification,
   applyUrgentFormFixes,
-  type UrgentIssue,
   type UrgentFix,
-  type UrgentFlag,
   type UrgentVerificationResult,
 } from "@/lib/urgent-verification";
 import { toast } from "sonner";
 
 // =============================================================================
-// The one-time check that runs before a lead becomes urgent.
+// The one-time form check that runs before a lead becomes urgent.
 //
-// Three shapes, and the copy is written so nobody mistakes one for another:
+// Form-only phase: this checks the lead's own form fields for formatting issues
+// (spelling, capitalization, city/state, service type). It does NOT read the
+// customer chat. For each suggested correction the user must either Apply it or
+// Dismiss it; the lead cannot be marked urgent until every suggestion is
+// resolved. Missing required details are shown as flags for staff to fill in.
 //
-//   clean          nothing disagrees. Straight through, no second click, because
-//                  a gate that makes people confirm good news gets disabled.
-//
-//   issues         something disagrees. Each one carries the customer's own words
-//                  so it can be checked in two seconds, and the lead goes to a
-//                  CS Admin rather than anywhere near urgent.
-//
-//   unavailable    nothing could be compared. This is not a finding and not a
-//                  pass. It needs a deliberate yes, because proceeding here is
-//                  proceeding unchecked.
-//
-// The check runs once per attempt. Re-running is allowed only after changing
-// something worth re-checking, which is the point of letting the CS member edit
-// first.
+//   clean          nothing to correct. Straight through.
+//   suggestions    one or more fixes/flags. Resolve each fix, then proceed.
+//   unavailable    the AI check could not run (outage/timeout). A deliberate
+//                  acknowledgement lets the lead through so an outage never
+//                  blocks dispatch permanently.
 // =============================================================================
 
 interface Props {
@@ -44,8 +37,6 @@ interface Props {
   onProceed: () => void;
 }
 
-const SEVERITY_ORDER: Record<UrgentIssue["severity"], number> = { high: 0, medium: 1, low: 2 };
-
 export default function UrgentAICheckDialog({
   open, onOpenChange, leadId, onProceed,
 }: Props) {
@@ -53,6 +44,7 @@ export default function UrgentAICheckDialog({
   const [busy, setBusy] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [appliedFields, setAppliedFields] = useState<Set<string>>(new Set());
+  const [dismissedFields, setDismissedFields] = useState<Set<string>>(new Set());
   const startedFor = useRef<string | null>(null);
 
   // Run once when the dialog opens for a lead, not on every render. A second run
@@ -76,12 +68,15 @@ export default function UrgentAICheckDialog({
     setBusy(true);
     setResult(null);
     setAppliedFields(new Set());
+    setDismissedFields(new Set());
     try {
       setResult(await runUrgentVerification(leadId));
     } catch (err: unknown) {
       setResult({
         state: "error",
         issues: [],
+        fixes: [],
+        flags: [],
         summary: "",
         notice: err instanceof Error ? err.message : "The check could not be run.",
         conversationFound: false,
@@ -94,27 +89,19 @@ export default function UrgentAICheckDialog({
     }
   }
 
-  // One path for both "it came back clean" and "I have read the findings and I am
-  // proceeding anyway". They differ only in what gets written down.
-  //
-  // The summary is passed explicitly in both cases. approve_urgent_verification
-  // falls back to 'All verification checks passed' when it is given nothing, so
-  // proceeding over findings without a summary would put a clean check into the
-  // activity log for a check that found problems.
-  async function applyUrgent(overridden: boolean) {
+  // The form check passed (or every suggestion was resolved). The database moves
+  // the lead to urgent and stamps the activity log.
+  async function markUrgent() {
     setSubmitting(true);
-    const summary = overridden
-      ? `Proceeded over ${issues.length} finding${issues.length === 1 ? "" : "s"}: ${
-          result?.summary || "reviewed and accepted"
-        }`
-      : result?.summary || "";
+    const parts = [];
+    if (appliedFields.size) parts.push(`${appliedFields.size} applied`);
+    if (dismissedFields.size) parts.push(`${dismissedFields.size} dismissed`);
+    const summary = parts.length
+      ? `Form check: ${parts.join(", ")}.`
+      : result?.summary || "Form checked — nothing to correct.";
     try {
       await applyUrgentVerification(leadId, summary);
-      toast.success(
-        overridden
-          ? "Marked urgent. The findings were recorded as reviewed."
-          : "Checked against the conversation. Marked urgent.",
-      );
+      toast.success("Form checked. Marked urgent.");
       onProceed();
       onOpenChange(false);
     } catch (err: unknown) {
@@ -124,10 +111,12 @@ export default function UrgentAICheckDialog({
     }
   }
 
+  // The AI check could not run. Recorded as an acknowledgement so it never reads
+  // as a passed check, and so an outage does not block dispatch forever.
   async function proceedUnchecked() {
     setSubmitting(true);
     try {
-      await applyUrgentAcknowledgement(leadId, result?.notice ?? "No conversation available to check");
+      await applyUrgentAcknowledgement(leadId, result?.notice ?? "The form check could not be run.");
       toast.success("Marked urgent without a check. Recorded as an acknowledgement.");
       onProceed();
       onOpenChange(false);
@@ -138,11 +127,11 @@ export default function UrgentAICheckDialog({
     }
   }
 
-
   async function handleApplyFix(fix: UrgentFix) {
     try {
       setSubmitting(true);
-      await applyUrgentFormFixes(leadId, [fix]);
+      // The RPC reads {field, old, new}; UrgentFix carries current/suggested.
+      await applyUrgentFormFixes(leadId, [{ field: fix.field, old: fix.current, new: fix.suggested }]);
       setAppliedFields((prev) => new Set(prev).add(fix.field));
       toast.success(`Updated ${fix.field.replace(/_/g, " ")}`);
     } catch (err: unknown) {
@@ -152,15 +141,27 @@ export default function UrgentAICheckDialog({
     }
   }
 
+  function handleDismissFix(field: string) {
+    setDismissedFields((prev) => new Set(prev).add(field));
+  }
 
-  const issues = [...(result?.issues ?? [])].sort(
-    (a, b) => (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9),
-  );
+  function handleUndoDismiss(field: string) {
+    setDismissedFields((prev) => {
+      const next = new Set(prev);
+      next.delete(field);
+      return next;
+    });
+  }
+
   const fixes = result?.fixes ?? [];
   const flags = result?.flags ?? [];
-  const clean = result?.state === "checked" && issues.length === 0 && fixes.length === 0 && flags.length === 0;
+  const checked = result?.state === "checked";
+  const clean = checked && fixes.length === 0 && flags.length === 0;
   const unavailable = result?.state === "unavailable" || result?.state === "error";
-  const hasActionableItems = issues.length > 0 || fixes.length > 0 || flags.length > 0;
+  const hasItems = fixes.length > 0 || flags.length > 0;
+  const isResolved = (field: string) => appliedFields.has(field) || dismissedFields.has(field);
+  const unresolvedCount = fixes.filter((f) => !isResolved(f.field)).length;
+  const allFixesResolved = unresolvedCount === 0;
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!submitting) onOpenChange(next); }}>
@@ -174,10 +175,10 @@ export default function UrgentAICheckDialog({
             ) : (
               <ShieldAlert className="h-5 w-5 text-amber-600" />
             )}
-            Worth a look before dispatch
+            Clean up the form before dispatch
           </DialogTitle>
           <DialogDescription>
-            Comparing the job details with the customer’s conversation. Review any suggestions, then choose whether to update the record or continue to Urgent.
+            We checked the job form for formatting issues. Apply or dismiss each suggestion, then mark the lead urgent.
           </DialogDescription>
         </DialogHeader>
 
@@ -185,7 +186,7 @@ export default function UrgentAICheckDialog({
           <div className="py-10 text-center space-y-3">
             <Loader2 className="h-8 w-8 animate-spin mx-auto text-muted-foreground" />
             <p className="text-sm text-muted-foreground">
-              Reviewing the conversation and job details. This usually takes about 5–6 seconds.
+              Checking the job form for formatting issues. This usually takes a couple of seconds.
             </p>
           </div>
         )}
@@ -195,13 +196,14 @@ export default function UrgentAICheckDialog({
             <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 flex gap-3">
               <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
               <div>
-                <p className="font-medium text-emerald-900">Nothing contradicts the conversation</p>
-                {result.summary && <p className="text-sm text-emerald-800 mt-1">{result.summary}</p>}
+                <p className="font-medium text-emerald-900">The form looks clean</p>
+                <p className="text-sm text-emerald-800 mt-1">
+                  {result.summary || "Nothing to correct. You can mark this lead urgent."}
+                </p>
               </div>
             </div>
             <p className="text-xs text-muted-foreground">
-              Compared {result.messageCount} message{result.messageCount === 1 ? "" : "s"} in{" "}
-              {(result.elapsedMs / 1000).toFixed(1)}s. The agreed schedule is not changed by marking a lead urgent.
+              Marking a lead urgent sets dispatch priority. It does not change the agreed schedule.
             </p>
           </div>
         )}
@@ -211,13 +213,12 @@ export default function UrgentAICheckDialog({
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 flex gap-3">
               <HelpCircle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
               <div>
-                <p className="font-medium text-amber-900">This could not be checked</p>
+                <p className="font-medium text-amber-900">The form check could not run</p>
                 <p className="text-sm text-amber-800 mt-1">{result.notice}</p>
               </div>
             </div>
             <p className="text-sm text-muted-foreground">
-              Nothing was found wrong, because nothing was compared. Marking this urgent will be recorded
-              as an acknowledgement, not as a passed check.
+              Marking this urgent will be recorded as an acknowledgement, not as a passed check.
             </p>
             {result.state === "error" && result.reason && result.reason !== "unknown" && (
               <p className="text-xs text-muted-foreground">
@@ -227,29 +228,41 @@ export default function UrgentAICheckDialog({
           </div>
         )}
 
-        {!busy && result && !clean && !unavailable && hasActionableItems && (
+        {!busy && result && checked && hasItems && (
           <div className="space-y-4">
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 flex gap-3">
               <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
               <div>
                 <p className="font-medium text-amber-900">
-                  Things to look at
+                  {fixes.length > 0
+                    ? "Fix these before marking urgent"
+                    : "Please check the missing details"}
                 </p>
-                {result.summary && <p className="text-sm text-amber-800 mt-1">{result.summary}</p>}
+                <p className="text-sm text-amber-800 mt-1">
+                  {fixes.length > 0
+                    ? "Apply or dismiss each suggestion below — the lead can go urgent once all are resolved."
+                    : (result.summary || "Some required details are missing.")}
+                </p>
               </div>
             </div>
 
             {fixes.length > 0 && (
               <div className="space-y-2">
-                <h3 className="text-sm font-semibold text-foreground/80">Suggested Corrections</h3>
+                <h3 className="text-sm font-semibold text-foreground/80">
+                  Suggested Corrections{unresolvedCount > 0 ? ` (${unresolvedCount} left)` : ""}
+                </h3>
                 {fixes.map((fix, index) => {
                   const isApplied = appliedFields.has(fix.field);
+                  const isDismissed = dismissedFields.has(fix.field);
                   return (
-                    <div key={`fix-${index}`} className="flex items-center justify-between rounded-lg border p-3 bg-card shadow-sm">
+                    <div
+                      key={`fix-${index}`}
+                      className={`flex items-center justify-between rounded-lg border p-3 bg-card shadow-sm ${isApplied || isDismissed ? "opacity-70" : ""}`}
+                    >
                       <div className="space-y-1">
                         <div className="flex items-center gap-2 text-xs">
                           <span className="font-medium uppercase tracking-wide text-muted-foreground">{fix.field.replace(/_/g, " ")}</span>
-                          <span className="bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded uppercase">{fix.kind}</span>
+                          {fix.kind && <span className="bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded uppercase">{fix.kind}</span>}
                         </div>
                         <p className="text-sm">
                           <span className="text-muted-foreground line-through mr-2">{fix.current || "(empty)"}</span>
@@ -257,14 +270,27 @@ export default function UrgentAICheckDialog({
                         </p>
                         {fix.reason && <p className="text-xs text-muted-foreground">{fix.reason}</p>}
                       </div>
-                      <Button
-                        size="sm"
-                        variant={isApplied ? "outline" : "default"}
-                        disabled={isApplied || submitting}
-                        onClick={() => handleApplyFix(fix)}
-                      >
-                        {isApplied ? "Applied" : "Apply"}
-                      </Button>
+                      {isApplied ? (
+                        <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 shrink-0">
+                          <CheckCircle2 className="h-4 w-4" /> Applied
+                        </span>
+                      ) : isDismissed ? (
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-xs text-muted-foreground">Dismissed</span>
+                          <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => handleUndoDismiss(fix.field)} disabled={submitting}>
+                            Undo
+                          </Button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 shrink-0">
+                          <Button size="sm" onClick={() => handleApplyFix(fix)} disabled={submitting}>
+                            Apply
+                          </Button>
+                          <Button size="sm" variant="outline" onClick={() => handleDismissFix(fix.field)} disabled={submitting}>
+                            Dismiss
+                          </Button>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -283,54 +309,11 @@ export default function UrgentAICheckDialog({
                     <p className="text-sm text-rose-900">{flag.message}</p>
                   </div>
                 ))}
+                <p className="text-xs text-muted-foreground">
+                  Missing details can’t be auto-filled — close this to edit the lead, or continue if they’re not needed.
+                </p>
               </div>
             )}
-
-            {issues.length > 0 && (
-              <div className="space-y-2">
-                <h3 className="text-sm font-semibold text-foreground/80">Potential Discrepancies</h3>
-                {issues.map((issue, index) => (
-                  <div key={`${issue.check}-${index}`} className="rounded-lg border p-4 space-y-2">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                        {issue.check.replace(/_/g, " ")}
-                      </span>
-                      <span
-                        className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                          issue.severity === "high"
-                            ? "bg-red-100 text-red-800"
-                            : issue.severity === "medium"
-                              ? "bg-amber-100 text-amber-800"
-                              : "bg-muted text-muted-foreground"
-                        }`}
-                      >
-                        {issue.severity}
-                      </span>
-                      {issue.field && (
-                        <code className="text-xs bg-muted px-1.5 py-0.5 rounded">{issue.field}</code>
-                      )}
-                    </div>
-                    <p className="text-sm font-medium">{issue.problem}</p>
-                    {issue.evidence && (
-                      <blockquote className="text-sm text-muted-foreground border-l-2 pl-3 italic">
-                        “{issue.evidence}”
-                      </blockquote>
-                    )}
-                    {issue.suggestion && (
-                      <p className="text-sm">
-                        <span className="text-muted-foreground">Suggested fix: </span>
-                        {issue.suggestion}
-                      </p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <p className="text-xs text-muted-foreground">
-              Compared {result.messageCount} message{result.messageCount === 1 ? "" : "s"}.{" "}
-              Suggestions are advisory. You can close this review to update the job, or continue to Urgent without making changes.
-            </p>
           </div>
         )}
 
@@ -340,31 +323,31 @@ export default function UrgentAICheckDialog({
           </Button>
 
           {clean && (
-            <Button onClick={() => applyUrgent(false)} disabled={submitting}>
+            <Button onClick={markUrgent} disabled={submitting}>
               {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Mark urgent"}
             </Button>
           )}
 
           {unavailable && (
             <Button onClick={proceedUnchecked} disabled={submitting}>
-              {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Mark urgent unchecked"}
+              {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Mark urgent (check unavailable)"}
             </Button>
           )}
 
-          {!clean && !unavailable && hasActionableItems && (
-            <>
-              <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
-                Review job details
-              </Button>
-              {/* Same RPC the clean path uses, so the status change and any open
-                  request settle in one transaction exactly as they do for a clean
-                  result. The explicit summary on the override path is what stops
-                  this writing "all checks passed" for a check that found
-                  problems. */}
-              <Button onClick={() => applyUrgent(true)} disabled={submitting}>
-                {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Mark urgent anyway"}
-              </Button>
-            </>
+          {checked && hasItems && (
+            <Button
+              onClick={markUrgent}
+              disabled={submitting || !allFixesResolved}
+              title={!allFixesResolved ? "Apply or dismiss each suggestion first" : undefined}
+            >
+              {submitting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : allFixesResolved ? (
+                "Mark urgent"
+              ) : (
+                `Resolve ${unresolvedCount} to continue`
+              )}
+            </Button>
           )}
         </DialogFooter>
       </DialogContent>
