@@ -1237,7 +1237,7 @@ function LeadCard({
     onRefresh();
   };
 
- const handleCancellationRequestSubmit = async (comment: string, proof: string, proofImage: File | null) => {
+ const handleCancellationRequestSubmit = async (comment: string, proof: string, proofImage: File | null, aiReasonCode?: string, aiReasonApplied?: boolean) => {
     if (!user) return;
 
     setCancelRequestLoading(true);
@@ -1257,6 +1257,7 @@ function LeadCard({
           comment.trim() ? `Comment: ${comment.trim()}` : "",
           proof.trim() ? `Proof: ${proof.trim()}` : "",
           proofImagePath ? `Proof image: ${proofImagePath}` : "",
+          aiReasonApplied ? `(AI Reason: ${aiReasonCode})` : "",
         ].filter(Boolean).join("\n");
         await handleStatusChange("cancelled", reason);
       } else {
@@ -1269,6 +1270,8 @@ function LeadCard({
           comment,
           proof,
           proofImage,
+          aiReasonCode,
+          aiReasonApplied,
         });
         toast.success("Cancellation request sent for approval");
         await refreshPendingCancellationRequest();
@@ -2240,6 +2243,7 @@ function LeadCard({
           loading={cancelRequestLoading}
           mode={isAdmin ? "direct" : "request"}
           requesterLabel={isProcessor ? "Admin" : "Processor or Admin"}
+          leadId={lead.id}
         />
 
         <Dialog open={scheduleOpen} onOpenChange={setScheduleOpen}>

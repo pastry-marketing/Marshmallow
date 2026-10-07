@@ -8,7 +8,10 @@ import {
   runUrgentVerification,
   applyUrgentAcknowledgement,
   applyUrgentVerification,
+  applyUrgentFormFixes,
   type UrgentIssue,
+  type UrgentFix,
+  type UrgentFlag,
   type UrgentVerificationResult,
 } from "@/lib/urgent-verification";
 import { toast } from "sonner";
@@ -49,6 +52,7 @@ export default function UrgentAICheckDialog({
   const [result, setResult] = useState<UrgentVerificationResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [appliedFields, setAppliedFields] = useState<Set<string>>(new Set());
   const startedFor = useRef<string | null>(null);
 
   // Run once when the dialog opens for a lead, not on every render. A second run
@@ -71,6 +75,7 @@ export default function UrgentAICheckDialog({
   async function run() {
     setBusy(true);
     setResult(null);
+    setAppliedFields(new Set());
     try {
       setResult(await runUrgentVerification(leadId));
     } catch (err: unknown) {
@@ -134,11 +139,28 @@ export default function UrgentAICheckDialog({
   }
 
 
+  async function handleApplyFix(fix: UrgentFix) {
+    try {
+      setSubmitting(true);
+      await applyUrgentFormFixes(leadId, [fix]);
+      setAppliedFields((prev) => new Set(prev).add(fix.field));
+      toast.success(`Updated ${fix.field.replace(/_/g, " ")}`);
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to apply fix");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+
   const issues = [...(result?.issues ?? [])].sort(
     (a, b) => (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9),
   );
-  const clean = result?.state === "checked" && issues.length === 0;
+  const fixes = result?.fixes ?? [];
+  const flags = result?.flags ?? [];
+  const clean = result?.state === "checked" && issues.length === 0 && fixes.length === 0 && flags.length === 0;
   const unavailable = result?.state === "unavailable" || result?.state === "error";
+  const hasActionableItems = issues.length > 0 || fixes.length > 0 || flags.length > 0;
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!submitting) onOpenChange(next); }}>
@@ -205,53 +227,105 @@ export default function UrgentAICheckDialog({
           </div>
         )}
 
-        {!busy && result && !clean && !unavailable && issues.length > 0 && (
-          <div className="space-y-3">
+        {!busy && result && !clean && !unavailable && hasActionableItems && (
+          <div className="space-y-4">
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 flex gap-3">
               <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
               <div>
                 <p className="font-medium text-amber-900">
-                  {issues.length} thing{issues.length === 1 ? "" : "s"} to look at
+                  Things to look at
                 </p>
                 {result.summary && <p className="text-sm text-amber-800 mt-1">{result.summary}</p>}
               </div>
             </div>
 
-            {issues.map((issue, index) => (
-              <div key={`${issue.check}-${index}`} className="rounded-lg border p-4 space-y-2">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                    {issue.check.replace(/_/g, " ")}
-                  </span>
-                  <span
-                    className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                      issue.severity === "high"
-                        ? "bg-red-100 text-red-800"
-                        : issue.severity === "medium"
-                          ? "bg-amber-100 text-amber-800"
-                          : "bg-muted text-muted-foreground"
-                    }`}
-                  >
-                    {issue.severity}
-                  </span>
-                  {issue.field && (
-                    <code className="text-xs bg-muted px-1.5 py-0.5 rounded">{issue.field}</code>
-                  )}
-                </div>
-                <p className="text-sm font-medium">{issue.problem}</p>
-                {issue.evidence && (
-                  <blockquote className="text-sm text-muted-foreground border-l-2 pl-3 italic">
-                    “{issue.evidence}”
-                  </blockquote>
-                )}
-                {issue.suggestion && (
-                  <p className="text-sm">
-                    <span className="text-muted-foreground">Suggested fix: </span>
-                    {issue.suggestion}
-                  </p>
-                )}
+            {fixes.length > 0 && (
+              <div className="space-y-2">
+                <h3 className="text-sm font-semibold text-foreground/80">Suggested Corrections</h3>
+                {fixes.map((fix, index) => {
+                  const isApplied = appliedFields.has(fix.field);
+                  return (
+                    <div key={`fix-${index}`} className="flex items-center justify-between rounded-lg border p-3 bg-card shadow-sm">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2 text-xs">
+                          <span className="font-medium uppercase tracking-wide text-muted-foreground">{fix.field.replace(/_/g, " ")}</span>
+                          <span className="bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded uppercase">{fix.kind}</span>
+                        </div>
+                        <p className="text-sm">
+                          <span className="text-muted-foreground line-through mr-2">{fix.current || "(empty)"}</span>
+                          <span className="font-medium text-emerald-600 dark:text-emerald-400">→ {fix.suggested}</span>
+                        </p>
+                        {fix.reason && <p className="text-xs text-muted-foreground">{fix.reason}</p>}
+                      </div>
+                      <Button
+                        size="sm"
+                        variant={isApplied ? "outline" : "default"}
+                        disabled={isApplied || submitting}
+                        onClick={() => handleApplyFix(fix)}
+                      >
+                        {isApplied ? "Applied" : "Apply"}
+                      </Button>
+                    </div>
+                  );
+                })}
               </div>
-            ))}
+            )}
+
+            {flags.length > 0 && (
+              <div className="space-y-2">
+                <h3 className="text-sm font-semibold text-foreground/80">Missing Information</h3>
+                {flags.map((flag, index) => (
+                  <div key={`flag-${index}`} className="rounded-lg border border-rose-200 bg-rose-50/50 p-3 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <AlertTriangle className="h-4 w-4 text-rose-500" />
+                      <span className="text-xs font-medium uppercase tracking-wide text-rose-600">{flag.field.replace(/_/g, " ")}</span>
+                    </div>
+                    <p className="text-sm text-rose-900">{flag.message}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {issues.length > 0 && (
+              <div className="space-y-2">
+                <h3 className="text-sm font-semibold text-foreground/80">Potential Discrepancies</h3>
+                {issues.map((issue, index) => (
+                  <div key={`${issue.check}-${index}`} className="rounded-lg border p-4 space-y-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        {issue.check.replace(/_/g, " ")}
+                      </span>
+                      <span
+                        className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                          issue.severity === "high"
+                            ? "bg-red-100 text-red-800"
+                            : issue.severity === "medium"
+                              ? "bg-amber-100 text-amber-800"
+                              : "bg-muted text-muted-foreground"
+                        }`}
+                      >
+                        {issue.severity}
+                      </span>
+                      {issue.field && (
+                        <code className="text-xs bg-muted px-1.5 py-0.5 rounded">{issue.field}</code>
+                      )}
+                    </div>
+                    <p className="text-sm font-medium">{issue.problem}</p>
+                    {issue.evidence && (
+                      <blockquote className="text-sm text-muted-foreground border-l-2 pl-3 italic">
+                        “{issue.evidence}”
+                      </blockquote>
+                    )}
+                    {issue.suggestion && (
+                      <p className="text-sm">
+                        <span className="text-muted-foreground">Suggested fix: </span>
+                        {issue.suggestion}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
 
             <p className="text-xs text-muted-foreground">
               Compared {result.messageCount} message{result.messageCount === 1 ? "" : "s"}.{" "}
@@ -277,7 +351,7 @@ export default function UrgentAICheckDialog({
             </Button>
           )}
 
-          {!clean && !unavailable && issues.length > 0 && (
+          {!clean && !unavailable && hasActionableItems && (
             <>
               <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
                 Review job details

@@ -338,7 +338,7 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
     return "on_track";
   }, [form.status, form.expected_completion_date]);
 
-  const handleCancellationRequestSubmit = async (comment: string, proof: string, proofImage: File | null) => {
+  const handleCancellationRequestSubmit = async (comment: string, proof: string, proofImage: File | null, aiReasonCode?: string, aiReasonApplied?: boolean) => {
     if (!user || !lead) return;
 
     setCancelRequestLoading(true);
@@ -351,6 +351,8 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
         comment,
         proof,
         proofImage,
+        aiReasonCode,
+        aiReasonApplied,
       });
       toast.success("Cancellation request sent for approval");
       setCancelRequestOpen(false);
@@ -365,7 +367,7 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
     }
   };
 
-  const handleAdminCancelSubmit = async (comment: string, proof: string, proofImage: File | null) => {
+  const handleAdminCancelSubmit = async (comment: string, proof: string, proofImage: File | null, aiReasonCode?: string, aiReasonApplied?: boolean) => {
     if (!user || !lead) return;
 
     setAdminCancelLoading(true);
@@ -383,6 +385,7 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
         comment.trim() ? `Comment: ${comment.trim()}` : "",
         proof.trim() ? `Proof: ${proof.trim()}` : "",
         proofImagePath ? `Proof image: ${proofImagePath}` : "",
+        aiReasonApplied ? `(AI Reason: ${aiReasonCode})` : "",
       ]
         .filter(Boolean)
         .join("\n");
@@ -1375,6 +1378,7 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
           onSubmit={handleCancellationRequestSubmit}
           loading={cancelRequestLoading}
           requesterLabel={isProcessor ? "Admin" : "Processor or Admin"}
+          leadId={leadId || undefined}
         />
 
         <CancellationRequestSheet
@@ -1383,6 +1387,7 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
           onSubmit={handleAdminCancelSubmit}
           loading={adminCancelLoading}
           mode="direct"
+          leadId={leadId || undefined}
         />
 
 <LeadStatusHistoryDialog

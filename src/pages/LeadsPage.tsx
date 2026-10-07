@@ -29,7 +29,7 @@ import { ScheduleDateFilter } from "@/components/leads/ScheduleDateFilter";
 import { doesLeadMatchScheduleDateRange, leadNeedsAttention } from "@/lib/schedule-date-filter";
 import { readLeadsCache, writeLeadsCache } from "@/lib/leadsCache";
 import { LEADS_INDEX_COLUMNS } from "@/lib/leads-index-columns";
-import { Plus, Search, Download, Share2, X, SlidersHorizontal, BarChart3, Puzzle, FileText, Calendar as CalendarIcon, LayoutGrid, List, MapPin, Copy } from "lucide-react";
+import { Plus, Search, Download, Share2, X, SlidersHorizontal, BarChart3, Puzzle, FileText, Calendar as CalendarIcon, LayoutGrid, List, MapPin, Copy, RefreshCw } from "lucide-react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { useNotepad } from "@/contexts/NotepadContext";
 import LeadCard from "@/components/leads/LeadCard";
@@ -85,7 +85,7 @@ const URGENT_TABLE_COLUMNS = "id, customer_name, customer_phone, service_type, c
 // because it only reads the tiny urgent subset, not the whole leads table.
 const URGENT_TABLE_POLL_MS = 5000;
 
-type UrgentRow = Pick<Lead, "id" | "customer_name" | "customer_phone" | "service_type" | "city" | "state" | "address" | "zip_code" | "urgent_at" | "created_at" | "customer_schedule_requirements" | "terms">;
+type UrgentRow = Pick<Lead, "id" | "customer_name" | "customer_phone" | "service_type" | "city" | "state" | "address" | "zip_code" | "urgent_at" | "created_at" | "customer_schedule_requirements" | "terms"> & { lead_ai_statuses?: { status: string } | null };
 
 function CopyableCell({ text, title, className, defaultWidth = true, emptyClassName = "text-muted-foreground", align = "left", truncate = true }: { text: string; title?: string; className?: string; defaultWidth?: boolean; emptyClassName?: string; align?: "left" | "right"; truncate?: boolean }) {
   if (!text || text === "—") return <td className={`px-2 py-2 ${className || ""}`}><span className={emptyClassName}>—</span></td>;
@@ -854,7 +854,7 @@ export default function LeadsPage() {
     if (!user || !role) return;
     let q = supabase
       .from("leads")
-      .select(URGENT_TABLE_COLUMNS)
+      .select(URGENT_TABLE_COLUMNS + ", lead_ai_statuses(status)")
       .eq("status", "urgent_job")
       .order("urgent_at", { ascending: false, nullsFirst: false })
       .order("created_at", { ascending: false })
@@ -868,7 +868,7 @@ export default function LeadsPage() {
       // doesn't re-render the table or recompute the proximity map.
       if (
         prev.length === next.length &&
-        prev.every((p, i) => p.id === next[i].id && p.urgent_at === next[i].urgent_at && p.terms === next[i].terms)
+        prev.every((p, i) => p.id === next[i].id && p.urgent_at === next[i].urgent_at && p.terms === next[i].terms && p.lead_ai_statuses?.status === next[i].lead_ai_statuses?.status)
       ) {
         return prev;
       }
@@ -1444,9 +1444,23 @@ export default function LeadsPage() {
               {urgentTableLeads.length}
             </span>
           </div>
-          <div className="hidden items-center gap-3 text-[11px] text-muted-foreground sm:flex">
-            <span>Active <b className="tabular-nums text-foreground">{activeCount}</b></span>
-            <span>Scheduled <b className="tabular-nums text-foreground">{scheduledCount}</b></span>
+          <div className="flex items-center gap-3">
+            <Button size="sm" variant="outline" onClick={async () => {
+              toast.info("Checking AI statuses in the background...");
+              const { error } = await supabase.functions.invoke("refresh-urgent-statuses");
+              if (error) {
+                toast.error(error.message || "Failed to trigger AI refresh");
+              } else {
+                toast.success("AI refresh request sent.");
+              }
+            }} className="h-7 text-[11px] gap-1.5 border-border/60">
+               <RefreshCw className="h-3 w-3" />
+               Refresh AI Status
+            </Button>
+            <div className="hidden items-center gap-3 text-[11px] text-muted-foreground sm:flex">
+              <span>Active <b className="tabular-nums text-foreground">{activeCount}</b></span>
+              <span>Scheduled <b className="tabular-nums text-foreground">{scheduledCount}</b></span>
+            </div>
           </div>
         </div>
 
@@ -1459,11 +1473,12 @@ export default function LeadsPage() {
                 <tr className="text-[10px] uppercase tracking-wide text-muted-foreground">
                   <th className="px-2 py-1.5 font-semibold w-[12%]">Customer</th>
                   <th className="px-2 py-1.5 font-semibold w-[14%]">Service</th>
-                  <th className="px-2 py-1.5 font-semibold w-[23%]">Address</th>
-                  <th className="px-2 py-1.5 font-semibold w-[13%]">Area</th>
-                  <th className="px-2 py-1.5 font-semibold w-[17%]">Schedule</th>
-                  <th className="px-2 py-1.5 font-semibold w-[12%]">Terms</th>
-                  <th className="px-2 py-1.5 font-semibold text-right w-[9%]">Date created</th>
+                  <th className="px-2 py-1.5 font-semibold w-[12%]">AI Status</th>
+                  <th className="px-2 py-1.5 font-semibold w-[20%]">Address</th>
+                  <th className="px-2 py-1.5 font-semibold w-[12%]">Area</th>
+                  <th className="px-2 py-1.5 font-semibold w-[15%]">Schedule</th>
+                  <th className="px-2 py-1.5 font-semibold w-[8%]">Terms</th>
+                  <th className="px-2 py-1.5 font-semibold text-right w-[7%]">Date</th>
                 </tr>
               </thead>
               <tbody>
@@ -1486,6 +1501,15 @@ export default function LeadsPage() {
                     >
                       <CopyableCell text={l.customer_name || "—"} defaultWidth={false} className="font-medium text-foreground" />
                       <CopyableCell text={l.service_type || "—"} defaultWidth={false} className="text-muted-foreground" />
+                      <td className="px-2 py-2 text-[11px] font-medium whitespace-nowrap">
+                        {l.lead_ai_statuses?.status ? (
+                          <span className="inline-flex items-center rounded-full border border-sky-500/20 bg-sky-500/10 px-1.5 py-0.5 text-sky-700 dark:text-sky-400">
+                            {l.lead_ai_statuses.status}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </td>
                       <CopyableCell text={address} defaultWidth={false} className="text-muted-foreground" />
                       <CopyableCell text={areaText} defaultWidth={false} className="text-muted-foreground" />
                       

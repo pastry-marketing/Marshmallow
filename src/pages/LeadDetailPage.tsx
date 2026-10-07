@@ -996,7 +996,7 @@ export default function LeadDetailPage() {
     }
   };
 
-  const handleCancellationRequestSubmit = async (comment: string, proof: string, proofImage: File | null) => {
+  const handleCancellationRequestSubmit = async (comment: string, proof: string, proofImage: File | null, aiReasonCode?: string, aiReasonApplied?: boolean) => {
     if (!user || !originalLead) return;
 
     setCancelRequestLoading(true);
@@ -1009,6 +1009,8 @@ export default function LeadDetailPage() {
         comment,
         proof,
         proofImage,
+        aiReasonCode,
+        aiReasonApplied,
       });
       toast.success("Cancellation request sent for approval");
       setCancelRequestOpen(false);
@@ -1022,7 +1024,7 @@ export default function LeadDetailPage() {
     }
   };
 
-  const handleAdminCancelSubmit = async (comment: string, proof: string, proofImage: File | null) => {
+  const handleAdminCancelSubmit = async (comment: string, proof: string, proofImage: File | null, aiReasonCode?: string, aiReasonApplied?: boolean) => {
     if (!user || !leadId) return;
 
     setAdminCancelLoading(true);
@@ -1040,6 +1042,7 @@ export default function LeadDetailPage() {
         comment.trim() ? `Comment: ${comment.trim()}` : "",
         proof.trim() ? `Proof: ${proof.trim()}` : "",
         proofImagePath ? `Proof image: ${proofImagePath}` : "",
+        aiReasonApplied ? `(AI Reason: ${aiReasonCode})` : "",
       ]
         .filter(Boolean)
         .join("\n");
@@ -2017,6 +2020,7 @@ export default function LeadDetailPage() {
         onSubmit={handleCancellationRequestSubmit}
         loading={cancelRequestLoading}
         requesterLabel={isProcessor ? "Admin" : "Processor or Admin"}
+        leadId={leadId || undefined}
       />
 
       <UrgentAICheckDialog
@@ -2037,6 +2041,7 @@ export default function LeadDetailPage() {
         onSubmit={handleAdminCancelSubmit}
         loading={adminCancelLoading}
         mode="direct"
+        leadId={leadId || undefined}
       />
 
       <ImageLightbox

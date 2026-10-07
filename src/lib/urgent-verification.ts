@@ -80,9 +80,24 @@ export type UrgentIssue = {
   suggestion: string;
 };
 
+export type UrgentFix = {
+  field: string;
+  current: string;
+  suggested: string;
+  reason: string;
+  kind: string;
+};
+
+export type UrgentFlag = {
+  field: string;
+  message: string;
+};
+
 export type UrgentVerificationResult = {
   state: UrgentVerificationState;
   issues: UrgentIssue[];
+  fixes: UrgentFix[];
+  flags: UrgentFlag[];
   summary: string;
   notice: string;
   conversationFound: boolean;
@@ -94,6 +109,8 @@ export type UrgentVerificationResult = {
 const UNAVAILABLE: UrgentVerificationResult = {
   state: "unavailable",
   issues: [],
+  fixes: [],
+  flags: [],
   summary: "",
   notice: "This lead could not be checked.",
   conversationFound: false,
@@ -159,16 +176,20 @@ export async function runUrgentVerification(leadId: string): Promise<UrgentVerif
     const raw = (data ?? {}) as Record<string, unknown>;
     const verification = raw.verification === "checked" ? "checked" : "unavailable";
     const issues = Array.isArray(raw.issues) ? (raw.issues as UrgentIssue[]) : [];
+    const fixes = Array.isArray(raw.fixes) ? (raw.fixes as UrgentFix[]) : [];
+    const flags = Array.isArray(raw.flags) ? (raw.flags as UrgentFlag[]) : [];
 
     return {
       state: verification,
       issues,
+      fixes,
+      flags,
       summary: typeof raw.summary === "string" ? raw.summary : "",
       notice: typeof raw.notice === "string" ? raw.notice : "",
       conversationFound: raw.conversation_found === true,
-messageCount: typeof raw.message_count === "number" ? raw.message_count : 0,
-        reason: "",
-        elapsedMs: typeof raw.elapsed_ms === "number" ? raw.elapsed_ms : 0,
+      messageCount: typeof raw.message_count === "number" ? raw.message_count : 0,
+      reason: "",
+      elapsedMs: typeof raw.elapsed_ms === "number" ? raw.elapsed_ms : 0,
     };
   } finally {
     clearTimeout(timer);
@@ -200,6 +221,19 @@ export async function applyUrgentAcknowledgement(leadId: string, reason: string)
   });
 
   if (error) throw new Error(error.message);
+}
+
+/**
+ * Apply AI-suggested form fixes.
+ */
+export async function applyUrgentFormFixes(leadId: string, fixes: { field: string; old: string; new: string }[]) {
+  const { data, error } = await supabase.rpc("apply_urgent_form_fixes", {
+    p_lead_id: leadId,
+    p_fixes: fixes as unknown as Record<string, unknown>[],
+  });
+
+  if (error) throw new Error(error.message);
+  return data;
 }
 
 /**
