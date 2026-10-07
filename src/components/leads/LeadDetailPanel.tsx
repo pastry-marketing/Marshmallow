@@ -338,7 +338,7 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
     return "on_track";
   }, [form.status, form.expected_completion_date]);
 
-  const handleCancellationRequestSubmit = async (comment: string, proof: string, proofImage: File | null, aiReasonCode?: string, aiReasonApplied?: boolean) => {
+  const handleCancellationRequestSubmit = async (comment: string, proof: string, proofImage: File | null, aiReasonCode?: string, aiReasonApplied?: boolean, aiSuggestedReason?: string) => {
     if (!user || !lead) return;
 
     setCancelRequestLoading(true);
@@ -353,6 +353,7 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
         proofImage,
         aiReasonCode,
         aiReasonApplied,
+        aiSuggestedReason,
       });
       toast.success("Cancellation request sent for approval");
       setCancelRequestOpen(false);

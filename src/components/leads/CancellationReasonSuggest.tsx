@@ -5,7 +5,7 @@ import { Loader2, Sparkles, Check } from "lucide-react";
 
 interface Props {
   leadId: string;
-  onApply: (reason: string, isAi: boolean, reasonCode: string) => void;
+  onApply: (reason: string, isAi: boolean, reasonCode: string, explanation: string) => void;
 }
 
 export default function CancellationReasonSuggest({ leadId, onApply }: Props) {
@@ -57,7 +57,7 @@ export default function CancellationReasonSuggest({ leadId, onApply }: Props) {
 
   const handleApply = () => {
     const text = `${suggestion.reason_code}: ${suggestion.explanation}`;
-    onApply(text, true, suggestion.reason_code);
+    onApply(text, true, suggestion.reason_code, suggestion.explanation);
     setApplied(true);
   };
 

@@ -174,6 +174,10 @@ export interface LeadCancellationRequest {
   updated_at: string;
   requester_name?: string | null;
   reviewer_name?: string | null;
+  ai_reason_code?: string | null;
+  ai_suggested_reason?: string | null;
+  ai_suggested_at?: string | null;
+  ai_reason_applied?: boolean | null;
 }
 
 export interface LeadUpdate {
