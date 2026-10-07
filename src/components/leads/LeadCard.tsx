@@ -1237,7 +1237,7 @@ function LeadCard({
     onRefresh();
   };
 
- const handleCancellationRequestSubmit = async (comment: string, proof: string, proofImage: File | null, aiReasonCode?: string, aiReasonApplied?: boolean) => {
+ const handleCancellationRequestSubmit = async (comment: string, proof: string, proofImage: File | null, aiReasonCode?: string, aiReasonApplied?: boolean, aiSuggestedReason?: string) => {
     if (!user) return;
 
     setCancelRequestLoading(true);
@@ -1272,6 +1272,7 @@ function LeadCard({
           proofImage,
           aiReasonCode,
           aiReasonApplied,
+          aiSuggestedReason,
         });
         toast.success("Cancellation request sent for approval");
         await refreshPendingCancellationRequest();

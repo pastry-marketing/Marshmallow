@@ -16,7 +16,7 @@ import CancellationReasonSuggest from "./CancellationReasonSuggest";
 interface CancellationRequestSheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (comment: string, proof: string, proofImage: File | null, aiReasonCode?: string, aiReasonApplied?: boolean) => void | Promise<void>;
+  onSubmit: (comment: string, proof: string, proofImage: File | null, aiReasonCode?: string, aiReasonApplied?: boolean, aiSuggestedReason?: string) => void | Promise<void>;
   loading?: boolean;
   requesterLabel?: string;
   mode?: "request" | "direct";
@@ -37,6 +37,7 @@ export default function CancellationRequestSheet({
   const [proofImage, setProofImage] = useState<File | null>(null);
   const [aiReasonCode, setAiReasonCode] = useState<string | undefined>();
   const [aiReasonApplied, setAiReasonApplied] = useState(false);
+  const [aiSuggestedReason, setAiSuggestedReason] = useState<string | undefined>();
 
   useEffect(() => {
     if (!open) {
@@ -45,18 +46,20 @@ export default function CancellationRequestSheet({
       setProofImage(null);
       setAiReasonCode(undefined);
       setAiReasonApplied(false);
+      setAiSuggestedReason(undefined);
     }
   }, [open]);
 
   const handleSubmit = async () => {
-    await onSubmit(comment, proof, proofImage, aiReasonCode, aiReasonApplied);
+    await onSubmit(comment, proof, proofImage, aiReasonCode, aiReasonApplied, aiSuggestedReason);
   };
   const isDirect = mode === "direct";
 
-  const handleApplyAiReason = (reasonText: string, isAi: boolean, reasonCode: string) => {
+  const handleApplyAiReason = (reasonText: string, isAi: boolean, reasonCode: string, explanation: string) => {
     setComment((prev) => (prev ? `${prev}\n\n${reasonText}` : reasonText));
     setAiReasonCode(reasonCode);
     setAiReasonApplied(true);
+    setAiSuggestedReason(explanation);
   };
 
   return (

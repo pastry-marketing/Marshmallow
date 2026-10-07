@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, CheckCircle2, XCircle, User, History } from "lucide-react";
+import { AlertCircle, CheckCircle2, XCircle, User, History, Sparkles } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
@@ -205,6 +205,24 @@ export default function LeadCancellationRequests() {
                           <p className="mt-2 break-words text-muted-foreground">Image: {request.proof_image_path}</p>
                         )}
                       </div>
+
+                      {request.ai_reason_code && (
+                        <div className="rounded-2xl border border-purple-500/20 bg-purple-500/[0.06] p-3 text-sm">
+                          <div className="flex items-center gap-1.5">
+                            <Sparkles className="h-3.5 w-3.5 shrink-0 text-purple-500" />
+                            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-purple-600 dark:text-purple-300">
+                              AI suggestion
+                            </p>
+                            <span className={`ml-auto rounded-full px-2 py-0.5 text-[10px] font-medium ${request.ai_reason_applied ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300" : "bg-muted text-muted-foreground"}`}>
+                              {request.ai_reason_applied ? "Applied by staff" : "Not applied"}
+                            </span>
+                          </div>
+                          <p className="mt-1.5 font-medium">{request.ai_reason_code}</p>
+                          {request.ai_suggested_reason && (
+                            <p className="mt-0.5 text-muted-foreground">{request.ai_suggested_reason}</p>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     <div className="flex min-w-[220px] flex-col gap-2">

@@ -996,7 +996,7 @@ export default function LeadDetailPage() {
     }
   };
 
-  const handleCancellationRequestSubmit = async (comment: string, proof: string, proofImage: File | null, aiReasonCode?: string, aiReasonApplied?: boolean) => {
+  const handleCancellationRequestSubmit = async (comment: string, proof: string, proofImage: File | null, aiReasonCode?: string, aiReasonApplied?: boolean, aiSuggestedReason?: string) => {
     if (!user || !originalLead) return;
 
     setCancelRequestLoading(true);
@@ -1011,6 +1011,7 @@ export default function LeadDetailPage() {
         proofImage,
         aiReasonCode,
         aiReasonApplied,
+        aiSuggestedReason,
       });
       toast.success("Cancellation request sent for approval");
       setCancelRequestOpen(false);

@@ -48,6 +48,7 @@ import { canAddLeadViaExtension, canAddManualLead, isOperatorRole } from "@/lib/
 
 import { motion } from "framer-motion";
 import { heroTitle, premiumEase, cardGridContainer, cardGridItem } from "@/lib/motion";
+import { formatDistanceToNow } from "date-fns";
 
 const PAGE_SIZES = [20, 40, 60, 100];
 
@@ -85,7 +86,7 @@ const URGENT_TABLE_COLUMNS = "id, customer_name, customer_phone, service_type, c
 // because it only reads the tiny urgent subset, not the whole leads table.
 const URGENT_TABLE_POLL_MS = 5000;
 
-type UrgentRow = Pick<Lead, "id" | "customer_name" | "customer_phone" | "service_type" | "city" | "state" | "address" | "zip_code" | "urgent_at" | "created_at" | "customer_schedule_requirements" | "terms"> & { lead_ai_statuses?: { status: string } | null };
+type UrgentRow = Pick<Lead, "id" | "customer_name" | "customer_phone" | "service_type" | "city" | "state" | "address" | "zip_code" | "urgent_at" | "created_at" | "customer_schedule_requirements" | "terms"> & { lead_ai_statuses?: { status: string; checked_at?: string } | null };
 
 function CopyableCell({ text, title, className, defaultWidth = true, emptyClassName = "text-muted-foreground", align = "left", truncate = true }: { text: string; title?: string; className?: string; defaultWidth?: boolean; emptyClassName?: string; align?: "left" | "right"; truncate?: boolean }) {
   if (!text || text === "—") return <td className={`px-2 py-2 ${className || ""}`}><span className={emptyClassName}>—</span></td>;
@@ -854,7 +855,7 @@ export default function LeadsPage() {
     if (!user || !role) return;
     let q = supabase
       .from("leads")
-      .select(URGENT_TABLE_COLUMNS + ", lead_ai_statuses(status)")
+      .select(URGENT_TABLE_COLUMNS + ", lead_ai_statuses(status, checked_at)")
       .eq("status", "urgent_job")
       .order("urgent_at", { ascending: false, nullsFirst: false })
       .order("created_at", { ascending: false })
@@ -868,7 +869,7 @@ export default function LeadsPage() {
       // doesn't re-render the table or recompute the proximity map.
       if (
         prev.length === next.length &&
-        prev.every((p, i) => p.id === next[i].id && p.urgent_at === next[i].urgent_at && p.terms === next[i].terms && p.lead_ai_statuses?.status === next[i].lead_ai_statuses?.status)
+        prev.every((p, i) => p.id === next[i].id && p.urgent_at === next[i].urgent_at && p.terms === next[i].terms && p.lead_ai_statuses?.status === next[i].lead_ai_statuses?.status && p.lead_ai_statuses?.checked_at === next[i].lead_ai_statuses?.checked_at)
       ) {
         return prev;
       }
@@ -876,6 +877,19 @@ export default function LeadsPage() {
     });
   }, [user, role]);
   refreshUrgentRef.current = refreshUrgentTable;
+
+  // Most recent AI-status check across the urgent leads — shown as a freshness
+  // stamp so staff can tell how current the labels are (statuses auto-refresh
+  // every 30 min and can be refreshed on demand).
+  const aiStatusLastChecked = useMemo(() => {
+    let latest = 0;
+    for (const l of urgentTableLeads) {
+      const checkedAt = l.lead_ai_statuses?.checked_at;
+      const t = checkedAt ? new Date(checkedAt).getTime() : 0;
+      if (t > latest) latest = t;
+    }
+    return latest ? new Date(latest) : null;
+  }, [urgentTableLeads]);
 
   useEffect(() => {
     if (!user || !role) return;
@@ -1445,14 +1459,30 @@ export default function LeadsPage() {
             </span>
           </div>
           <div className="flex items-center gap-3">
+            {aiStatusLastChecked && (
+              <span className="hidden text-[11px] text-muted-foreground sm:inline" title={aiStatusLastChecked.toLocaleString()}>
+                Updated {formatDistanceToNow(aiStatusLastChecked, { addSuffix: true })}
+              </span>
+            )}
             <Button size="sm" variant="outline" onClick={async () => {
               toast.info("Checking AI statuses in the background...");
-              const { error } = await supabase.functions.invoke("refresh-urgent-statuses");
+              const { data, error } = await supabase.functions.invoke("refresh-urgent-statuses");
               if (error) {
-                toast.error(error.message || "Failed to trigger AI refresh");
-              } else {
-                toast.success("AI refresh request sent.");
+                // supabase-js hides the function's JSON body in error.context (a Response);
+                // read it so the cooldown/busy message reaches the user instead of a generic error.
+                let message = error.message || "Failed to trigger AI refresh";
+                const body = await (error as { context?: Response }).context?.json()?.catch(() => null);
+                if (body?.error) message = body.error as string;
+                toast.error(message);
+                return;
               }
+              const refreshed = (data as { refreshed?: number } | null)?.refreshed;
+              toast.success(
+                typeof refreshed === "number"
+                  ? `AI statuses refreshed — ${refreshed} updated.`
+                  : "AI statuses refreshed.",
+              );
+              await refreshUrgentTable();
             }} className="h-7 text-[11px] gap-1.5 border-border/60">
                <RefreshCw className="h-3 w-3" />
                Refresh AI Status
@@ -1471,19 +1501,17 @@ export default function LeadsPage() {
             <table className="w-full table-fixed border-collapse text-left text-xs">
               <thead className="sticky top-0 z-10 bg-card/95 backdrop-blur">
                 <tr className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                  <th className="px-2 py-1.5 font-semibold w-[12%]">Customer</th>
-                  <th className="px-2 py-1.5 font-semibold w-[14%]">Service</th>
-                  <th className="px-2 py-1.5 font-semibold w-[12%]">AI Status</th>
-                  <th className="px-2 py-1.5 font-semibold w-[20%]">Address</th>
-                  <th className="px-2 py-1.5 font-semibold w-[12%]">Area</th>
-                  <th className="px-2 py-1.5 font-semibold w-[15%]">Schedule</th>
-                  <th className="px-2 py-1.5 font-semibold w-[8%]">Terms</th>
-                  <th className="px-2 py-1.5 font-semibold text-right w-[7%]">Date</th>
+                  <th className="px-2 py-1.5 font-semibold w-[14%]">Customer</th>
+                  <th className="px-2 py-1.5 font-semibold w-[16%]">Service</th>
+                  <th className="px-2 py-1.5 font-semibold w-[14%]">AI Status</th>
+                  <th className="px-2 py-1.5 font-semibold w-[16%]">Area</th>
+                  <th className="px-2 py-1.5 font-semibold w-[18%]">Schedule</th>
+                  <th className="px-2 py-1.5 font-semibold w-[10%]">Terms</th>
+                  <th className="px-2 py-1.5 font-semibold text-right w-[12%]">Date</th>
                 </tr>
               </thead>
               <tbody>
                 {urgentTableLeads.map((l) => {
-                  const address = l.address || "—";
                   const c = l.city || extractCity(l.address);
                   const s = l.state || extractState(l.address);
                   const areaText = [c, s].filter((x) => x && x !== "Unknown").join(", ") || "—";
@@ -1510,7 +1538,6 @@ export default function LeadsPage() {
                           <span className="text-muted-foreground">—</span>
                         )}
                       </td>
-                      <CopyableCell text={address} defaultWidth={false} className="text-muted-foreground" />
                       <CopyableCell text={areaText} defaultWidth={false} className="text-muted-foreground" />
                       
                       <CopyableCell 
