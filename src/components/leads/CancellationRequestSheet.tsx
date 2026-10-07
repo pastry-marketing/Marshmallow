@@ -11,14 +11,16 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import CancellationReasonSuggest from "./CancellationReasonSuggest";
 
 interface CancellationRequestSheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (comment: string, proof: string, proofImage: File | null) => void | Promise<void>;
+  onSubmit: (comment: string, proof: string, proofImage: File | null, aiReasonCode?: string, aiReasonApplied?: boolean) => void | Promise<void>;
   loading?: boolean;
   requesterLabel?: string;
   mode?: "request" | "direct";
+  leadId?: string;
 }
 
 export default function CancellationRequestSheet({
@@ -28,23 +30,34 @@ export default function CancellationRequestSheet({
   loading = false,
   requesterLabel = "your manager",
   mode = "request",
+  leadId,
 }: CancellationRequestSheetProps) {
   const [comment, setComment] = useState("");
   const [proof, setProof] = useState("");
   const [proofImage, setProofImage] = useState<File | null>(null);
+  const [aiReasonCode, setAiReasonCode] = useState<string | undefined>();
+  const [aiReasonApplied, setAiReasonApplied] = useState(false);
 
   useEffect(() => {
     if (!open) {
       setComment("");
       setProof("");
       setProofImage(null);
+      setAiReasonCode(undefined);
+      setAiReasonApplied(false);
     }
   }, [open]);
 
   const handleSubmit = async () => {
-    await onSubmit(comment, proof, proofImage);
+    await onSubmit(comment, proof, proofImage, aiReasonCode, aiReasonApplied);
   };
   const isDirect = mode === "direct";
+
+  const handleApplyAiReason = (reasonText: string, isAi: boolean, reasonCode: string) => {
+    setComment((prev) => (prev ? `${prev}\n\n${reasonText}` : reasonText));
+    setAiReasonCode(reasonCode);
+    setAiReasonApplied(true);
+  };
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -58,7 +71,14 @@ export default function CancellationRequestSheet({
           </SheetDescription>
         </SheetHeader>
 
-        <div className="space-y-4">
+        <div className="space-y-4 pt-4">
+          {leadId && (
+            <CancellationReasonSuggest 
+              leadId={leadId} 
+              onApply={handleApplyAiReason} 
+            />
+          )}
+
           <div className="space-y-2">
             <Label htmlFor="cancel-comment">Cancellation reason *</Label>
             <Textarea

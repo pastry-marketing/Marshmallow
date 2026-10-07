@@ -15,6 +15,8 @@ type CreateCancellationRequestArgs = {
   comment: string;
   proof?: string | null;
   proofImage?: File | null;
+  aiReasonCode?: string;
+  aiReasonApplied?: boolean;
 };
 
 type ReviewCancellationRequestArgs = {
@@ -123,6 +125,8 @@ export async function createCancellationRequest({
   comment,
   proof,
   proofImage,
+  aiReasonCode,
+  aiReasonApplied,
 }: CreateCancellationRequestArgs): Promise<LeadCancellationRequest> {
   const cleanComment = comment.trim();
   const cleanProof = proof?.trim() || null;
@@ -162,6 +166,9 @@ export async function createCancellationRequest({
       proof: cleanProof,
       proof_image_path: proofImagePath,
       status: "pending",
+      ai_reason_code: aiReasonCode || null,
+      ai_reason_applied: aiReasonApplied || false,
+      ai_suggested_at: aiReasonCode ? new Date().toISOString() : null,
     } as never)
     .select("*")
     .single();
