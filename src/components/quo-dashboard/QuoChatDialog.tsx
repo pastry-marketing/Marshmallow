@@ -16,7 +16,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { Loader2, Send, MessageSquare, User, Phone, CheckCheck, Clock, ChevronDown, Sparkles, X, ShieldAlert, ListChecks } from "lucide-react";
+import { Loader2, Send, MessageSquare, User, Phone, CheckCheck, Clock, ChevronDown, Sparkles, X, ShieldAlert, ListChecks, BadgeCheck } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -45,6 +45,14 @@ import {
   ACTION_PRIORITY_CLASS,
   type CallActionItems,
 } from "@/lib/ai/call-action-items";
+import {
+  fetchQualityCheck,
+  canUseQualityCheck,
+  QUALITY_VERDICT_LABEL,
+  QUALITY_VERDICT_CLASS,
+  QUALITY_CATEGORY_LABEL,
+  type QualityCheckResult,
+} from "@/lib/ai/quality-check";
 import {
   formatEasternTime,
   formatLocalRelativeTime,
@@ -125,6 +133,12 @@ export default function QuoChatDialog({
   const [actionItems, setActionItems] = useState<CallActionItems | null>(null);
   const showActionsButton = canUseCallActionItems(role);
 
+  // AI quality check (roadmap feature 10). Reviews the agent's DRAFT reply
+  // before sending. Advisory — it suggests; it never blocks or sends.
+  const [qualityChecking, setQualityChecking] = useState(false);
+  const [qualityCheck, setQualityCheck] = useState<QualityCheckResult | null>(null);
+  const showQualityButton = canUseQualityCheck(role);
+
   // Fetch messages when conversation changes or opens
   useEffect(() => {
     if (!open || !conversation?.id) return;
@@ -135,6 +149,7 @@ export default function QuoChatDialog({
     setTriage(null);
     setSpamCheck(null);
     setActionItems(null);
+    setQualityCheck(null);
 
     let isCancelled = false;
 
@@ -368,6 +383,27 @@ export default function QuoChatDialog({
     }
   };
 
+  const handleQualityCheck = async () => {
+    if (!conversation?.id || qualityChecking || !newMessage.trim()) return;
+    setQualityChecking(true);
+    try {
+      const res = await fetchQualityCheck(conversation.id, newMessage.trim());
+      setQualityCheck(res);
+      if (res.verdict === "good" && res.issues.length === 0) {
+        toast.success("Looks good to send.");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not check the reply.");
+    } finally {
+      setQualityChecking(false);
+    }
+  };
+
+  const applyImproved = () => {
+    if (qualityCheck?.improved) setNewMessage(qualityCheck.improved);
+    setQualityCheck(null);
+  };
+
   if (!conversation) return null;
 
   const currentStatusKey = normalizeQuoLeadStatus(conversation.status);
@@ -523,8 +559,52 @@ export default function QuoChatDialog({
         {/* AI assist (advisory). Reply suggestions load a draft into the
             composer; triage suggests how to sort the chat. Both are shown to
             the agent, who decides — nothing is sent or saved automatically. */}
-        {(showSuggestButton || showTriageButton || showSpamButton || showActionsButton) && (
+        {(showSuggestButton || showTriageButton || showSpamButton || showActionsButton || showQualityButton) && (
           <div className="px-3 pt-2 border-t border-border/40 bg-background/60 shrink-0 max-h-[40vh] overflow-y-auto">
+            {qualityCheck && (
+              <div className="mb-2 rounded-lg border border-border/60 bg-muted/30 p-2">
+                <div className="mb-1 flex items-center justify-between">
+                  <span className="flex items-center gap-1 text-[11px] font-semibold text-muted-foreground">
+                    <BadgeCheck className="h-3 w-3 text-primary" /> Reply check
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setQualityCheck(null)}
+                    className="text-muted-foreground hover:text-foreground"
+                    aria-label="Dismiss reply check"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                <Badge variant="outline" className={`text-[10px] font-semibold ${QUALITY_VERDICT_CLASS[qualityCheck.verdict]}`}>
+                  {QUALITY_VERDICT_LABEL[qualityCheck.verdict]}
+                </Badge>
+                {qualityCheck.issues.length > 0 && (
+                  <ul className="mt-1.5 space-y-0.5">
+                    {qualityCheck.issues.map((it, i) => (
+                      <li key={i} className="text-[11px] text-muted-foreground">
+                        <span className="font-semibold text-foreground">
+                          {QUALITY_CATEGORY_LABEL[it.category]}:
+                        </span>{" "}
+                        {it.note}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {qualityCheck.improved && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={applyImproved}
+                    className="mt-2 h-7 gap-1.5 text-[11px]"
+                  >
+                    <Sparkles className="h-3 w-3 text-primary" />
+                    Use improved reply
+                  </Button>
+                )}
+              </div>
+            )}
             {actionItems && actionItems.items.length > 0 && (
               <div className="mb-2 rounded-lg border border-border/60 bg-muted/30 p-2">
                 <div className="mb-1 flex items-center justify-between">
@@ -739,6 +819,24 @@ export default function QuoChatDialog({
                     <ListChecks className="h-3.5 w-3.5" />
                   )}
                   {actionsLoading ? "Reviewing…" : "Action items"}
+                </Button>
+              )}
+              {showQualityButton && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleQualityCheck}
+                  disabled={qualityChecking || !newMessage.trim()}
+                  className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                  title="Review your draft reply for tone, missing info, and accuracy before sending"
+                >
+                  {qualityChecking ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <BadgeCheck className="h-3.5 w-3.5" />
+                  )}
+                  {qualityChecking ? "Checking…" : "Check reply"}
                 </Button>
               )}
             </div>
