@@ -150,6 +150,8 @@ async function handleMessage(message, sender) {
       };
     case "QUO_SEND_MESSAGE":
       return handleQuoSendMessage(message);
+    case "QUO_SEND_ATTACHMENTS":
+      return handleQuoSendAttachments(message);
     case "QUO_PREPARE_CHAT":
       return handleQuoPrepareChat(message);
     default:
@@ -1196,6 +1198,131 @@ async function handleQuoSendMessage(message) {
     navigationPrepared: true
   }, hasExactConversation ? 40 : 15);
   return { ...result, newTab };
+}
+
+// Quo caps a single message at 10 images / 5MB. We keep a little headroom under
+// 5MB so Quo's own re-encode never tips a batch over the limit.
+const QUO_MAX_IMAGES_PER_MESSAGE = 10;
+const QUO_SEND_BYTES_BUDGET = Math.floor(4.6 * 1024 * 1024);
+
+async function blobToDataUrl(blob) {
+  const buffer = await blob.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  const type = blob.type && blob.type.startsWith("image/") ? blob.type : "image/jpeg";
+  return `data:${type};base64,${btoa(binary)}`;
+}
+
+function fileNameForImage(index, type) {
+  const ext = (type && type.split("/")[1]) ? type.split("/")[1].replace("jpeg", "jpg") : "jpg";
+  return `photo-${index + 1}.${ext}`;
+}
+
+// Split fetched images into Quo-sized batches, preserving order.
+function batchImages(images) {
+  const batches = [];
+  let current = [];
+  let bytes = 0;
+  for (const img of images) {
+    const size = img.size || 0;
+    if (current.length > 0 && (current.length >= QUO_MAX_IMAGES_PER_MESSAGE || bytes + size > QUO_SEND_BYTES_BUDGET)) {
+      batches.push(current);
+      current = [];
+      bytes = 0;
+    }
+    current.push(img);
+    bytes += size;
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
+
+async function handleQuoSendAttachments(message) {
+  const { chatUrl, imageUrls } = message;
+
+  if (!chatUrl) return { success: false, error: "No Quo chat is linked to this lead." };
+  if (!Array.isArray(imageUrls) || imageUrls.length === 0) {
+    return { success: false, error: "No photos were provided to send." };
+  }
+
+  // 1. Download every image in the service worker, where host_permissions grant
+  //    CORS-free access to the Supabase signed URLs. Order is preserved.
+  const fetched = [];
+  for (let i = 0; i < imageUrls.length; i++) {
+    try {
+      const response = await fetch(imageUrls[i]);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const blob = await response.blob();
+      fetched.push({
+        name: fileNameForImage(i, blob.type),
+        type: blob.type && blob.type.startsWith("image/") ? blob.type : "image/jpeg",
+        size: blob.size,
+        dataUrl: await blobToDataUrl(blob),
+      });
+    } catch (err) {
+      console.warn(`[Donut] Failed to download photo ${i + 1}:`, err);
+    }
+  }
+
+  if (fetched.length === 0) {
+    return { success: false, error: "None of the photos could be downloaded." };
+  }
+
+  // 2. Resolve the Quo tab once (same strategy as text sends).
+  const tabs = await chrome.tabs.query({ url: ["https://my.quo.com/*", "https://quo.com/*"] });
+  const matchingTab = tabs.find((tab) => tab.id && isTabOnTargetChat(tab.url, chatUrl));
+  const fallbackTab = [...tabs]
+    .filter((tab) => tab.id)
+    .sort((a, b) => Number(b.active) - Number(a.active) || (b.lastAccessed || 0) - (a.lastAccessed || 0))[0];
+
+  let tab = matchingTab || fallbackTab;
+  if (!tab) {
+    tab = await chrome.tabs.create({ url: chatUrl, active: false });
+  } else if (!matchingTab) {
+    // Full navigation (not SPA) so we never attach to the previous chat's composer.
+    tab = await chrome.tabs.update(tab.id, { url: chatUrl });
+  }
+
+  if (!tab?.id) return { success: false, error: "Could not open the requested Quo chat." };
+
+  const hasExactConversation = !!conversationIdFromUrl(chatUrl);
+  if (!hasExactConversation) {
+    await waitForTabComplete(tab.id, 25000);
+  }
+
+  // 3. Send each batch into the composer, one message at a time, in order.
+  const batches = batchImages(fetched);
+  let sent = 0;
+  let lastError = null;
+  for (let b = 0; b < batches.length; b++) {
+    const result = await sendMessageWithRetry(tab.id, {
+      type: "NAVIGATE_AND_SEND_ATTACHMENTS",
+      chatUrl,
+      images: batches[b],
+      // Only the first batch may still need the SPA to settle on the chat; later
+      // batches reuse the same loaded conversation.
+      navigationPrepared: b > 0 ? true : hasExactConversation,
+    }, hasExactConversation ? 40 : 15);
+
+    if (result?.success) {
+      sent += batches[b].length;
+    } else {
+      lastError = result?.error || "The photos could not be attached in Quo.";
+      break;
+    }
+  }
+
+  if (sent === 0) {
+    return { success: false, error: lastError || "The photos could not be sent." };
+  }
+  if (sent < fetched.length) {
+    return { success: false, sent, error: `Only ${sent} of ${fetched.length} photos were sent. ${lastError || ""}`.trim() };
+  }
+  return { success: true, sent };
 }
 
 async function handleQuoPrepareChat(message) {
