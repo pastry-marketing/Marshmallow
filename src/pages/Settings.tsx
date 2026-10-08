@@ -49,6 +49,7 @@ const generateCode = () => {
 const NAV_SECTION_LABELS: Record<string, string> = {
   leads: "All Leads",
   quo_monitor: "QUO Dashboard",
+  ai_assistance: "AI Assistance",
   calls: "Calls Log",
   analytics: "Analytics",
   settings: "Settings",

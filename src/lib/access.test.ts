@@ -79,6 +79,39 @@ describe("quote approval navigation access", () => {
   });
 });
 
+describe("AI Assistance (CS missed-lead tracker) navigation access", () => {
+  it("is in the default navigation of the CS team and visible to them", () => {
+    for (const role of ["cs_admin", "customer_service"] as const) {
+      expect(getDefaultNavAccess(role).has("ai_assistance")).toBe(true);
+      expect(canAccessNavItem(role, "ai_assistance")).toBe(true);
+    }
+  });
+
+  it("is always visible to admin", () => {
+    expect(canAccessNavItem("admin", "ai_assistance")).toBe(true);
+  });
+
+  it("is hidden from non-CS roles, by default", () => {
+    for (const role of ["processor", "opr", "opr_admin"] as const) {
+      expect(getDefaultNavAccess(role).has("ai_assistance")).toBe(false);
+      expect(canAccessNavItem(role, "ai_assistance")).toBe(false);
+    }
+    expect(canAccessNavItem(null, "ai_assistance")).toBe(false);
+  });
+
+  it("is NOT grantable to non-CS roles via a navigation override", () => {
+    const allowedOverride = [{ nav_section: "ai_assistance", allowed: true }] as NavigationPermission[];
+    expect(canAccessNavItem("processor", "ai_assistance", allowedOverride)).toBe(false);
+    expect(canAccessNavItem("opr", "ai_assistance", allowedOverride)).toBe(false);
+  });
+
+  it("cannot be revoked from the CS team via a deny override (gate wins)", () => {
+    const deniedOverride = [{ nav_section: "ai_assistance", allowed: false }] as NavigationPermission[];
+    expect(canAccessNavItem("cs_admin", "ai_assistance", deniedOverride)).toBe(true);
+    expect(canAccessNavItem("customer_service", "ai_assistance", deniedOverride)).toBe(true);
+  });
+});
+
 describe("OPR Admin inheritance", () => {
   it("has the same default navigation as OPR", () => {
     expect([...getDefaultNavAccess("opr_admin")]).toEqual([...getDefaultNavAccess("opr")]);
