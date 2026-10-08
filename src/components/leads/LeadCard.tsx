@@ -34,6 +34,7 @@ import {
   Clipboard,
   ExternalLink,
   UserPlus,
+  Images,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -90,6 +91,8 @@ import { useQuoAttention } from "@/hooks/useQuoAttention";
 import { History } from "lucide-react";
 import LeadStatusHistoryDialog from "./LeadStatusHistoryDialog";
 import ImageLightbox from "./ImageLightbox";
+import QuoPhotoSendDialog from "./QuoPhotoSendDialog";
+import { isQuoChatUrl } from "@/lib/quo-attachments";
 import LeadCoverageBadge from "./LeadCoverageBadge";
 import UrgentAICheckDialog from "./UrgentAICheckDialog";
 import { showsUrgentCheck } from "@/lib/urgent-verification";
@@ -763,6 +766,7 @@ function LeadCard({
   const [photoOriginals, setPhotoOriginals] = useState<(string | undefined)[]>([]);
   const [photoLightboxOpen, setPhotoLightboxOpen] = useState(false);
   const [photoLightboxIndex, setPhotoLightboxIndex] = useState(0);
+  const [quoPhotoDialogOpen, setQuoPhotoDialogOpen] = useState(false);
   const photoClickTimer = useRef<number | null>(null);
   const [resolvedPaymentOriginal, setResolvedPaymentOriginal] = useState<string | null>(null);
   const [photoCount, setPhotoCount] = useState(
@@ -1822,6 +1826,23 @@ function LeadCard({
 
         {(lead.payment_screenshot_url || photoPaths.length > 0) && (
           <div className="relative flex flex-wrap gap-2 border-t border-border/55 px-4 py-3">
+                {photoPaths.length > 0 && isQuoChatUrl(lead.source_url) && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="h-8 gap-1.5 rounded-lg px-2.5 text-[11px] font-medium"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      setQuoPhotoDialogOpen(true);
+                    }}
+                    title="Review and send all photos to Quo in one go"
+                  >
+                    <Images className="h-2.5 w-2.5" />
+                    Send {photoPaths.length} to Quo
+                  </Button>
+                )}
+
                 {lead.payment_screenshot_url && (
                   <Button
                     type="button"
@@ -1873,6 +1894,16 @@ function LeadCard({
           open={photoLightboxOpen}
           onOpenChange={setPhotoLightboxOpen}
         />
+
+        {quoPhotoDialogOpen && (
+          <QuoPhotoSendDialog
+            open={quoPhotoDialogOpen}
+            onOpenChange={setQuoPhotoDialogOpen}
+            photoPaths={photoPaths}
+            chatUrl={lead.source_url ?? ""}
+            contactLabel={lead.customer_name ?? undefined}
+          />
+        )}
 
         {(isCS || isCsAdmin || isProcessor || isAdmin || isOpr) && lead.status !== "scheduled" && (
           <div className="px-4 pt-2">

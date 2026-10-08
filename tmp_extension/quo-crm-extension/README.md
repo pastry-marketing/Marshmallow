@@ -18,6 +18,7 @@ This repository contains a Chrome Extension Manifest V3 implementation for captu
 - `manifest.json`
 - `background.js`
 - `content.js`
+- `crm-bridge.js` (relays `window.postMessage` from the CRM to the background worker)
 - `sidepanel.html`
 - `sidepanel.js`
 - `sidepanel.css`
@@ -116,6 +117,36 @@ Important behavior:
 
 - The extension never sends the full chat automatically.
 - Only text you explicitly select and assign is added to the draft.
+
+## Bulk photo send (CRM → Quo)
+
+The CRM's lead card has a **Send N to Quo** button on leads that have photos and a
+Quo chat thread. It hands the photos to this extension so they land in the Quo
+composer in one shot — no copying and pasting one image at a time (the OS
+clipboard only holds a single image, so "copy all / paste once" is impossible
+without the extension).
+
+Flow:
+
+1. CRM posts `window.postMessage({ action: "QUO_SEND_ATTACHMENTS", chatUrl, imageUrls })`.
+2. `crm-bridge.js` forwards it to the background worker as `QUO_SEND_ATTACHMENTS`.
+3. `background.js` (`handleQuoSendAttachments`) downloads each signed URL (CORS-free
+   in the service worker via `host_permissions`), splits them into Quo-sized
+   batches (**≤ 10 images and ≤ 5 MB per message**, Quo's documented limits),
+   and sends each batch to the Quo tab as `NAVIGATE_AND_SEND_ATTACHMENTS`.
+4. `content.js` (`handleNavigateAndSendAttachments`) rebuilds the `File`s, drops
+   them into Quo's hidden `<input type="file">` (falling back to a synthetic
+   paste into the Slate composer), waits for Quo to accept them, then clicks Send.
+
+Notes / things to verify after a Quo UI change:
+
+- The attachment input and preview selectors live in `content.js`
+  (`findAttachmentInput`, `countAttachmentPreviews`). If a Quo release changes
+  its composer, update those.
+- Send is only clicked once Quo enables the Send button (it enables only after
+  the attachments are accepted), so an empty message is never sent. If delivery
+  can't be confirmed the user is told to check the thread before resending.
+- The per-photo copy buttons on the lead card remain as a manual fallback.
 
 ## Example API test with cURL
 
