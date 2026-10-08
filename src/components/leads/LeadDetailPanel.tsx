@@ -67,6 +67,8 @@ import { dispatchLeadStatusNotification } from "@/lib/lead-notifications";
 import { requestQuoteApproval } from "@/lib/quote-approval-requests";
 import QuoteAssistantDialog from "./QuoteAssistantDialog";
 import { canUseQuoteAssistant } from "@/lib/ai/quote-assistant";
+import ScheduleAssistantDialog from "./ScheduleAssistantDialog";
+import { canUseScheduleAssistant } from "@/lib/ai/schedule-assistant";
 
 interface Props {
   leadId: string;
@@ -173,6 +175,7 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
 
   const [saved, setSaved] = useState(false);
   const [quoteAssistantOpen, setQuoteAssistantOpen] = useState(false);
+  const [scheduleAssistantOpen, setScheduleAssistantOpen] = useState(false);
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [paymentLoading, setPaymentLoading] = useState(false);
   const [cancelRequestOpen, setCancelRequestOpen] = useState(false);
@@ -1009,7 +1012,22 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
               </div>
 
               <div className="space-y-1.5">
-                <Label className={labelClass}>Schedule Requirements</Label>
+                <div className="flex items-center justify-between gap-2">
+                  <Label className={labelClass}>Schedule Requirements</Label>
+                  {canUseScheduleAssistant(role) && (form.customer_schedule_requirements ?? "").trim() && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setScheduleAssistantOpen(true)}
+                      className="h-6 gap-1 px-1.5 text-[11px] text-primary hover:bg-primary/10"
+                      title="Parse this into date/time windows and check for overdue work or clashes"
+                    >
+                      <Sparkles className="h-3 w-3" />
+                      Parse & check
+                    </Button>
+                  )}
+                </div>
                 <MultiDateTimePicker
                   value={form.customer_schedule_requirements ?? ""}
                   onChange={(val) => update("customer_schedule_requirements", val)}
@@ -1395,6 +1413,14 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
           <QuoteAssistantDialog
             open={quoteAssistantOpen}
             onOpenChange={setQuoteAssistantOpen}
+            leadId={leadId}
+          />
+        )}
+
+        {scheduleAssistantOpen && (
+          <ScheduleAssistantDialog
+            open={scheduleAssistantOpen}
+            onOpenChange={setScheduleAssistantOpen}
             leadId={leadId}
           />
         )}
