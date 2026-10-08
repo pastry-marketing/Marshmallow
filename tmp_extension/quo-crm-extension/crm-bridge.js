@@ -25,7 +25,9 @@ window.addEventListener("message", (event) => {
     chrome.runtime.sendMessage({
       type: "QUO_SEND_ATTACHMENTS",
       chatUrl: data.chatUrl,
-      imageUrls: data.imageUrls
+      imageUrls: data.imageUrls,
+      recipientType: data.recipientType,
+      technicianPhone: data.technicianPhone
     }, (response) => {
       window.postMessage({
         action: "QUO_SEND_ATTACHMENTS_RESPONSE",

@@ -11,6 +11,11 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useQuery } from "@tanstack/react-query";
+import { fetchAllTechnicians, TECHNICIANS_QUERY_KEY } from "@/lib/technicians";
+import { normalizePhoneE164 } from "@/lib/phone";
+import { resolveTechPhotoChat } from "@/lib/quo-tech-photos";
 import { cn } from "@/lib/utils";
 import ImageLightbox from "@/components/leads/ImageLightbox";
 import {
@@ -23,17 +28,16 @@ interface QuoPhotoSendDialogProps {
   onOpenChange: (open: boolean) => void;
   /** Storage paths for this lead's photos, in display order. */
   photoPaths: string[];
-  /** The lead's Quo chat URL (lead.source_url). */
-  chatUrl: string;
-  contactLabel?: string;
+  technicianPhone?: string | null;
+  technicianName?: string | null;
 }
 
 export default function QuoPhotoSendDialog({
   open,
   onOpenChange,
   photoPaths,
-  chatUrl,
-  contactLabel,
+  technicianPhone,
+  technicianName,
 }: QuoPhotoSendDialogProps) {
   const [urls, setUrls] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -41,6 +45,17 @@ export default function QuoPhotoSendDialog({
   const [sending, setSending] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
+  const [selectedTechId, setSelectedTechId] = useState("");
+  const hasAssignedTech = Boolean(technicianPhone?.trim() || technicianName?.trim());
+  const technicians = useQuery({
+    queryKey: TECHNICIANS_QUERY_KEY,
+    queryFn: fetchAllTechnicians,
+    enabled: open && !hasAssignedTech,
+  });
+  const selectedTech = technicians.data?.find((tech) => tech.id === selectedTechId);
+  const recipientPhone = hasAssignedTech ? technicianPhone : selectedTech?.phone_number;
+  const recipientName = hasAssignedTech ? technicianName : selectedTech?.name;
+  const validRecipient = normalizePhoneE164(recipientPhone ?? "");
 
   // Resolve signed URLs for every photo once the dialog opens. We use the
   // originals (no transform): the extension size-batches them and Quo resizes
@@ -49,6 +64,8 @@ export default function QuoPhotoSendDialog({
     if (!open) return;
     let active = true;
     setLoading(true);
+    setUrls([]);
+    setSelected(new Set());
     (async () => {
       try {
         const { getSignedUrls } = await import("@/lib/storage");
@@ -93,17 +110,18 @@ export default function QuoPhotoSendDialog({
   };
 
   const handleSend = async () => {
-    if (selectedUrls.length === 0) return;
+    if (selectedUrls.length === 0 || !validRecipient) return;
     setSending(true);
     const toastId = toast.loading(
-      `Sending ${selectedUrls.length} photo${selectedUrls.length === 1 ? "" : "s"} to Quo…`,
+      `Sending ${selectedUrls.length} photo${selectedUrls.length === 1 ? "" : "s"} to technician ${recipientName || validRecipient}…`,
     );
     try {
-      const res = await sendQuoAttachmentsViaExtension(chatUrl, selectedUrls);
+      const chatUrl = await resolveTechPhotoChat(validRecipient);
+      const res = await sendQuoAttachmentsViaExtension(chatUrl, selectedUrls, validRecipient);
       if (res.success) {
         const n = res.sent ?? selectedUrls.length;
         toast.success(
-          `Sent ${n} photo${n === 1 ? "" : "s"} to Quo.`,
+          `Sent ${n} photo${n === 1 ? "" : "s"} to technician ${recipientName || validRecipient}.`,
           { id: toastId },
         );
         onOpenChange(false);
@@ -125,12 +143,12 @@ export default function QuoPhotoSendDialog({
 
   return (
     <>
-      <Dialog open={open} onOpenChange={onOpenChange}>
+      <Dialog open={open} onOpenChange={(nextOpen) => { if (!sending) onOpenChange(nextOpen); }}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-base">
               <Images className="h-4 w-4 text-primary" />
-              Send photos to Quo{contactLabel ? ` · ${contactLabel}` : ""}
+              Send photos to technician{recipientName ? ` · ${recipientName}` : ""}
             </DialogTitle>
             <DialogDescription className="text-xs">
               Select the photos to attach. The Donut extension drops them straight into the
@@ -138,6 +156,29 @@ export default function QuoPhotoSendDialog({
               per message, so larger sets go out as several messages automatically.
             </DialogDescription>
           </DialogHeader>
+
+          {hasAssignedTech ? (
+            <p className="text-sm">Assigned technician: <strong>{recipientName || "Technician"}</strong> · {recipientPhone || "No phone number"}
+              {!validRecipient && <span className="block text-destructive">Update the assigned technician's phone number before sending.</span>}
+            </p>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-sm text-muted-foreground">No technician is assigned. Select a technician to receive these photos.</p>
+              <Select value={selectedTechId} onValueChange={setSelectedTechId} disabled={sending || technicians.isLoading}>
+                <SelectTrigger aria-label="Photo recipient technician"><SelectValue placeholder="Select technician" /></SelectTrigger>
+                <SelectContent>
+                  {technicians.data?.filter((tech) => tech.is_active !== false && normalizePhoneE164(tech.phone_number ?? "")).map((tech) => (
+                    <SelectItem key={tech.id} value={tech.id}>{tech.name} · {tech.phone_number} · {tech.area}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {technicians.isError && <p className="text-sm text-destructive">Couldn't load technicians. Reopen the dialog to retry.</p>}
+              {technicians.isSuccess && !technicians.data.some((tech) => tech.is_active !== false && normalizePhoneE164(tech.phone_number ?? "")) && (
+                <p className="text-sm text-muted-foreground">No accessible active technicians have a valid phone number.</p>
+              )}
+              {selectedTech && <p className="text-xs text-muted-foreground">Photo recipient only; this does not change the lead's assignment.</p>}
+            </div>
+          )}
 
           {loading ? (
             <div className="flex h-48 items-center justify-center gap-2 text-sm text-muted-foreground">
@@ -220,7 +261,7 @@ export default function QuoPhotoSendDialog({
             <Button
               size="sm"
               onClick={() => void handleSend()}
-              disabled={sending || selectedCount === 0}
+              disabled={sending || loading || selectedCount === 0 || !validRecipient}
               className="gap-1.5"
             >
               {sending ? (
@@ -228,7 +269,7 @@ export default function QuoPhotoSendDialog({
               ) : (
                 <Send className="h-4 w-4" />
               )}
-              Send {selectedCount > 0 ? selectedCount : ""} to Quo
+              Send {selectedCount > 0 ? selectedCount : ""} to technician
             </Button>
           </DialogFooter>
         </DialogContent>

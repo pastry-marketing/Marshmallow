@@ -92,7 +92,6 @@ import { History } from "lucide-react";
 import LeadStatusHistoryDialog from "./LeadStatusHistoryDialog";
 import ImageLightbox from "./ImageLightbox";
 import QuoPhotoSendDialog from "./QuoPhotoSendDialog";
-import { isQuoChatUrl } from "@/lib/quo-attachments";
 import LeadCoverageBadge from "./LeadCoverageBadge";
 import UrgentAICheckDialog from "./UrgentAICheckDialog";
 import { showsUrgentCheck } from "@/lib/urgent-verification";
@@ -1826,7 +1825,7 @@ function LeadCard({
 
         {(lead.payment_screenshot_url || photoPaths.length > 0) && (
           <div className="relative flex flex-wrap gap-2 border-t border-border/55 px-4 py-3">
-                {photoPaths.length > 0 && isQuoChatUrl(lead.source_url) && (
+                {photoPaths.length > 0 && hasTechQuickChatAccess && (
                   <Button
                     type="button"
                     size="sm"
@@ -1836,10 +1835,10 @@ function LeadCard({
                       e.preventDefault();
                       setQuoPhotoDialogOpen(true);
                     }}
-                    title="Review and send all photos to Quo in one go"
+                    title="Review and send photos to the assigned technician via Quo"
                   >
                     <Images className="h-2.5 w-2.5" />
-                    Send {photoPaths.length} to Quo
+                    Send {photoPaths.length} to tech
                   </Button>
                 )}
 
@@ -1900,8 +1899,8 @@ function LeadCard({
             open={quoPhotoDialogOpen}
             onOpenChange={setQuoPhotoDialogOpen}
             photoPaths={photoPaths}
-            chatUrl={lead.source_url ?? ""}
-            contactLabel={lead.customer_name ?? undefined}
+            technicianPhone={lead.tech_number}
+            technicianName={lead.tech_name}
           />
         )}
 

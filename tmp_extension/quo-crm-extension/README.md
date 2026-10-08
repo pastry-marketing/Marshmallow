@@ -120,15 +120,22 @@ Important behavior:
 
 ## Bulk photo send (CRM → Quo)
 
-The CRM's lead card has a **Send N to Quo** button on leads that have photos and a
-Quo chat thread. It hands the photos to this extension so they land in the Quo
+The CRM's lead card has a **Send N to tech** button for users with technician
+Quick Chat access. It uses the assigned technician's `tech_name` / `tech_number`,
+never the customer's `source_url`. If no technician is assigned, the dialog
+requires selecting an accessible active technician (for this send only; the lead's
+assignment is not changed). The recipient's name and number appear before sending.
+It hands the photos to this extension so they land in the technician's Quo
 composer in one shot — no copying and pasting one image at a time (the OS
 clipboard only holds a single image, so "copy all / paste once" is impossible
 without the extension).
 
 Flow:
 
-1. CRM posts `window.postMessage({ action: "QUO_SEND_ATTACHMENTS", chatUrl, imageUrls })`.
+1. CRM resolves an exact conversation matching the technician's normalized phone
+   on the technician communications line, then posts
+   `window.postMessage({ action: "QUO_SEND_ATTACHMENTS", chatUrl, imageUrls, recipientType: "tech", technicianPhone })`.
+   Missing conversations produce an instruction to open the technician chat in Quo first.
 2. `crm-bridge.js` forwards it to the background worker as `QUO_SEND_ATTACHMENTS`.
 3. `background.js` (`handleQuoSendAttachments`) downloads each signed URL (CORS-free
    in the service worker via `host_permissions`), splits them into Quo-sized
@@ -147,6 +154,10 @@ Notes / things to verify after a Quo UI change:
   the attachments are accepted), so an empty message is never sent. If delivery
   can't be confirmed the user is told to check the thread before resending.
 - The per-photo copy buttons on the lead card remain as a manual fallback.
+- Reload Donut **1.2.1** in `chrome://extensions`, then refresh the CRM and Quo tabs.
+  The updated extension rejects old customer-targeted attachment requests and
+  requires an exact technician conversation. It checks the conversation again
+  before attaching and before clicking Send, including for each later batch.
 
 ## Example API test with cURL
 

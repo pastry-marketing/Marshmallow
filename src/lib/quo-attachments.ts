@@ -25,9 +25,8 @@ export interface QuoAttachmentsResponse {
 }
 
 /**
- * Whether a lead's source_url points at a Quo conversation we can send into.
- * We only surface the "Send to Quo" action for these, so a stray link never
- * routes photos to the wrong place.
+ * Whether a URL belongs to Quo. Recipient resolution is handled separately:
+ * job photos must use the technician conversation, never lead.source_url.
  */
 export function isQuoChatUrl(url?: string | null): boolean {
   if (!url) return false;
@@ -74,7 +73,7 @@ export function batchForQuo<T extends { size?: number }>(
 }
 
 /**
- * Ask the Donut extension to attach + send the given images into a Quo chat.
+ * Ask the Donut extension to attach + send images into a resolved technician chat.
  * Resolves when the extension reports back, or after `timeoutMs` if the
  * extension never answers (not installed / CRM page needs a refresh).
  *
@@ -85,11 +84,12 @@ export function batchForQuo<T extends { size?: number }>(
 export function sendQuoAttachmentsViaExtension(
   chatUrl: string,
   imageUrls: string[],
+  technicianPhone: string,
   timeoutMs = 90000,
 ): Promise<QuoAttachmentsResponse> {
   return new Promise((resolve) => {
-    if (!chatUrl || chatUrl === "#") {
-      resolve({ success: false, error: "No Quo chat is linked to this lead." });
+    if (!isQuoChatUrl(chatUrl) || !/\/c\/[^/]+\/?$/.test(new URL(chatUrl).pathname) || !/^\+\d{8,15}$/.test(technicianPhone)) {
+      resolve({ success: false, error: "Select a technician with a linked Quo conversation." });
       return;
     }
     if (!imageUrls || imageUrls.length === 0) {
@@ -129,6 +129,8 @@ export function sendQuoAttachmentsViaExtension(
           action: "QUO_SEND_ATTACHMENTS",
           chatUrl,
           imageUrls,
+          recipientType: "tech",
+          technicianPhone,
         },
         "*",
       );

@@ -1242,9 +1242,16 @@ function batchImages(images) {
 }
 
 async function handleQuoSendAttachments(message) {
-  const { chatUrl, imageUrls } = message;
+  const { chatUrl, imageUrls, recipientType, technicianPhone } = message;
 
-  if (!chatUrl) return { success: false, error: "No Quo chat is linked to this lead." };
+  if (recipientType !== "tech" || !/^\+\d{8,15}$/.test(technicianPhone || "")) {
+    return { success: false, error: "Photo sending requires a selected technician. Refresh the CRM and try again." };
+  }
+  let targetUrl;
+  try { targetUrl = new URL(chatUrl); } catch (_) { /* invalid URL */ }
+  if (!targetUrl || targetUrl.origin !== "https://my.quo.com" || !conversationIdFromUrl(chatUrl)) {
+    return { success: false, error: "An exact technician Quo conversation is required to send photos." };
+  }
   if (!Array.isArray(imageUrls) || imageUrls.length === 0) {
     return { success: false, error: "No photos were provided to send." };
   }
@@ -1302,6 +1309,8 @@ async function handleQuoSendAttachments(message) {
     const result = await sendMessageWithRetry(tab.id, {
       type: "NAVIGATE_AND_SEND_ATTACHMENTS",
       chatUrl,
+      recipientType,
+      technicianPhone,
       images: batches[b],
       // Only the first batch may still need the SPA to settle on the chat; later
       // batches reuse the same loaded conversation.

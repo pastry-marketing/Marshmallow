@@ -702,7 +702,7 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
       });
       return true; // Keep message channel open for async response
     } else if (message?.type === "NAVIGATE_AND_SEND_ATTACHMENTS") {
-      handleNavigateAndSendAttachments(message.chatUrl, message.images, message.navigationPrepared).then(result => {
+      handleNavigateAndSendAttachments(message.chatUrl, message.images, message.navigationPrepared, message.recipientType, message.technicianPhone).then(result => {
         sendResponse(result || { success: true });
       });
       return true; // Keep message channel open for async response
@@ -1626,15 +1626,20 @@ async function injectAttachments(editor, files) {
   return null;
 }
 
-async function handleNavigateAndSendAttachments(chatUrl, images, navigationPrepared = false) {
+async function handleNavigateAndSendAttachments(chatUrl, images, navigationPrepared = false, recipientType, technicianPhone) {
   try {
+    // Attachment sends are technician-only and must target a resolved conversation.
+    // Never use the currently open customer composer or a phone-search fallback.
+    if (window.top !== window) return { success: false, error: "Photos must be sent from the main Quo frame." };
+    if (recipientType !== "tech" || !/^\+\d{8,15}$/.test(technicianPhone || "") || !getConversationId(chatUrl)) {
+      return { success: false, error: "Select a technician with an exact Quo conversation before sending photos." };
+    }
     if (!Array.isArray(images) || images.length === 0) {
       return { success: false, error: "No images were provided to attach." };
     }
 
     // 1. Make sure we are on the right conversation (mirrors the text-send path).
     const convId = getConversationId(chatUrl);
-    const targetPhone = phoneFromChatUrl(chatUrl);
     const isTopFrame = window.top === window;
     const onTarget = () => (convId
       ? getConversationId(window.location.href) === convId
@@ -1652,12 +1657,6 @@ async function handleNavigateAndSendAttachments(chatUrl, images, navigationPrepa
 
     if (isTopFrame && convId && !onTarget()) {
       return { success: false, retryable: true, error: "The requested Quo conversation did not finish loading." };
-    }
-
-    if (isTopFrame && !convId && targetPhone) {
-      if (!await openConversationForPhone(targetPhone)) {
-        return { success: false, error: `Could not find the customer conversation for ${targetPhone} in this Quo inbox.` };
-      }
     }
 
     const editor = await waitForAny(COMPOSER_SELECTORS, 3000);
@@ -1678,6 +1677,7 @@ async function handleNavigateAndSendAttachments(chatUrl, images, navigationPrepa
     const baselinePreviews = countAttachmentPreviews();
 
     // 3. Feed the Files into Quo.
+    if (!onTarget()) return { success: false, error: "The technician conversation changed before attaching photos. Try again." };
     const method = await injectAttachments(editor, files);
     if (!method) {
       return { success: false, error: "Couldn't attach the photos to the Quo composer." };
@@ -1705,6 +1705,7 @@ async function handleNavigateAndSendAttachments(chatUrl, images, navigationPrepa
         error: "The photos didn't attach in Quo (Send never enabled). Use the per-photo copy buttons as a fallback.",
       };
     }
+    if (!onTarget()) return { success: false, error: "The technician conversation changed before sending. Photos were not sent." };
     sendButton.click();
     console.log("[Donut] clicked Send for attachments.");
 

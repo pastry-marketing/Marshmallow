@@ -1,9 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   isQuoChatUrl,
   batchForQuo,
   QUO_MAX_IMAGES_PER_MESSAGE,
   QUO_MAX_BYTES_PER_MESSAGE,
+  sendQuoAttachmentsViaExtension,
 } from "./quo-attachments";
 
 describe("isQuoChatUrl", () => {
@@ -27,6 +28,30 @@ describe("isQuoChatUrl", () => {
   it("does not treat a lookalike host as Quo", () => {
     expect(isQuoChatUrl("https://notquo.com/x")).toBe(false);
     expect(isQuoChatUrl("https://quo.com.evil.test/x")).toBe(false);
+  });
+});
+
+describe("technician attachment transport", () => {
+  it("rejects phone-search and non-Quo links before contacting the extension", async () => {
+    const post = vi.spyOn(window, "postMessage");
+    for (const url of ["https://my.quo.com/inbox?phone=14155550123", "https://example.com/c/chat"]) {
+      expect((await sendQuoAttachmentsViaExtension(url, ["photo"], "+14155550123")).success).toBe(false);
+    }
+    expect(post).not.toHaveBeenCalled();
+    post.mockRestore();
+  });
+
+  it("passes technician recipient metadata with the exact conversation", async () => {
+    const post = vi.spyOn(window, "postMessage").mockImplementation(() => {});
+    const result = sendQuoAttachmentsViaExtension("https://my.quo.com/inbox/PN-tech/c/tech-chat", ["photo"], "+14155550123");
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      recipientType: "tech", technicianPhone: "+14155550123", chatUrl: "https://my.quo.com/inbox/PN-tech/c/tech-chat",
+    }), "*");
+    window.dispatchEvent(new MessageEvent("message", {
+      source: window, data: { action: "QUO_SEND_ATTACHMENTS_RESPONSE", success: true, sent: 1 },
+    }));
+    await expect(result).resolves.toEqual({ success: true, sent: 1, error: undefined });
+    post.mockRestore();
   });
 });
 
