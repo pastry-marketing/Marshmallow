@@ -69,6 +69,8 @@ import QuoteAssistantDialog from "./QuoteAssistantDialog";
 import { canUseQuoteAssistant } from "@/lib/ai/quote-assistant";
 import ScheduleAssistantDialog from "./ScheduleAssistantDialog";
 import { canUseScheduleAssistant } from "@/lib/ai/schedule-assistant";
+import LeadScoreDialog from "./LeadScoreDialog";
+import { canUseLeadScoring } from "@/lib/ai/lead-scoring";
 
 interface Props {
   leadId: string;
@@ -176,6 +178,7 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
   const [saved, setSaved] = useState(false);
   const [quoteAssistantOpen, setQuoteAssistantOpen] = useState(false);
   const [scheduleAssistantOpen, setScheduleAssistantOpen] = useState(false);
+  const [leadScoreOpen, setLeadScoreOpen] = useState(false);
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [paymentLoading, setPaymentLoading] = useState(false);
   const [cancelRequestOpen, setCancelRequestOpen] = useState(false);
@@ -966,7 +969,22 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
               </div>
 
               <div className="space-y-1.5">
-                <Label className={labelClass}>Service Type</Label>
+                <div className="flex items-center justify-between gap-2">
+                  <Label className={labelClass}>Service Type</Label>
+                  {canUseLeadScoring(role) && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setLeadScoreOpen(true)}
+                      className="h-6 gap-1 px-1.5 text-[11px] text-primary hover:bg-primary/10"
+                      title="Score this lead's follow-up priority"
+                    >
+                      <Sparkles className="h-3 w-3" />
+                      Score lead
+                    </Button>
+                  )}
+                </div>
                 <ServiceCombobox
                   value={form.service_type ?? ""}
                   onChange={(val) => update("service_type", val)}
@@ -1423,6 +1441,10 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
             onOpenChange={setScheduleAssistantOpen}
             leadId={leadId}
           />
+        )}
+
+        {leadScoreOpen && (
+          <LeadScoreDialog open={leadScoreOpen} onOpenChange={setLeadScoreOpen} leadId={leadId} />
         )}
 
         <CancellationRequestSheet
