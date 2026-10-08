@@ -25,6 +25,14 @@ import {
   type ReplySuggestion,
 } from "@/lib/ai/reply-suggestions";
 import {
+  fetchConversationTriage,
+  canUseTriage,
+  TRIAGE_INTENT_LABELS,
+  TRIAGE_URGENCY_LABELS,
+  TRIAGE_URGENCY_CLASS,
+  type ConversationTriage,
+} from "@/lib/ai/conversation-triage";
+import {
   formatEasternTime,
   formatLocalRelativeTime,
   formatUsPhone,
@@ -88,9 +96,20 @@ export default function QuoChatDialog({
   const [suggestNote, setSuggestNote] = useState("");
   const showSuggestButton = canUseReplySuggestions(role);
 
+  // AI conversation triage (roadmap feature 02). Advisory: the suggestion is
+  // shown; the agent decides whether to act on it.
+  const [triaging, setTriaging] = useState(false);
+  const [triage, setTriage] = useState<ConversationTriage | null>(null);
+  const showTriageButton = canUseTriage(role);
+
   // Fetch messages when conversation changes or opens
   useEffect(() => {
     if (!open || !conversation?.id) return;
+
+    // A different chat is open now — clear any AI output from the previous one.
+    setSuggestions([]);
+    setSuggestNote("");
+    setTriage(null);
 
     let isCancelled = false;
 
@@ -286,6 +305,18 @@ export default function QuoChatDialog({
     setSuggestNote("");
   };
 
+  const handleTriage = async () => {
+    if (!conversation?.id || triaging) return;
+    setTriaging(true);
+    try {
+      setTriage(await fetchConversationTriage(conversation.id));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not triage this chat.");
+    } finally {
+      setTriaging(false);
+    }
+  };
+
   if (!conversation) return null;
 
   const currentStatusKey = normalizeQuoLeadStatus(conversation.status);
@@ -438,9 +469,50 @@ export default function QuoChatDialog({
           )}
         </div>
 
-        {/* AI reply suggestions (advisory — loads a draft into the composer) */}
-        {showSuggestButton && (
+        {/* AI assist (advisory). Reply suggestions load a draft into the
+            composer; triage suggests how to sort the chat. Both are shown to
+            the agent, who decides — nothing is sent or saved automatically. */}
+        {(showSuggestButton || showTriageButton) && (
           <div className="px-3 pt-2 border-t border-border/40 bg-background/60 shrink-0">
+            {triage && (
+              <div className="mb-2 rounded-lg border border-primary/20 bg-primary/[0.04] p-2">
+                <div className="mb-1 flex items-center justify-between">
+                  <span className="flex items-center gap-1 text-[11px] font-semibold text-muted-foreground">
+                    <Sparkles className="h-3 w-3 text-primary" /> Triage suggestion
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setTriage(null)}
+                    className="text-muted-foreground hover:text-foreground"
+                    aria-label="Dismiss triage"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Badge
+                    variant="outline"
+                    className={`text-[10px] font-semibold ${QUO_LEAD_STATUS_CONFIG[normalizeQuoLeadStatus(triage.status)].badgeClass}`}
+                  >
+                    {QUO_LEAD_STATUS_CONFIG[normalizeQuoLeadStatus(triage.status)].label}
+                  </Badge>
+                  <Badge variant="secondary" className="text-[10px] font-medium">
+                    {TRIAGE_INTENT_LABELS[triage.intent] ?? triage.intent}
+                  </Badge>
+                  <Badge variant="outline" className={`text-[10px] font-medium ${TRIAGE_URGENCY_CLASS[triage.urgency]}`}>
+                    {TRIAGE_URGENCY_LABELS[triage.urgency]}
+                  </Badge>
+                  {triage.serviceType && (
+                    <Badge variant="outline" className="text-[10px] font-medium border-border/70">
+                      {triage.serviceType}
+                    </Badge>
+                  )}
+                </div>
+                {triage.reason && (
+                  <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">{triage.reason}</p>
+                )}
+              </div>
+            )}
             {suggestions.length > 0 && (
               <div className="mb-2 space-y-1.5">
                 <div className="flex items-center justify-between">
@@ -477,22 +549,44 @@ export default function QuoChatDialog({
             {suggestNote && suggestions.length === 0 && (
               <p className="mb-2 text-[11px] italic text-muted-foreground">{suggestNote}</p>
             )}
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={handleSuggestReply}
-              disabled={suggesting || sending}
-              className="h-7 gap-1.5 text-xs text-primary hover:bg-primary/10"
-              title="Draft on-brand reply options you can edit before sending"
-            >
-              {suggesting ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Sparkles className="h-3.5 w-3.5" />
+            <div className="flex items-center gap-1">
+              {showSuggestButton && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleSuggestReply}
+                  disabled={suggesting || sending}
+                  className="h-7 gap-1.5 text-xs text-primary hover:bg-primary/10"
+                  title="Draft on-brand reply options you can edit before sending"
+                >
+                  {suggesting ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-3.5 w-3.5" />
+                  )}
+                  {suggesting ? "Drafting…" : suggestions.length > 0 ? "Suggest again" : "Suggest reply"}
+                </Button>
               )}
-              {suggesting ? "Drafting…" : suggestions.length > 0 ? "Suggest again" : "Suggest reply"}
-            </Button>
+              {showTriageButton && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleTriage}
+                  disabled={triaging}
+                  className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                  title="Suggest a status, intent, service and urgency for this chat"
+                >
+                  {triaging ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-3.5 w-3.5" />
+                  )}
+                  {triaging ? "Triaging…" : triage ? "Re-triage" : "Triage"}
+                </Button>
+              )}
+            </div>
           </div>
         )}
 
