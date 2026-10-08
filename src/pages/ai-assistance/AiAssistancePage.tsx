@@ -72,6 +72,7 @@ import {
 } from "@/lib/cs-missed";
 import QuoChatDialog from "@/components/quo-dashboard/QuoChatDialog";
 import RenderEmoji from "@/components/common/RenderEmoji";
+import ShiftBriefingCard from "@/components/ai-assistance/ShiftBriefingCard";
 
 type TypeFilter = "all" | "missed_call" | "unanswered_text" | "new_lead";
 
@@ -262,6 +263,9 @@ export default function AiAssistancePage() {
           </Button>
         </div>
       </motion.section>
+
+      {/* Start-of-shift briefing (roadmap feature 03) */}
+      <ShiftBriefingCard />
 
       {/* KPI cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
