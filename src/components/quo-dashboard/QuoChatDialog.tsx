@@ -16,8 +16,14 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { Loader2, Send, MessageSquare, User, Phone, CheckCheck, Clock, ChevronDown } from "lucide-react";
+import { Loader2, Send, MessageSquare, User, Phone, CheckCheck, Clock, ChevronDown, Sparkles, X } from "lucide-react";
 import { toast } from "sonner";
+import { useAuth } from "@/contexts/AuthContext";
+import {
+  fetchReplySuggestions,
+  canUseReplySuggestions,
+  type ReplySuggestion,
+} from "@/lib/ai/reply-suggestions";
 import {
   formatEasternTime,
   formatLocalRelativeTime,
@@ -73,6 +79,14 @@ export default function QuoChatDialog({
   const [lightboxImages, setLightboxImages] = useState<string[]>([]);
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  // AI reply suggestions (roadmap feature 01). Advisory: a draft loads into the
+  // composer for the agent to edit and send — this never sends on its own.
+  const { role } = useAuth();
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestions, setSuggestions] = useState<ReplySuggestion[]>([]);
+  const [suggestNote, setSuggestNote] = useState("");
+  const showSuggestButton = canUseReplySuggestions(role);
 
   // Fetch messages when conversation changes or opens
   useEffect(() => {
@@ -248,6 +262,30 @@ export default function QuoChatDialog({
     }
   };
 
+  const handleSuggestReply = async () => {
+    if (!conversation?.id || suggesting) return;
+    setSuggesting(true);
+    setSuggestNote("");
+    try {
+      const result = await fetchReplySuggestions(conversation.id);
+      setSuggestions(result.suggestions);
+      setSuggestNote(result.note);
+      if (result.suggestions.length === 0 && !result.note) {
+        toast.message("No reply suggestions for this chat.");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not draft a reply.");
+    } finally {
+      setSuggesting(false);
+    }
+  };
+
+  const applySuggestion = (text: string) => {
+    setNewMessage(text);
+    setSuggestions([]);
+    setSuggestNote("");
+  };
+
   if (!conversation) return null;
 
   const currentStatusKey = normalizeQuoLeadStatus(conversation.status);
@@ -399,6 +437,64 @@ export default function QuoChatDialog({
             })
           )}
         </div>
+
+        {/* AI reply suggestions (advisory — loads a draft into the composer) */}
+        {showSuggestButton && (
+          <div className="px-3 pt-2 border-t border-border/40 bg-background/60 shrink-0">
+            {suggestions.length > 0 && (
+              <div className="mb-2 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold text-muted-foreground flex items-center gap-1">
+                    <Sparkles className="h-3 w-3 text-primary" /> Suggested replies · pick one to edit
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSuggestions([]);
+                      setSuggestNote("");
+                    }}
+                    className="text-muted-foreground hover:text-foreground"
+                    aria-label="Dismiss suggestions"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                {suggestions.map((s, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => applySuggestion(s.text)}
+                    className="w-full text-left rounded-lg border border-border/60 bg-muted/40 px-2.5 py-1.5 transition-colors hover:border-primary/30 hover:bg-primary/10"
+                  >
+                    <span className="block text-[10px] font-semibold uppercase tracking-wide text-primary/80">
+                      {s.tone}
+                    </span>
+                    <span className="block whitespace-pre-wrap text-xs text-foreground">{s.text}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {suggestNote && suggestions.length === 0 && (
+              <p className="mb-2 text-[11px] italic text-muted-foreground">{suggestNote}</p>
+            )}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={handleSuggestReply}
+              disabled={suggesting || sending}
+              className="h-7 gap-1.5 text-xs text-primary hover:bg-primary/10"
+              title="Draft on-brand reply options you can edit before sending"
+            >
+              {suggesting ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="h-3.5 w-3.5" />
+              )}
+              {suggesting ? "Drafting…" : suggestions.length > 0 ? "Suggest again" : "Suggest reply"}
+            </Button>
+          </div>
+        )}
 
         {/* Chat Input Footer */}
         <form
