@@ -65,6 +65,8 @@ import {
 import { updateLeadById } from "@/lib/lead-updates";
 import { dispatchLeadStatusNotification } from "@/lib/lead-notifications";
 import { requestQuoteApproval } from "@/lib/quote-approval-requests";
+import QuoteAssistantDialog from "./QuoteAssistantDialog";
+import { canUseQuoteAssistant } from "@/lib/ai/quote-assistant";
 
 interface Props {
   leadId: string;
@@ -170,6 +172,7 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
   const queryClient = useQueryClient();
 
   const [saved, setSaved] = useState(false);
+  const [quoteAssistantOpen, setQuoteAssistantOpen] = useState(false);
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [paymentLoading, setPaymentLoading] = useState(false);
   const [cancelRequestOpen, setCancelRequestOpen] = useState(false);
@@ -970,7 +973,22 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
               </div>
 
               <div className="space-y-1.5">
-                <Label className={labelClass}>Quote</Label>
+                <div className="flex items-center justify-between gap-2">
+                  <Label className={labelClass}>Quote</Label>
+                  {canUseQuoteAssistant(role) && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setQuoteAssistantOpen(true)}
+                      className="h-6 gap-1 px-1.5 text-[11px] text-primary hover:bg-primary/10"
+                      title="Draft an estimate from comparable past paid jobs"
+                    >
+                      <Sparkles className="h-3 w-3" />
+                      Draft estimate
+                    </Button>
+                  )}
+                </div>
                 <Input
                   value={form.quote ?? ""}
                   onChange={(e) => update("quote", e.target.value)}
@@ -1372,6 +1390,14 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
           loading={paymentLoading}
           mode={isProcessor ? "request" : "direct"}
         />
+
+        {quoteAssistantOpen && (
+          <QuoteAssistantDialog
+            open={quoteAssistantOpen}
+            onOpenChange={setQuoteAssistantOpen}
+            leadId={leadId}
+          />
+        )}
 
         <CancellationRequestSheet
           open={cancelRequestOpen}
