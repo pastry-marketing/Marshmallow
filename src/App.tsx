@@ -23,6 +23,7 @@ import QuoteApprovalRequests from "@/pages/QuoteApprovalRequests";
 import TechnicianChangeApprovals from "@/pages/TechnicianChangeApprovals";
 import UrgentReviewRequests from "@/pages/UrgentReviewRequests";
 import QuoMonitorPage from "@/pages/quo-monitor/QuoMonitorPage";
+import AiAssistancePage from "@/pages/ai-assistance/AiAssistancePage";
 import CrmUpdates from "@/pages/CrmUpdates";
 import MapViewPage from "@/pages/MapViewPage";
 import TechniciansPage from "@/pages/TechniciansPage";
@@ -132,6 +133,7 @@ const App = () => (
               <Route path="activity-logs" element={<PageRoute navItem="activity_logs"><ActivityLogs /></PageRoute>} />
               <Route path="quo-monitor" element={<PageRoute navItem="quo_monitor"><QuoMonitorPage /></PageRoute>} />
               <Route path="quo-dashboard" element={<PageRoute navItem="quo_monitor"><QuoMonitorPage /></PageRoute>} />
+              <Route path="ai-assistance" element={<PageRoute navItem="ai_assistance"><AiAssistancePage /></PageRoute>} />
               <Route path="lead-cancellation-requests" element={<PageRoute navItem="cancellation_requests"><LeadCancellationRequests /></PageRoute>} />
               <Route path="lead-payment-requests" element={<PageRoute navItem="payment_requests"><LeadPaymentRequests /></PageRoute>} />
               <Route path="quote-approval" element={<PageRoute navItem="quote_approval_requests"><QuoteApprovalRequests /></PageRoute>} />

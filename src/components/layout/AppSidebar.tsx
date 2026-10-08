@@ -60,6 +60,7 @@ import ChangePasswordDialog from "@/components/auth/ChangePasswordDialog";
 const getNavItems = (role: string) => [
   { title: "All Leads", url: "/leads", icon: Users, navKey: "leads", group: "Work" },
   { title: "QUO Inbox", url: "/quo-monitor", icon: MessageSquare, navKey: "quo_monitor", group: "Work" },
+  { title: "AI Assistance", url: "/ai-assistance", icon: Sparkles, navKey: "ai_assistance", group: "Work" },
   { title: "Schedule", url: "/schedule", icon: Calendar, navKey: "schedule", group: "Work" },
   { title: "Map View", url: "/map-view", icon: MapIcon, navKey: "map_view", group: "Work" },
   { title: "Cancellation requests", url: "/lead-cancellation-requests", icon: ClipboardX, navKey: "cancellation_requests", group: "Review" },
@@ -208,6 +209,28 @@ export default function AppSidebar() {
         return 0;
       }
       return Array.isArray(data) ? data.length : 0;
+    },
+    refetchInterval: 30000,
+  });
+
+  // AI Assistance missed-lead count (Admin + CS Admin only). Uses the same
+  // SECURITY DEFINER function the page counts through, with the default 24h
+  // window, so the badge matches the list a CS Admin opens at shift start.
+  const canSeeAiAssistance = role === "admin" || role === "cs_admin" || role === "customer_service";
+  const { data: missedFollowupCount = 0 } = useQuery({
+    queryKey: ["cs-missed-followup-count"],
+    enabled: canSeeAiAssistance,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("get_cs_missed_followup_count" as never, {
+        p_since: null,
+        p_until: null,
+        p_number_ids: null,
+      } as never);
+      if (error) {
+        console.error("Error fetching missed follow-up count:", error.message);
+        return 0;
+      }
+      return typeof data === "number" ? data : 0;
     },
     refetchInterval: 30000,
   });
@@ -550,6 +573,12 @@ export default function AppSidebar() {
                                     <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500 shadow-[0_0_6px_#f43f5e]"></span>
                                   </span>
                                 )}
+                                {item.navKey === "ai_assistance" && missedFollowupCount > 0 && collapsed && (
+                                  <span className="absolute -top-1.5 -right-1.5 flex h-2 w-2 z-20">
+                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                                    <span className="relative inline-flex rounded-full h-2 w-2 bg-primary shadow-[0_0_6px_hsl(var(--primary))]"></span>
+                                  </span>
+                                )}
                                 {isNeedAttention && needAttentionCount > 0 && collapsed && (
                                 <span className="absolute -top-1.5 -right-1.5 flex h-2 w-2 z-20">
                                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
@@ -591,6 +620,12 @@ export default function AppSidebar() {
                                         <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500 shadow-[0_0_8px_#f43f5e]"></span>
                                       </span>
                                     )}
+                                    {item.navKey === "ai_assistance" && missedFollowupCount > 0 && (
+                                      <span className="relative flex h-2 w-2 shrink-0">
+                                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                                        <span className="relative inline-flex rounded-full h-2 w-2 bg-primary shadow-[0_0_8px_hsl(var(--primary))]"></span>
+                                      </span>
+                                    )}
                                   {isNeedAttention && needAttentionCount > 0 && (
                                     <span className="relative flex h-2 w-2 shrink-0">
                                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
@@ -601,6 +636,11 @@ export default function AppSidebar() {
                                   {isNeedAttention && needAttentionCount > 0 && (
                                     <span className="ml-auto shrink-0 rounded-full bg-rose-500/15 px-1.5 py-0.5 text-[10px] font-bold leading-none text-rose-600 dark:text-rose-300">
                                       {needAttentionCount}
+                                    </span>
+                                  )}
+                                  {item.navKey === "ai_assistance" && missedFollowupCount > 0 && (
+                                    <span className="ml-auto shrink-0 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-bold leading-none text-primary">
+                                      {missedFollowupCount}
                                     </span>
                                   )}
                                 </span>
