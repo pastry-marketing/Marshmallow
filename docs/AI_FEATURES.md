@@ -69,6 +69,55 @@ the Copilot uses two cheap calls (plan + answer). Existing budget settings in
 `quo_ai_settings` (`daily_call_limit`, `monthly_budget_*`) are not wired into
 these on-demand calls — they stay cheap by being user-initiated.
 
+### Estimated daily cost (our system)
+
+**Pricing basis:** `gpt-4o-mini` at **$0.15 / 1M input tokens** and **$0.60 / 1M
+output tokens** (OpenAI list price, Jan 2026). Token counts below are per-call
+estimates from the actual prompts + typical context; output is small JSON. The
+~50% prompt-caching discount on repeated system prompts is **not** assumed, so
+these are conservative.
+
+**Volume basis (30-day averages, as of 2026-10-08):** 54 new leads/day,
+~1,259 customer messages/day, ~367 active conversations/day, ~348 new
+conversations/day, 79 urgent leads, ~13.5 paid jobs/day. These features are
+on-demand, so cost tracks *adoption*, not raw volume — the "calls/day" column is
+a realistic staff-usage assumption, not a ceiling.
+
+| # | Feature | ~tokens (in/out) | $/call | assumed calls/day | $/day |
+|---|---------|------------------|--------|-------------------|-------|
+| 01 | Reply Suggestions | 1,600 / 250 | $0.00039 | 80 | $0.031 |
+| 02 | Conversation Triage | 1,600 / 80 | $0.00029 | 70 | $0.020 |
+| 03 | Shift Briefing | 1,500 / 400 | $0.00047 | 15 | $0.007 |
+| 04 | Lead Auto-Fill | 1,550 / 150 | $0.00032 | 25 | $0.008 |
+| 05 | Quote Assistant | 900 / 150 | $0.00023 | 20 | $0.005 |
+| 06 | Schedule Assistant | 750 / 150 | $0.00020 | 20 | $0.004 |
+| 07 | Lead Scoring | 1,400 / 150 | $0.00030 | 20 | $0.006 |
+| 08 | Spam / Scam Detection | 1,600 / 100 | $0.00030 | 15 | $0.004 |
+| 09 | Call Action Items | 2,000 / 250 | $0.00045 | 20 | $0.009 |
+| 10 | Quality Checking | 1,000 / 250 | $0.00030 | 40 | $0.012 |
+| 11 | In-App Copilot (2 calls) | 2,200 / 360 | $0.00055 | 30 | $0.016 |
+| | **Total** | | | **~355 calls** | **≈ $0.12/day** |
+
+**Bottom line:** at realistic adoption, **≈ $0.12/day (~$3.70/month)**.
+
+Scenario range:
+
+- **Light use** (~100 calls/day): **≈ $0.04/day (~$1.2/month)**.
+- **Realistic** (~355 calls/day, table above): **≈ $0.12/day (~$3.70/month)**.
+- **Heavy use** (~1,500 calls/day — triage + reply on most conversations,
+  score/auto-fill most leads): **≈ $0.55/day (~$16/month)**.
+- **At the configured `daily_call_limit` of 500**: **≈ $0.18/day (~$5.4/month)**.
+
+Every scenario sits far under the configured `monthly_budget_hard_cap_usd` of
+$200. The dominant cost driver is the chat-side features (Reply Suggestions,
+Triage, Quality) because conversation volume is high; the lead-side features are
+a few cents a day. If cost ever matters, enabling OpenAI prompt caching on the
+(static) system prompts would cut input cost ~40–50%.
+
+> These are planning estimates. Actual spend depends on how often staff press the
+> buttons and on real prompt/response sizes; watch the OpenAI usage dashboard for
+> the first weeks and adjust the assumptions here.
+
 ## Safety notes
 
 - Customer transcripts are passed as **fenced, untrusted data**; every system
