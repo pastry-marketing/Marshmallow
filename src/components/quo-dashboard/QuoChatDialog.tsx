@@ -16,7 +16,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { Loader2, Send, MessageSquare, User, Phone, CheckCheck, Clock, ChevronDown, Sparkles, X, ShieldAlert } from "lucide-react";
+import { Loader2, Send, MessageSquare, User, Phone, CheckCheck, Clock, ChevronDown, Sparkles, X, ShieldAlert, ListChecks } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -39,6 +39,12 @@ import {
   SPAM_VERDICT_CLASS,
   type SpamCheck,
 } from "@/lib/ai/spam-detection";
+import {
+  fetchCallActionItems,
+  canUseCallActionItems,
+  ACTION_PRIORITY_CLASS,
+  type CallActionItems,
+} from "@/lib/ai/call-action-items";
 import {
   formatEasternTime,
   formatLocalRelativeTime,
@@ -114,6 +120,11 @@ export default function QuoChatDialog({
   const [spamCheck, setSpamCheck] = useState<SpamCheck | null>(null);
   const showSpamButton = canUseSpamDetection(role);
 
+  // AI call action items (roadmap feature 09). Advisory follow-up checklist.
+  const [actionsLoading, setActionsLoading] = useState(false);
+  const [actionItems, setActionItems] = useState<CallActionItems | null>(null);
+  const showActionsButton = canUseCallActionItems(role);
+
   // Fetch messages when conversation changes or opens
   useEffect(() => {
     if (!open || !conversation?.id) return;
@@ -123,6 +134,7 @@ export default function QuoChatDialog({
     setSuggestNote("");
     setTriage(null);
     setSpamCheck(null);
+    setActionItems(null);
 
     let isCancelled = false;
 
@@ -342,6 +354,20 @@ export default function QuoChatDialog({
     }
   };
 
+  const handleActionItems = async () => {
+    if (!conversation?.id || actionsLoading) return;
+    setActionsLoading(true);
+    try {
+      const res = await fetchCallActionItems(conversation.id);
+      setActionItems(res);
+      if (res.items.length === 0) toast.message(res.summary || "No follow-ups found.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not extract action items.");
+    } finally {
+      setActionsLoading(false);
+    }
+  };
+
   if (!conversation) return null;
 
   const currentStatusKey = normalizeQuoLeadStatus(conversation.status);
@@ -497,8 +523,41 @@ export default function QuoChatDialog({
         {/* AI assist (advisory). Reply suggestions load a draft into the
             composer; triage suggests how to sort the chat. Both are shown to
             the agent, who decides — nothing is sent or saved automatically. */}
-        {(showSuggestButton || showTriageButton || showSpamButton) && (
-          <div className="px-3 pt-2 border-t border-border/40 bg-background/60 shrink-0">
+        {(showSuggestButton || showTriageButton || showSpamButton || showActionsButton) && (
+          <div className="px-3 pt-2 border-t border-border/40 bg-background/60 shrink-0 max-h-[40vh] overflow-y-auto">
+            {actionItems && actionItems.items.length > 0 && (
+              <div className="mb-2 rounded-lg border border-border/60 bg-muted/30 p-2">
+                <div className="mb-1 flex items-center justify-between">
+                  <span className="flex items-center gap-1 text-[11px] font-semibold text-muted-foreground">
+                    <ListChecks className="h-3 w-3 text-primary" /> Suggested follow-ups
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setActionItems(null)}
+                    className="text-muted-foreground hover:text-foreground"
+                    aria-label="Dismiss action items"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                <ul className="space-y-1">
+                  {actionItems.items.map((it, i) => (
+                    <li key={i} className="flex items-start gap-1.5 text-[11px]">
+                      <Badge variant="outline" className={`mt-0.5 shrink-0 text-[9px] font-semibold ${ACTION_PRIORITY_CLASS[it.priority]}`}>
+                        {it.priority}
+                      </Badge>
+                      <span className="text-foreground">
+                        {it.action}
+                        {it.owner === "customer" && (
+                          <span className="text-muted-foreground"> · waiting on customer</span>
+                        )}
+                        {it.timing && <span className="text-muted-foreground"> · {it.timing}</span>}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             {spamCheck && (
               <div className="mb-2 rounded-lg border border-border/60 bg-muted/30 p-2">
                 <div className="mb-1 flex items-center justify-between">
@@ -609,7 +668,7 @@ export default function QuoChatDialog({
             {suggestNote && suggestions.length === 0 && (
               <p className="mb-2 text-[11px] italic text-muted-foreground">{suggestNote}</p>
             )}
-            <div className="flex items-center gap-1">
+            <div className="flex flex-wrap items-center gap-1">
               {showSuggestButton && (
                 <Button
                   type="button"
@@ -662,6 +721,24 @@ export default function QuoChatDialog({
                     <ShieldAlert className="h-3.5 w-3.5" />
                   )}
                   {spamChecking ? "Checking…" : "Spam check"}
+                </Button>
+              )}
+              {showActionsButton && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleActionItems}
+                  disabled={actionsLoading}
+                  className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                  title="Extract follow-up actions from this conversation and its calls"
+                >
+                  {actionsLoading ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <ListChecks className="h-3.5 w-3.5" />
+                  )}
+                  {actionsLoading ? "Reviewing…" : "Action items"}
                 </Button>
               )}
             </div>
