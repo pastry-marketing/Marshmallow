@@ -315,6 +315,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (navItem === "settings") {
       return role === "admin" || (role === "cs_admin" && profile?.can_manage_users === true);
     }
+    if (navItem === "ai_assistance") {
+      // CS Missed-Lead Tracker — shared CS worklist for Admin, CS Admin and CS
+      // agents; not grantable to other roles, so an override cannot widen it.
+      return role === "admin" || role === "cs_admin" || role === "customer_service";
+    }
     if (navItem in userOverrides) return userOverrides[navItem];
     return canAccessNavItem(role, navItem, permissions);
   };

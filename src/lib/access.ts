@@ -4,12 +4,16 @@ import { ALL_LEAD_STATUSES, ALL_NAV_ITEMS, type NavItem } from "@/lib/constants"
 const DEFAULT_NAV_ACCESS: Record<AppRole, Set<NavItem>> = {
   admin: new Set(ALL_NAV_ITEMS),
   processor: new Set(["leads", "schedule", "cancellation_requests", "map_view", "technicians"]),
-  customer_service: new Set(["leads", "schedule", "quote_approval_requests"]),
+  customer_service: new Set(["leads", "schedule", "quote_approval_requests", "ai_assistance"]),
   opr: new Set(["leads"]),
   // The urgent review queue is the CS Admin side of the AI check. customer_service
     // is left out on purpose: they raise requests, they do not clear them, and a
     // CS Admin cannot approve a request they raised themselves.
-    cs_admin: new Set(["leads", "schedule", "quote_approval_requests", "urgent_review_requests"]),
+    //
+    // ai_assistance (the CS Missed-Lead Tracker) is a shared CS shift-start
+    // worklist — admin, cs_admin and customer_service. See the gate in
+    // canAccessNavItem below; it is not grantable to processor/opr.
+    cs_admin: new Set(["leads", "schedule", "quote_approval_requests", "urgent_review_requests", "ai_assistance"]),
   // opr_admin mirrors opr's default access; the Technicians tab is granted per
   // user via navigation permissions, and unlocks add/import for this role.
   opr_admin: new Set(["leads"]),
@@ -127,6 +131,14 @@ export function canAccessNavItem(
   if (navItem === "payment_requests") {
     // Admin-only page
     return false;
+  }
+
+  if (navItem === "ai_assistance") {
+    // CS Missed-Lead Tracker — a shared CS worklist. Admin is handled above;
+    // CS Admin and CS agents get it, and it is deliberately NOT grantable to
+    // processor/opr, so a navigation_permissions override cannot widen it. The
+    // backend RPC (list_cs_missed_followups) enforces the same role gate.
+    return role === "cs_admin" || role === "customer_service";
   }
 
 if (navItem === "crm_updates") {
