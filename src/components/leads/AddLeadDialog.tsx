@@ -22,6 +22,7 @@ import {
   Sparkles,
   UploadCloud,
   Phone,
+  Loader2,
 } from "lucide-react";
 import { LEAD_STATUS_CONFIG, type LeadStatus } from "@/types";
 import { getChangeableStatuses, canChangeStatus } from "@/lib/constants";
@@ -36,6 +37,11 @@ import { motion, AnimatePresence } from "framer-motion";
 import NumberNameCombobox from "./NumberNameCombobox";
 import MultiDateTimePicker from "./MultiDateTimePicker";
 import { geocodeAndPersistLeadAddress } from "@/lib/lead-address-geocoding";
+import {
+  fetchLeadAutofill,
+  canUseLeadAutofill,
+  composeAddress,
+} from "@/lib/ai/lead-autofill";
 
 interface Props {
   open: boolean;
@@ -142,8 +148,54 @@ const AddLeadDialog = ({ open, onOpenChange, onSuccess, initialData, onUrgentChe
   const [csOpen, setCsOpen] = useState(true);
   const [processorOpen, setProcessorOpen] = useState(role !== "customer_service" && role !== "cs_admin");
   const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [autofilling, setAutofilling] = useState(false);
 
   const { isDuplicate, duplicateLeadName } = useDuplicatePhoneCheck(form.customer_phone);
+
+  // AI Lead Auto-Fill (roadmap feature 04). Pulls fields from this customer's
+  // chat and fills only the EMPTY form fields, so it never clobbers what the
+  // person already typed. Advisory — everything stays editable before saving.
+  const phoneDigits = form.customer_phone.replace(/\D/g, "");
+  const canAutofill = canUseLeadAutofill(role) && phoneDigits.length >= 10;
+
+  const handleAutofill = async () => {
+    if (!canAutofill || autofilling) return;
+    setAutofilling(true);
+    try {
+      const { fields, found } = await fetchLeadAutofill({ phone: form.customer_phone });
+      if (!found) {
+        toast.message("No chat found for this number to fill from.");
+        return;
+      }
+      const address = composeAddress(fields);
+      const filled: string[] = [];
+      setForm((prev) => {
+        const next = { ...prev };
+        const put = (key: keyof typeof next, value: string, label: string) => {
+          if (value && !String(next[key]).trim()) {
+            (next[key] as string) = value;
+            filled.push(label);
+          }
+        };
+        put("customer_name", fields.customer_name, "name");
+        put("address", address, "address");
+        put("service_type", fields.service_type, "service");
+        put("service_details", fields.service_details, "job details");
+        put("customer_schedule_requirements", fields.preferred_time, "preferred time");
+        return next;
+      });
+      if (filled.length > 0) {
+        setShouldResetOnClose(false);
+        toast.success(`Filled from chat: ${filled.join(", ")}. Review before saving.`);
+      } else {
+        toast.message("Nothing new to fill — the chat added no empty fields.");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not auto-fill from chat.");
+    } finally {
+      setAutofilling(false);
+    }
+  };
 
   const isCS = role === "customer_service";
   const isProcessor = role === "processor";
@@ -609,6 +661,32 @@ const AddLeadDialog = ({ open, onOpenChange, onSuccess, initialData, onUrgentChe
               </div>
             </div>
             <p className="mt-1.5 text-[11px] text-muted-foreground">A cell phone or a landline is required.</p>
+
+            {canUseLeadAutofill(role) && (
+              <div className="mt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleAutofill}
+                  disabled={!canAutofill || autofilling}
+                  className="h-8 gap-1.5 text-xs"
+                  title="Pull name, address, service and timing from this customer's chat"
+                >
+                  {autofilling ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-3.5 w-3.5 text-primary" />
+                  )}
+                  {autofilling ? "Reading chat…" : "Auto-fill from chat"}
+                </Button>
+                {!canAutofill && !autofilling && (
+                  <span className="ml-2 text-[11px] text-muted-foreground">
+                    Enter a cell phone to enable.
+                  </span>
+                )}
+              </div>
+            )}
 
             <div className="mt-4 space-y-1.5">
               <Label className={labelClass}>Direction *</Label>
