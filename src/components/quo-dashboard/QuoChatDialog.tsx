@@ -16,7 +16,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { Loader2, Send, MessageSquare, User, Phone, CheckCheck, Clock, ChevronDown, Sparkles, X } from "lucide-react";
+import { Loader2, Send, MessageSquare, User, Phone, CheckCheck, Clock, ChevronDown, Sparkles, X, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -32,6 +32,13 @@ import {
   TRIAGE_URGENCY_CLASS,
   type ConversationTriage,
 } from "@/lib/ai/conversation-triage";
+import {
+  fetchSpamCheck,
+  canUseSpamDetection,
+  SPAM_VERDICT_LABEL,
+  SPAM_VERDICT_CLASS,
+  type SpamCheck,
+} from "@/lib/ai/spam-detection";
 import {
   formatEasternTime,
   formatLocalRelativeTime,
@@ -102,6 +109,11 @@ export default function QuoChatDialog({
   const [triage, setTriage] = useState<ConversationTriage | null>(null);
   const showTriageButton = canUseTriage(role);
 
+  // AI spam/scam detection (roadmap feature 08). Advisory flag for staff review.
+  const [spamChecking, setSpamChecking] = useState(false);
+  const [spamCheck, setSpamCheck] = useState<SpamCheck | null>(null);
+  const showSpamButton = canUseSpamDetection(role);
+
   // Fetch messages when conversation changes or opens
   useEffect(() => {
     if (!open || !conversation?.id) return;
@@ -110,6 +122,7 @@ export default function QuoChatDialog({
     setSuggestions([]);
     setSuggestNote("");
     setTriage(null);
+    setSpamCheck(null);
 
     let isCancelled = false;
 
@@ -317,6 +330,18 @@ export default function QuoChatDialog({
     }
   };
 
+  const handleSpamCheck = async () => {
+    if (!conversation?.id || spamChecking) return;
+    setSpamChecking(true);
+    try {
+      setSpamCheck(await fetchSpamCheck(conversation.id));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not run the spam check.");
+    } finally {
+      setSpamChecking(false);
+    }
+  };
+
   if (!conversation) return null;
 
   const currentStatusKey = normalizeQuoLeadStatus(conversation.status);
@@ -472,8 +497,43 @@ export default function QuoChatDialog({
         {/* AI assist (advisory). Reply suggestions load a draft into the
             composer; triage suggests how to sort the chat. Both are shown to
             the agent, who decides — nothing is sent or saved automatically. */}
-        {(showSuggestButton || showTriageButton) && (
+        {(showSuggestButton || showTriageButton || showSpamButton) && (
           <div className="px-3 pt-2 border-t border-border/40 bg-background/60 shrink-0">
+            {spamCheck && (
+              <div className="mb-2 rounded-lg border border-border/60 bg-muted/30 p-2">
+                <div className="mb-1 flex items-center justify-between">
+                  <span className="flex items-center gap-1 text-[11px] font-semibold text-muted-foreground">
+                    <ShieldAlert className="h-3 w-3 text-primary" /> Spam / scam check
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setSpamCheck(null)}
+                    className="text-muted-foreground hover:text-foreground"
+                    aria-label="Dismiss spam check"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Badge variant="outline" className={`text-[10px] font-semibold ${SPAM_VERDICT_CLASS[spamCheck.verdict]}`}>
+                    {SPAM_VERDICT_LABEL[spamCheck.verdict]}
+                  </Badge>
+                  <span className="text-[10px] font-medium text-muted-foreground">risk {spamCheck.risk}/100</span>
+                </div>
+                {spamCheck.signals.length > 0 && (
+                  <ul className="mt-1 flex flex-wrap gap-1">
+                    {spamCheck.signals.map((s, i) => (
+                      <li key={i} className="rounded bg-background/70 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                        {s}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {spamCheck.reason && (
+                  <p className="mt-1 text-[11px] leading-snug text-muted-foreground">{spamCheck.reason}</p>
+                )}
+              </div>
+            )}
             {triage && (
               <div className="mb-2 rounded-lg border border-primary/20 bg-primary/[0.04] p-2">
                 <div className="mb-1 flex items-center justify-between">
@@ -584,6 +644,24 @@ export default function QuoChatDialog({
                     <Sparkles className="h-3.5 w-3.5" />
                   )}
                   {triaging ? "Triaging…" : triage ? "Re-triage" : "Triage"}
+                </Button>
+              )}
+              {showSpamButton && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleSpamCheck}
+                  disabled={spamChecking}
+                  className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                  title="Check this chat for spam or scam patterns"
+                >
+                  {spamChecking ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <ShieldAlert className="h-3.5 w-3.5" />
+                  )}
+                  {spamChecking ? "Checking…" : "Spam check"}
                 </Button>
               )}
             </div>
