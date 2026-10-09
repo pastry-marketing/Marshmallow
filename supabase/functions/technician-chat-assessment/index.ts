@@ -1,4 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { technicianJobCounts, type CompletedLead, type TechnicianJobCounts } from "../_shared/technician-job-counts.ts";
+import { parseTechnicianQuoLink } from "../_shared/technician-quo-link.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -37,23 +39,29 @@ const ALLOWED_RECOMMENDATIONS = [
 ] as const;
 type Recommendation = (typeof ALLOWED_RECOMMENDATIONS)[number];
 
-type Technician = { id: string; name: string; phone_number: string | null; is_active: boolean | null };
+type Technician = { id: string; name: string; phone_number: string | null; chat_link: string | null; is_active: boolean | null };
 type Conversation = { id: string; customer_number: string | null; customer_name: string | null };
 type QuoMessage = { conversation_id: string; sender: string; text: string | null; message_time: string | null };
-type JobCounts = { completed: number | null; paid: number | null; error: string | null };
+const COUNT_BASIS = "Matched by technician phone number on completed leads (job_done + paid); paid is a subset. Older leads without a technician phone number cannot be attributed, and shared phone numbers may be ambiguous.";
 
-async function countJobs(admin: ReturnType<typeof createClient>, name: string): Promise<JobCounts> {
-  if (!name?.trim()) return { completed: null, paid: null, error: "Technician has no name to match against leads." };
-  const [completed, paid] = await Promise.all([
-    admin.from("leads").select("id", { count: "exact", head: true })
-      .eq("tech_name", name).in("status", ["job_done", "paid"]),
-    admin.from("leads").select("id", { count: "exact", head: true })
-      .eq("tech_name", name).eq("status", "paid"),
-  ]);
-  if (completed.error || paid.error || completed.count === null || paid.count === null) {
-    return { completed: null, paid: null, error: "Could not load lead job counts. Retry the report." };
+async function loadCompletedLeads(admin: ReturnType<typeof createClient>): Promise<{ leads: CompletedLead[]; error: string | null }> {
+  const leads: CompletedLead[] = [];
+  const pageSize = 1000;
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await admin.from("leads")
+      .select("tech_number, status")
+      .in("status", ["job_done", "paid"])
+      .order("id")
+      .range(offset, offset + pageSize - 1);
+    if (error || !data) return { leads: [], error: "Could not load lead job counts. Retry the report." };
+    leads.push(...data);
+    if (data.length < pageSize) break;
   }
-  return { completed: completed.count, paid: paid.count, error: null };
+  return { leads, error: null };
+}
+
+function countsFor(phone: string | null, rows: { leads: CompletedLead[]; error: string | null }): TechnicianJobCounts {
+  return rows.error ? { completed: null, paid: null, error: rows.error } : technicianJobCounts(phone, rows.leads);
 }
 
 function phoneVariants(value: string | null | undefined): string[] {
@@ -119,6 +127,47 @@ function verifiedEvidence(value: unknown, messages: QuoMessage[]): Array<{ label
   return verified;
 }
 
+async function fetchLinkedQuoMessages(tech: Technician): Promise<{ messages: QuoMessage[]; error: string | null }> {
+  const link = parseTechnicianQuoLink(tech.chat_link);
+  if (!link) return { messages: [], error: null };
+  const digits = (tech.phone_number ?? "").replace(/\D/g, "");
+  const participant = digits.length === 10 ? `+1${digits}` : digits.length === 11 && digits.startsWith("1") ? `+${digits}` : null;
+  if (!participant) return { messages: [], error: "A valid technician phone number is required to read the saved Quo chat." };
+  const apiKey = Deno.env.get("QUO_API_KEY");
+  if (!apiKey) return { messages: [], error: "Quo direct chat access is not configured; sync the saved conversation first." };
+
+  const messages: QuoMessage[] = [];
+  let pageToken: string | null = null;
+  try {
+    for (let page = 0; page < 3; page++) {
+      const params = new URLSearchParams({ phoneNumberId: link.phoneNumberId, maxResults: "100" });
+      params.append("participants", participant);
+      if (pageToken) params.set("pageToken", pageToken);
+      const base = Deno.env.get("QUO_API_BASE_URL") ?? "https://api.openphone.com/v1";
+      const response = await fetch(`${base}/messages?${params}`, {
+        headers: { Authorization: apiKey, Accept: "application/json" },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!response.ok) throw new Error(`Quo returned ${response.status}`);
+      const payload = await response.json() as { data?: Array<{ conversationId?: string; direction?: string; text?: string; createdAt?: string }>; nextPageToken?: string | null };
+      for (const item of payload.data ?? []) {
+        if (item.conversationId !== link.conversationId || (item.direction !== "incoming" && item.direction !== "outgoing")) continue;
+        messages.push({
+          conversation_id: link.conversationId,
+          sender: item.direction === "incoming" ? "customer" : "agent",
+          text: item.text ?? null,
+          message_time: item.createdAt ?? null,
+        });
+      }
+      pageToken = payload.nextPageToken ?? null;
+      if (!pageToken) break;
+    }
+    return { messages: messages.sort((a, b) => (a.message_time ?? "").localeCompare(b.message_time ?? "")).slice(-MAX_MESSAGES_PER_TECH), error: null };
+  } catch {
+    return { messages: [], error: "Could not read the saved Quo chat directly. Retry or sync it to the CRM." };
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return jsonResponse({ error: "Method not allowed" }, 405);
@@ -153,18 +202,19 @@ Deno.serve(async (req) => {
       .in("technician_id", technicianIds);
     if (error) return jsonResponse({ error: error.message }, 400);
     const { data: selectedTechs, error: selectedTechsError } = await admin.from("technicians")
-      .select("id, name").in("id", technicianIds);
+      .select("id, phone_number").in("id", technicianIds);
     if (selectedTechsError) return jsonResponse({ error: selectedTechsError.message }, 400);
-    const reports = await Promise.all((selectedTechs ?? []).map(async (tech) => {
-      const counts = await countJobs(admin, tech.name);
+    const completedLeads = await loadCompletedLeads(admin);
+    const reports = (selectedTechs ?? []).map((tech) => {
+      const counts = countsFor(tech.phone_number, completedLeads);
       return {
         technicianId: tech.id,
         jobsCompleted: counts.completed,
         jobsPaid: counts.paid,
         error: counts.error,
-        countBasis: "Exact technician-name match on leads; completed includes job_done and paid. Duplicate technician names may share historical counts.",
+        countBasis: COUNT_BASIS,
       };
-    }));
+    });
     return jsonResponse({ assessments: rows ?? [], reports });
   }
 
@@ -191,10 +241,11 @@ Deno.serve(async (req) => {
   }
 
   const { data: technicians, error: techError } = await admin.from("technicians")
-    .select("id, name, phone_number, is_active")
+    .select("id, name, phone_number, chat_link, is_active")
     .in("id", technicianIds);
   if (techError) return jsonResponse({ error: techError.message }, 400);
   if (!technicians || technicians.length !== technicianIds.length) return jsonResponse({ error: "One or more selected technicians were not found." }, 404);
+  const completedLeads = await loadCompletedLeads(admin);
 
   const allVariants = [...new Set(technicians.flatMap((tech) => phoneVariants(tech.phone_number)))];
   const { data: conversations, error: conversationsError } = allVariants.length
@@ -212,15 +263,29 @@ Deno.serve(async (req) => {
       ? await admin.from("quo_messages").select("conversation_id, sender, text, message_time")
           .in("conversation_id", [...ids]).order("message_time", { ascending: false }).limit(MAX_MESSAGES_PER_TECH)
       : { data: [], error: null };
-    const techMessages = ((messageRows ?? []) as QuoMessage[]).filter((message) => message.sender === "agent" || message.sender === "customer").reverse();
-    const jobCounts = await countJobs(admin, tech.name);
+    let techMessages = ((messageRows ?? []) as QuoMessage[]).filter((message) => message.sender === "agent" || message.sender === "customer").reverse();
+    let conversationCount = techConversations.length;
+    let chatSource = "CRM mirror";
+    let linkedChatError: string | null = null;
+    if (!messagesError && !techMessages.length && parseTechnicianQuoLink(tech.chat_link)) {
+      const linked = await fetchLinkedQuoMessages(tech);
+      linkedChatError = linked.error;
+      if (linked.messages.length) {
+        techMessages = linked.messages;
+        conversationCount = 1;
+        chatSource = "Quo direct";
+      }
+    }
+    const jobCounts = countsFor(tech.phone_number, completedLeads);
 
     let labels: Label[] = [];
     let recommendations: string[] = [];
-    let summary = "No matching Quo conversation messages were found for this phone number.";
+    let summary = "No matching Quo conversation messages were found for this phone number or saved link.";
     let evidence: Array<{ label?: string; quote?: string; source?: string }> = [];
-    let aiError: string | null = messagesError?.message ?? null;
-    if (!aiError && techMessages.length) {
+    let aiError: string | null = messagesError?.message ?? linkedChatError;
+    if (!aiError && techMessages.length && !techMessages.some((message) => message.sender === "customer")) {
+      summary = "Only outgoing messages were found for this technician. There is not enough chat evidence to suggest a status; no reply is not proof of non-response.";
+    } else if (!aiError && techMessages.length) {
       try {
         const response = await fetch(OPENAI_URL, {
           method: "POST",
@@ -262,12 +327,16 @@ Deno.serve(async (req) => {
         if (labels.includes("high_rates")) recommendations.push("review_rates");
         recommendations = [...new Set(recommendations)];
         summary = typeof result.summary === "string" ? result.summary.slice(0, 1400) : "Assessment complete.";
-        if (!evidence.length) summary = "No verifiable quotes were found in the stored messages, so no labels were suggested.";
+        if (!evidence.length) summary = `${summary.slice(0, 1200)} No status was suggested without a verified supporting quote.`;
       } catch (error) {
         aiError = error instanceof Error ? error.message : "AI assessment failed.";
       }
     } else if (aiError) {
       summary = "Could not load Quo messages for this technician.";
+    }
+
+    if (chatSource === "Quo direct" && !aiError) {
+      summary = `Reviewed the saved Quo chat directly because it is not in the CRM mirror. ${summary}`;
     }
 
     if (!aiError) {
@@ -276,7 +345,7 @@ Deno.serve(async (req) => {
         ai_summary: summary,
         ai_evidence: evidence,
         ai_recommendations: recommendations,
-        conversations_reviewed: techConversations.length,
+        conversations_reviewed: conversationCount,
         messages_reviewed: techMessages.length,
         last_assessed_at: new Date().toISOString(),
         updated_by: authData.user.id,
@@ -290,8 +359,9 @@ Deno.serve(async (req) => {
       recommendations,
       summary,
       evidence,
-      conversationsReviewed: techConversations.length,
+      conversationsReviewed: conversationCount,
       messagesReviewed: techMessages.length,
+      chatSource,
       jobCounts,
       isActive: tech.is_active !== false,
       error: aiError,
