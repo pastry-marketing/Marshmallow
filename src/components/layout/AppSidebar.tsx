@@ -25,8 +25,8 @@ ShieldCheck,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useNavigate } from "react-router-dom";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { useLocation } from "react-router-dom";
+import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { STATUS_LABELS, STATUS_DOT_COLORS, ALL_LEAD_STATUSES } from "@/lib/constants";
 import { scheduleRequirementDueOrOverdue } from "@/lib/schedule-date-filter";
@@ -79,6 +79,7 @@ const getNavItems = (role: string) => [
 
 // localStorage key used to broadcast a New Quote Request dismissal to other tabs.
 const QUOTE_DISMISS_KEY = "quote-request-dismissed";
+const quoteToastId = (id: string) => `quote-request-${id}`;
 
 export default function AppSidebar() {
   const { state } = useSidebar();
@@ -89,22 +90,18 @@ export default function AppSidebar() {
   const { allowedStatuses } = useAllowedStatuses();
   const queryClient = useQueryClient();
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
-  const [urgentQuoteLead, setUrgentQuoteLead] = useState<any>(null);
   // Leads already announced as Pending to Send, so one status change alerts exactly once.
   const announcedQuotePendingIds = useRef<Set<string>>(new Set());
 
-  // Dismissing the New Quote Request popup in one tab clears it in every other
+  // Dismissing the New Quote Request notification in one tab clears it in every other
   // open tab (broadcast via localStorage), so it only has to be dismissed once.
-  const dismissQuoteRequest = () => {
-    const id = urgentQuoteLead?.id as string | undefined;
-    setUrgentQuoteLead(null);
-    if (id) {
-      announcedQuotePendingIds.current.add(id);
-      try {
-        localStorage.setItem(QUOTE_DISMISS_KEY, JSON.stringify({ id, ts: Date.now() }));
-      } catch {
-        // ignore storage errors
-      }
+  const dismissQuoteRequest = (id: string) => {
+    toast.dismiss(quoteToastId(id));
+    announcedQuotePendingIds.current.add(id);
+    try {
+      localStorage.setItem(QUOTE_DISMISS_KEY, JSON.stringify({ id, ts: Date.now() }));
+    } catch {
+      // ignore storage errors
     }
   };
 
@@ -115,7 +112,7 @@ export default function AppSidebar() {
         const { id } = JSON.parse(event.newValue) as { id?: string };
         if (!id) return;
         announcedQuotePendingIds.current.add(id);
-        setUrgentQuoteLead((current: { id?: string } | null) => (current?.id === id ? null : current));
+        toast.dismiss(quoteToastId(id));
       } catch {
         // ignore malformed payloads
       }
@@ -325,7 +322,7 @@ export default function AppSidebar() {
     // CS Admins do not work the Quote to Send queue, so they are not alerted for it.
     if (!isQuotationMaster(role, profile?.is_quotation_master)) return;
 
-    const announceQuotePending = (newRow: { id?: string; status?: string } | undefined) => {
+    const announceQuotePending = (newRow: { id?: string; status?: string; customer_name?: string | null } | undefined) => {
       if (!newRow || newRow.status !== "pending_to_send" || !newRow.id) return;
 
       queryClient.invalidateQueries({ queryKey: ["pending-quote-requests-count"] });
@@ -338,10 +335,17 @@ export default function AppSidebar() {
       if (announcedQuotePendingIds.current.has(newRow.id)) return;
       announcedQuotePendingIds.current.add(newRow.id);
 
-      void import("@/lib/notification-sound").then(({ playUrgentAlertSound }) => {
-        playUrgentAlertSound();
-        setUrgentQuoteLead(newRow);
+      // A modal alert here used to steal pointer/focus from an already-open
+      // photo lightbox, leaving its higher-z-index image impossible to close.
+      // A persistent Sonner notification preserves the alert without blocking work.
+      toast("New quote request", {
+        id: quoteToastId(newRow.id),
+        description: `${newRow.customer_name || "A customer"} is waiting for a quote.`,
+        duration: Infinity,
+        action: { label: "View requests", onClick: () => { dismissQuoteRequest(newRow.id!); navigate("/quote-pending"); } },
+        cancel: { label: "Dismiss", onClick: () => dismissQuoteRequest(newRow.id!) },
       });
+      void import("@/lib/notification-sound").then(({ playUrgentAlertSound }) => playUrgentAlertSound());
     };
 
     const channel = supabase
@@ -363,7 +367,7 @@ export default function AppSidebar() {
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [queryClient, role, profile?.is_quotation_master]);
+  }, [queryClient, role, profile?.is_quotation_master, navigate]);
 
     // Global Leads Notifications (e.g. Activate Customer)
   useEffect(() => {
@@ -377,8 +381,8 @@ export default function AppSidebar() {
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "leads", filter: "status=eq.activate_customer" },
         (payload) => {
-          const newRow = payload.new as any;
-          const oldRow = payload.old as any;
+          const newRow = payload.new as { id?: string; status?: string; customer_name?: string | null; created_by?: string } | undefined;
+          const oldRow = payload.old as { status?: string } | undefined;
 
           if (newRow && newRow.status === "activate_customer" && oldRow?.status !== "activate_customer") {
             const isRelevantUser =
@@ -387,10 +391,12 @@ export default function AppSidebar() {
               (role === "customer_service" && newRow.created_by === profile.id);
 
             if (isRelevantUser) {
-              import("@/lib/notification-sound").then(({ playAssignmentSound }) => {
-                playAssignmentSound();
-                setUrgentQuoteLead(newRow);
-            });
+              void import("@/lib/notification-sound").then(({ playAssignmentSound }) => playAssignmentSound());
+              toast("Customer needs activation", {
+                id: `activate-customer-${newRow.id}`,
+                description: `${newRow.customer_name || "A customer"} needs attention.`,
+                action: { label: "Open lead", onClick: () => navigate(`/leads/${newRow.id}`) },
+              });
             }
           }
         }
@@ -400,7 +406,7 @@ export default function AppSidebar() {
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [role, profile?.id]);
+  }, [role, profile?.id, navigate]);
 
   const visibleItems = getNavItems(role || "").filter((item) => canAccess(item.navKey));
   // "Need Attention" is a virtual Review item (Admin/CS/CS Admin), rendered with
@@ -811,28 +817,6 @@ export default function AppSidebar() {
         userEmail={user?.email || profile?.email || null}
       />
       
-      <AlertDialog open={!!urgentQuoteLead} onOpenChange={(open) => !open && dismissQuoteRequest()}>
-        <AlertDialogContent className="border-amber-500/50 shadow-[0_0_40px_rgba(245,158,11,0.25)]">
-          <AlertDialogHeader>
-            <AlertDialogTitle className="text-xl flex items-center gap-2 text-amber-500">
-              <FileWarning className="h-6 w-6" />
-              New Quote Request
-            </AlertDialogTitle>
-            <AlertDialogDescription className="text-[15px] pt-2">
-              Lead <strong className="text-foreground">{urgentQuoteLead?.customer_name || 'Customer'}</strong> is waiting for a quote!
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter className="mt-4">
-            <AlertDialogCancel onClick={dismissQuoteRequest}>Dismiss</AlertDialogCancel>
-            <AlertDialogAction onClick={() => {
-              navigate("/quote-pending");
-              dismissQuoteRequest();
-            }} className="bg-amber-500 hover:bg-amber-600 text-white">
-              View Request
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </Sidebar>
   );
 }
