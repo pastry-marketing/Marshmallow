@@ -18,6 +18,9 @@ import {
 import { toast } from "sonner";
 
 import { supabase } from "@/integrations/supabase/client";
+import { TechnicianNameBadges } from "@/components/technicians/TechnicianNameCell";
+import { buildTechnicianNameCounts } from "@/lib/technician-names";
+import { fetchAllTechnicians, TECHNICIANS_ROOT_KEY } from "@/lib/technicians";
 import {
   fetchTechPerformance,
   groupByArea,
@@ -74,6 +77,15 @@ export function TechnicianPerformance() {
     queryKey: ["tech-performance", from],
     queryFn: () => fetchTechPerformance({ from }),
   });
+
+  // Every figure on this page, and the Good Tech toggle, are matched by name.
+  // Rows sharing a name therefore merge, so the name is flagged.
+  const nameCountsQuery = useQuery({
+    queryKey: TECHNICIANS_ROOT_KEY,
+    queryFn: fetchAllTechnicians,
+    staleTime: 60_000,
+  });
+  const nameCounts = useMemo(() => buildTechnicianNameCounts(nameCountsQuery.data ?? []), [nameCountsQuery.data]);
 
   // is_good_tech is only settable by an admin, matching the Technicians page.
   const toggleGoodTech = useMutation({
@@ -287,7 +299,8 @@ export function TechnicianPerformance() {
                     <tr key={`${row.tech_name}-${row.location_label}`} className="border-t border-border/40">
                       <td className="px-5 py-3">
                         <span className="flex items-center gap-2 font-medium text-foreground">
-                          {row.tech_name}
+                          <span className="truncate">{row.tech_name}</span>
+                          <TechnicianNameBadges tech={{ name: row.tech_name }} nameCounts={nameCounts} />
                           {row.good_tech ? (
                             <Star className="h-3.5 w-3.5 shrink-0 fill-amber-500 text-amber-500" />
                           ) : null}

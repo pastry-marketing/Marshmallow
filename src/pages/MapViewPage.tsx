@@ -16,6 +16,8 @@ import { MapPin, Search, X, Contact, User, Loader2, Wrench } from "lucide-react"
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { TechnicianRecord } from "@/components/technicians/TechnicianDialog";
+import { TechnicianNameBadges } from "@/components/technicians/TechnicianNameCell";
+import { buildTechnicianNameCounts } from "@/lib/technician-names";
 import { TechnicianDetailsContent } from "@/components/map/TechnicianDetailsContent";
 import { fetchAllTechnicians, TECHNICIANS_QUERY_KEY } from "@/lib/technicians";
 import { haversineMiles, isValidLatLng, LatLng, geocodeArea, reverseGeocodeCity } from "@/lib/geo";
@@ -884,6 +886,11 @@ export default function MapViewPage() {
     return out;
   }, [urgentLeadsQuery.data, zipDatasetReady]);
 
+  const nameCounts = useMemo(
+    () => buildTechnicianNameCounts(techniciansQuery.data ?? []),
+    [techniciansQuery.data],
+  );
+
   const searchableTechs = useMemo<SearchableTech[]>(() => {
     if (!zipDatasetReady) return [];
     // Normally the map shows active technicians. The "Inactive techs" view flips
@@ -1744,8 +1751,11 @@ export default function MapViewPage() {
                   >
                     <Wrench className="h-3.5 w-3.5 mt-0.5 shrink-0 text-blue-500" />
                     <span className="min-w-0">
-                      <span className="block font-semibold text-sm text-foreground truncate">
-                        {highlightMatch(t.name || "Unnamed", omniSearch)}
+                      <span className="flex items-center gap-1.5">
+                        <span className="block font-semibold text-sm text-foreground truncate">
+                          {highlightMatch(t.name || "Unnamed", omniSearch)}
+                        </span>
+                        <TechnicianNameBadges tech={t} nameCounts={nameCounts} />
                       </span>
                       <span className="block text-[11px] text-muted-foreground truncate">
                         {t.phone_number || "No phone number"}{svcArea ? ` \u00b7 ${svcArea}` : ""}
