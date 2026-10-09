@@ -205,7 +205,7 @@ export default function AppSidebar() {
         console.error("Error fetching pending urgent review count:", error.message);
         return 0;
       }
-      return Array.isArray(data) ? data.length : 0;
+      return Array.isArray(data) ? data.length : (data as unknown[] | null)?.length ?? 0;
     },
     refetchInterval: 30000,
   });
