@@ -1010,17 +1010,19 @@ function LeadCard({
     }
   };
 
-  const handleCopyAllPhotos = async () => {
-    if (photoPaths.length === 0) return;
-    toast.info(`Copying ${photoPaths.length} photos...`);
+  const handleCopyPhoto = async (path: string, index: number) => {
+    toast.info(`Copying photo ${index + 1}...`);
     try {
-      const { getSignedUrls } = await import("@/lib/storage");
-      const urls = await getSignedUrls(photoPaths);
-      const { copyImagesToClipboard } = await import("@/lib/lead-copy");
-      await copyImagesToClipboard(urls);
+      const { getSignedUrl } = await import("@/lib/storage");
+      const url = await getSignedUrl(path);
+      if (url) {
+        const { copyImageToClipboard } = await import("@/lib/lead-copy");
+        await copyImageToClipboard(url);
+        toast.success(`Photo ${index + 1} copied to clipboard!`);
+      }
     } catch (err) {
-      console.error("Failed to copy photos:", err);
-      toast.error("Failed to copy photos");
+      console.error("Failed to copy photo:", err);
+      toast.error(`Failed to copy photo ${index + 1}`);
     }
   };
 
@@ -1729,8 +1731,9 @@ function LeadCard({
                   </Button>
                 )}
 
-                {photoPaths.length > 0 && (
+                {photoPaths.map((path, index) => (
                   <Button
+                    key={path}
                     type="button"
                     variant="outline"
                     size="sm"
@@ -1738,14 +1741,14 @@ function LeadCard({
                     onClick={(e) => {
                       e.stopPropagation();
                       e.preventDefault();
-                      void handleCopyAllPhotos();
+                      void handleCopyPhoto(path, index);
                     }}
-                    title="Copy all photos"
+                    title={`Copy photo ${index + 1}`}
                   >
                     <Copy className="h-2.5 w-2.5" />
-                    Copy all {photoPaths.length} photos
+                    Photo {index + 1}
                   </Button>
-                )}
+                ))}
           </div>
         )}
 
