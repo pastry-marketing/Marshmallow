@@ -9,6 +9,8 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import QuoPhoneTrigger from "@/components/leads/QuoPhoneTrigger";
 import type { TechnicianRecord } from "@/components/technicians/TechnicianDialog";
+import { TechnicianNameBadges } from "@/components/technicians/TechnicianNameCell";
+import { buildTechnicianNameCounts } from "@/lib/technician-names";
 import { requestTechnicianChange } from "@/lib/tech-change-requests";
 import { logActivity } from "@/lib/activity";
 
@@ -83,14 +85,7 @@ export function TechnicianProcessingWorkflow({
   // Without a search term the list is capped so 2,855 technicians don't all
   // render at once. Searching bypasses the cap so a specific person is always
   // reachable, however deep in the alphabet they sit.
-  const nameCounts = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const tech of technicians) {
-      const key = tech.name?.trim().toLowerCase();
-      if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
-    }
-    return counts;
-  }, [technicians]);
+  const nameCounts = useMemo(() => buildTechnicianNameCounts(technicians), [technicians]);
 
   const filteredTechnicians = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -264,25 +259,19 @@ export function TechnicianProcessingWorkflow({
               : `Showing the first ${visibleTechnicians.length} of ${technicians.length} technicians. Search by name, phone, area, or service to reach anyone else.`}
         </p>
         <div className="mt-3 grid max-h-56 gap-1 overflow-y-auto sm:grid-cols-2 lg:grid-cols-3">
-          {visibleTechnicians.map((tech) => {
-            const sharedName = tech.name?.trim() ? (nameCounts.get(tech.name.trim().toLowerCase()) ?? 0) : 0;
-            return (
+          {visibleTechnicians.map((tech) => (
             <label key={tech.id} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-muted/60">
               <Checkbox checked={selectedIds.includes(tech.id)} onCheckedChange={() => toggleTech(tech.id)} />
-              <span className="min-w-0 flex-1 truncate">
-                {tech.name?.trim() || <span className="italic text-muted-foreground">Unnamed technician</span>}
-                <span className="text-muted-foreground">{tech.area ? ` · ${tech.area}` : ""}</span>
+              <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                <span className="truncate">
+                  {tech.name?.trim() || <span className="italic text-muted-foreground">Unnamed technician</span>}
+                  <span className="text-muted-foreground">{tech.area ? ` · ${tech.area}` : ""}</span>
+                </span>
+                <TechnicianNameBadges tech={tech} nameCounts={nameCounts} />
               </span>
-              {sharedName > 1 && (
-                <Badge variant="outline" title={`${sharedName} technicians share this name, so job counts are combined`}>
-                  {sharedName} with this name
-                </Badge>
-              )}
-              {!tech.name?.trim() && <Badge variant="outline">No name</Badge>}
               {tech.is_active === false && <Badge variant="secondary">Inactive</Badge>}
             </label>
-            );
-          })}
+          ))}
         </div>
       </div>
 
@@ -299,7 +288,10 @@ export function TechnicianProcessingWorkflow({
           <article key={tech.id} className="space-y-3 rounded-xl border bg-card p-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h3 className="font-semibold">{tech.name?.trim() || "Unnamed technician"}</h3>
+                <h3 className="flex flex-wrap items-center gap-1.5 font-semibold">
+                  <span>{tech.name?.trim() || "Unnamed technician"}</span>
+                  <TechnicianNameBadges tech={tech} nameCounts={nameCounts} />
+                </h3>
                 <p className="text-xs text-muted-foreground">{tech.service || "Service not set"} · {tech.area || "Area not set"} · {tech.phone_number || "No phone"}</p>
               </div>
               <div className="flex flex-wrap gap-2 text-xs">

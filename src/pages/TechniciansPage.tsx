@@ -31,6 +31,8 @@ import { TechnicianReport } from "@/components/technicians/TechnicianReport";
 import { TechnicianPerformance } from "@/components/technicians/TechnicianPerformance";
 import { TechnicianProcessingWorkflow } from "@/components/technicians/TechnicianProcessingWorkflow";
 import { GoodTechFlagCell, ActiveFlagCell } from "@/components/technicians/TechnicianFlagCells";
+import { TechnicianNameBadges } from "@/components/technicians/TechnicianNameCell";
+import { buildTechnicianNameCounts } from "@/lib/technician-names";
 import { toast } from "@/hooks/use-toast";
 import {
   fetchAllTechnicians,
@@ -298,6 +300,16 @@ export default function TechniciansPage() {
     enabled: canWorkflow && activeView === "workflow",
     staleTime: 60_000,
   });
+  // Name-based job counts and Good Tech edits merge technicians who share a
+  // name, so the directory flags those rows rather than presenting a combined
+  // count as if it belonged to one person.
+  const nameCountsQuery = useQuery({
+    queryKey: [...TECHNICIANS_ROOT_KEY, "all"],
+    queryFn: fetchAllTechnicians,
+    enabled: activeView === "directory",
+    staleTime: 60_000,
+  });
+  const nameCounts = useMemo(() => buildTechnicianNameCounts(nameCountsQuery.data ?? []), [nameCountsQuery.data]);
 
   useEffect(() => {
     if (workflowTechnicianIds.length && canWorkflow) setActiveView("workflow");
@@ -1114,8 +1126,11 @@ export default function TechniciansPage() {
                     </TableCell>
                     
                     {/* Tech (Name) */}
-                    <TableCell className="font-medium max-w-[160px] truncate" title={t.name}>
-                      {t.name}
+                    <TableCell className="font-medium max-w-[160px]" title={t.name || "Unnamed technician"}>
+                      <span className="flex items-center gap-1.5">
+                        <span className="truncate">{t.name?.trim() || <span className="italic text-muted-foreground">Unnamed</span>}</span>
+                        <TechnicianNameBadges tech={t} nameCounts={nameCounts} />
+                      </span>
                     </TableCell>
                     
                     {/* Number */}
