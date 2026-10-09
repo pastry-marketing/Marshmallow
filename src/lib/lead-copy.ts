@@ -117,3 +117,24 @@ export const copyImageToClipboard = async (url: string) => {
   }
 };
 
+export const copyImagesToClipboard = async (urls: string[]) => {
+  try {
+    if (!navigator?.clipboard?.write || typeof ClipboardItem === "undefined") {
+      throw new Error("Clipboard API not supported in this browser");
+    }
+
+    const blobs = await Promise.all(urls.map(async (url) => {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`Failed to download image (${response.status})`);
+      const blob = await response.blob();
+      return blob.type === "image/png" ? blob : convertToPngBlob(url);
+    }));
+    const clipboardItems = blobs.map((blob) => new ClipboardItem({ "image/png": blob }));
+    await navigator.clipboard.write(clipboardItems);
+    toast.success(`${urls.length} photos copied to clipboard`);
+  } catch (err) {
+    console.error("Failed to copy photos:", err);
+    toast.error("Failed to copy photos due to browser or network restrictions");
+  }
+};
+

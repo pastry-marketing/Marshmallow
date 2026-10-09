@@ -16,27 +16,6 @@ window.addEventListener("message", (event) => {
     return;
   }
 
-  if (data?.action === "QUO_SEND_ATTACHMENTS" && Array.isArray(data.imageUrls)) {
-    console.log("Quo CRM Extension: Received QUO_SEND_ATTACHMENTS from CRM page", {
-      chatUrl: data.chatUrl,
-      count: data.imageUrls.length
-    });
-
-    chrome.runtime.sendMessage({
-      type: "QUO_SEND_ATTACHMENTS",
-      chatUrl: data.chatUrl,
-      imageUrls: data.imageUrls
-    }, (response) => {
-      window.postMessage({
-        action: "QUO_SEND_ATTACHMENTS_RESPONSE",
-        success: response && response.success,
-        sent: response && response.sent,
-        error: (response && response.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message)
-      }, "*");
-    });
-    return;
-  }
-
   if (data && (data.action === "QUO_SEND_MESSAGE" || data.action === "QUO_SCHEDULE_MESSAGE")) {
     console.log(`Quo CRM Extension: Received ${data.action} from CRM page`, data);
     

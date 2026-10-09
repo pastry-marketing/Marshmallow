@@ -34,7 +34,6 @@ import {
   Clipboard,
   ExternalLink,
   UserPlus,
-  Images,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -90,9 +89,6 @@ import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { useQuoAttention } from "@/hooks/useQuoAttention";
 import { History } from "lucide-react";
 import LeadStatusHistoryDialog from "./LeadStatusHistoryDialog";
-import ImageLightbox from "./ImageLightbox";
-import QuoPhotoSendDialog from "./QuoPhotoSendDialog";
-import { isQuoChatUrl } from "@/lib/quo-attachments";
 import LeadCoverageBadge from "./LeadCoverageBadge";
 import UrgentAICheckDialog from "./UrgentAICheckDialog";
 import { showsUrgentCheck } from "@/lib/urgent-verification";
@@ -763,11 +759,6 @@ function LeadCard({
     return () => window.clearInterval(id);
   }, []);
   const [photoPaths, setPhotoPaths] = useState<string[]>([]);
-  const [photoOriginals, setPhotoOriginals] = useState<(string | undefined)[]>([]);
-  const [photoLightboxOpen, setPhotoLightboxOpen] = useState(false);
-  const [photoLightboxIndex, setPhotoLightboxIndex] = useState(0);
-  const [quoPhotoDialogOpen, setQuoPhotoDialogOpen] = useState(false);
-  const photoClickTimer = useRef<number | null>(null);
   const [resolvedPaymentOriginal, setResolvedPaymentOriginal] = useState<string | null>(null);
   const [photoCount, setPhotoCount] = useState(
     initialPhotoCount !== undefined ? initialPhotoCount : 0
@@ -941,50 +932,6 @@ function LeadCard({
     window.setTimeout(() => setCompleteCopied(false), 1400);
   };
 
-  const handleCopySingleImage = async (thumbnailUrl: string, index: number) => {
-    toast.info("Copying image...");
-    try {
-      const isPaymentImage = isPaid && lead.payment_screenshot_url && index === 0;
-      const photoIndex = isPaid && lead.payment_screenshot_url ? index - 1 : index;
-      let originalUrl = isPaymentImage ? resolvedPaymentOriginal : photoOriginals[photoIndex];
-
-      if (isPaymentImage) {
-        if (resolvedPaymentOriginal) {
-          originalUrl = resolvedPaymentOriginal;
-        } else {
-          const { getSignedUrl } = await import("@/lib/storage");
-          const original = await getSignedUrl(lead.payment_screenshot_url!);
-          if (original) {
-            originalUrl = original;
-            setResolvedPaymentOriginal(original);
-          }
-        }
-      } else {
-        if (!originalUrl) {
-          const knownPath = photoPaths[photoIndex];
-          if (knownPath) {
-            const path = knownPath;
-            const { getSignedUrl } = await import("@/lib/storage");
-            const original = await getSignedUrl(path);
-            if (original) {
-              originalUrl = original;
-              const updatedOriginals = [...photoOriginals];
-              updatedOriginals[photoIndex] = original;
-              setPhotoOriginals(updatedOriginals);
-            }
-          }
-        }
-      }
-
-      const copyUrl = originalUrl || thumbnailUrl;
-      const { copyImageToClipboard } = await import("@/lib/lead-copy");
-      await copyImageToClipboard(copyUrl);
-    } catch (err) {
-      console.error("Failed to copy image:", err);
-      toast.error("Failed to copy image");
-    }
-  };
-
   const secondaryDetailRows = [
     // A second number, marked so nobody tries to text it.
     {
@@ -1078,65 +1025,19 @@ function LeadCard({
     }
   };
 
-  const handleCopyPhotoLink = async (path: string, index: number) => {
-    toast.info(`Copying Photo ${index + 1}...`);
+  const handleCopyAllPhotos = async () => {
+    if (photoPaths.length === 0) return;
+    toast.info(`Copying ${photoPaths.length} photos...`);
     try {
-      const { getSignedUrl } = await import("@/lib/storage");
-      const original = await getSignedUrl(path);
-      if (original) {
-        const { copyImageToClipboard } = await import("@/lib/lead-copy");
-        await copyImageToClipboard(original);
-        toast.success(`Photo ${index + 1} copied to clipboard!`);
-      }
+      const { getSignedUrls } = await import("@/lib/storage");
+      const urls = await getSignedUrls(photoPaths);
+      const { copyImagesToClipboard } = await import("@/lib/lead-copy");
+      await copyImagesToClipboard(urls);
     } catch (err) {
-      console.error("Failed to copy image:", err);
-      toast.error(`Failed to copy Photo ${index + 1}`);
+      console.error("Failed to copy photos:", err);
+      toast.error("Failed to copy photos");
     }
   };
-
-  const handlePhotoClick = (path: string, index: number) => {
-    if (photoClickTimer.current !== null) {
-      window.clearTimeout(photoClickTimer.current);
-    }
-    photoClickTimer.current = window.setTimeout(() => {
-      photoClickTimer.current = null;
-      void handleCopyPhotoLink(path, index);
-    }, 250);
-  };
-
-  const handlePhotoDoubleClick = async (index: number) => {
-    if (photoClickTimer.current !== null) {
-      window.clearTimeout(photoClickTimer.current);
-      photoClickTimer.current = null;
-    }
-
-    setPhotoLightboxIndex(index);
-    setPhotoLightboxOpen(true);
-
-    const missingIndexes = photoPaths
-      .map((_, photoIndex) => photoIndex)
-      .filter((photoIndex) => !photoOriginals[photoIndex]);
-    if (missingIndexes.length === 0) return;
-
-    const { getSignedUrl } = await import("@/lib/storage");
-    const resolved = await Promise.all(
-      missingIndexes.map(async (photoIndex) => ({
-        photoIndex,
-        url: await getSignedUrl(photoPaths[photoIndex]),
-      })),
-    );
-    setPhotoOriginals((current) => {
-      const next = [...current];
-      for (const item of resolved) {
-        if (item.url) next[item.photoIndex] = item.url;
-      }
-      return next;
-    });
-  };
-
-  useEffect(() => () => {
-    if (photoClickTimer.current !== null) window.clearTimeout(photoClickTimer.current);
-  }, []);
 
   const handleStatusChange = async (newStatus: string, cancellationReason?: string) => {
     if (isPaid) return;
@@ -1826,23 +1727,6 @@ function LeadCard({
 
         {(lead.payment_screenshot_url || photoPaths.length > 0) && (
           <div className="relative flex flex-wrap gap-2 border-t border-border/55 px-4 py-3">
-                {photoPaths.length > 0 && isQuoChatUrl(lead.source_url) && (
-                  <Button
-                    type="button"
-                    size="sm"
-                    className="h-8 gap-1.5 rounded-lg px-2.5 text-[11px] font-medium"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      e.preventDefault();
-                      setQuoPhotoDialogOpen(true);
-                    }}
-                    title="Review and send all photos to Quo in one go"
-                  >
-                    <Images className="h-2.5 w-2.5" />
-                    Send {photoPaths.length} to Quo
-                  </Button>
-                )}
-
                 {lead.payment_screenshot_url && (
                   <Button
                     type="button"
@@ -1860,9 +1744,8 @@ function LeadCard({
                   </Button>
                 )}
 
-                {photoPaths.map((path, i) => (
+                {photoPaths.length > 0 && (
                   <Button
-                    key={i}
                     type="button"
                     variant="outline"
                     size="sm"
@@ -1870,39 +1753,15 @@ function LeadCard({
                     onClick={(e) => {
                       e.stopPropagation();
                       e.preventDefault();
-                      handlePhotoClick(path, i);
+                      void handleCopyAllPhotos();
                     }}
-                    onDoubleClick={(e) => {
-                      e.stopPropagation();
-                      e.preventDefault();
-                      void handlePhotoDoubleClick(i);
-                    }}
-                    title="Click to copy; double-click to open"
+                    title="Copy all photos"
                   >
                     <Copy className="h-2.5 w-2.5" />
-                    Photo {i + 1}
+                    Copy all {photoPaths.length} photos
                   </Button>
-                ))}
+                )}
           </div>
-        )}
-
-        <ImageLightbox
-          images={photoPaths.map((path, index) => ({
-            src: photoOriginals[index] || path,
-          }))}
-          initialIndex={photoLightboxIndex}
-          open={photoLightboxOpen}
-          onOpenChange={setPhotoLightboxOpen}
-        />
-
-        {quoPhotoDialogOpen && (
-          <QuoPhotoSendDialog
-            open={quoPhotoDialogOpen}
-            onOpenChange={setQuoPhotoDialogOpen}
-            photoPaths={photoPaths}
-            chatUrl={lead.source_url ?? ""}
-            contactLabel={lead.customer_name ?? undefined}
-          />
         )}
 
         {(isCS || isCsAdmin || isProcessor || isAdmin || isOpr) && lead.status !== "scheduled" && (
