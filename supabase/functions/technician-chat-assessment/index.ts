@@ -1,5 +1,17 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { corsHeaders, jsonResponse } from "../_shared/quo-ai.ts";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+
+function jsonResponse(body: Record<string, unknown>, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
 
 const MODEL = "gpt-4o-mini";
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
