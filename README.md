@@ -76,11 +76,11 @@ five agree.
 | **Quoting** | Quote approval workflow (request-before-send gate), quotes-to-send queue, quotation-master permissions, incomplete-details flags |
 | **Payments** | Payment approval queue with evidence capture; a `paid` lead becomes immutable once set |
 | **Cancellations** | Cancellation request/approval workflow with proof-image upload |
-| **Technicians** | Directory with import/delete rules, ownership scoping, OPR assignment, Good Tech flag |
+| **Technicians** | Directory with import/delete rules, ownership scoping, OPR assignment, Good Tech flag, and Processing Workflow with Quo chat assessment |
 | **Reporting** | Per-technician paid performance, OPR report, area insights, optimisation |
 | **Optimization** | Areas ranked on jobs that closed in them; mark an area to track its outcome |
 | **Scheduling** | Schedule board, free-text schedule-requirement parsing, due/overdue detection |
-| **Map** | Leaflet map view, coverage areas, nearby-urgent clustering within 50 miles |
+| **Map** | Leaflet map view, coverage areas, nearby-urgent clustering, and nearby technician multi-select for workflow reports |
 | **Chat** | Quo/OpenPhone conversation mirror with a triage status axis and per-lead chat |
 | **Admin** | User management, access codes, TOTP status, activity logs, in-app system documentation |
 | **Realtime** | ~24 Supabase Realtime channels with React Query cache invalidation |
@@ -239,6 +239,7 @@ against live data before and after the change.
 | `google-sheets-sync` | Admin-protected Sheets proxy, transactional outbox worker, and full-reconcile controller |
 | `sync-us-places` | Syncs Census places and ACS population into `us_places` |
 | `check-urgent-lead` | Compares a lead against the customer's conversation before it goes urgent (`gpt-4o-mini`) |
+| `technician-chat-assessment` | Admin/Processor-only report over selected technicians' latest Quo messages; returns advisory labels and job counts |
 
 ### `check-urgent-lead`
 
