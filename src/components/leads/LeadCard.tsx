@@ -1731,8 +1731,9 @@ function LeadCard({
                   </Button>
                 )}
 
-                {photoPaths.length > 0 && (
+                {photoPaths.map((path, index) => (
                   <Button
+                    key={path}
                     type="button"
                     variant="outline"
                     size="sm"
@@ -1740,14 +1741,14 @@ function LeadCard({
                     onClick={(e) => {
                       e.stopPropagation();
                       e.preventDefault();
-                      void handleCopyAllPhotos();
+                      void handleCopyPhoto(path, index);
                     }}
-                    title="Copy all photos"
+                    title={`Copy photo ${index + 1}`}
                   >
                     <Copy className="h-2.5 w-2.5" />
-                    Copy all {photoPaths.length} photos
+                    Photo {index + 1}
                   </Button>
-                )}
+                ))}
           </div>
         )}
 
