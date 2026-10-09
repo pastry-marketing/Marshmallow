@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Loader2,
   Search,
@@ -26,6 +27,7 @@ import { buildTechnicianNameCounts } from "@/lib/technician-names";
 import { buildPickerPages } from "@/lib/picker-pages";
 import { requestTechnicianChange } from "@/lib/tech-change-requests";
 import { logActivity } from "@/lib/activity";
+import { TECHNICIANS_ROOT_KEY } from "@/lib/technicians";
 
 const LABELS = [
   ["tech_dont_respond", "Tech don't respond"],
@@ -39,33 +41,34 @@ const LABELS = [
   ["good_tech", "Good Tech"],
 ] as const;
 type Label = (typeof LABELS)[number][0];
+type Evidence = { label?: string; quote?: string; source?: string };
 type Assessment = {
   technician_id: string;
   labels: Label[];
   ai_summary: string | null;
-  ai_evidence: Array<{ label?: string; quote?: string }>;
+  ai_evidence: Evidence[];
   ai_recommendations: string[];
   conversations_reviewed: number;
   messages_reviewed: number;
   last_assessed_at: string | null;
 };
-type Report = { technicianId: string; jobsCompleted: number; jobsPaid: number; countBasis: string };
+type Report = { technicianId: string; jobsCompleted: number | null; jobsPaid: number | null; countBasis: string; error?: string | null };
 type AiResult = {
   technicianId: string;
   labels: Label[];
   recommendations: string[];
   summary: string;
-  evidence: Array<{ label?: string; quote?: string }>;
+  evidence: Evidence[];
   conversationsReviewed: number;
   messagesReviewed: number;
-  jobCounts: { completed: number; paid: number };
+  jobCounts: { completed: number | null; paid: number | null; error: string | null };
   error: string | null;
 };
 
 const MESSAGE_TEMPLATE = "Hi {name}, just checking in—do you have availability for any upcoming jobs? Please let us know what types of work you can take and your current rates. Thanks!";
 
 // The picker is paginated rather than capped: an earlier cap meant only the
-  // first 100 names in the alphabet were ever reachable.
+// first 100 names in the alphabet were ever reachable.
 const PICKER_PAGE_SIZES = [25, 50, 100, 200] as const;
 const PICKER_PAGE_SIZE_KEY = "marshmallow.technicians.workflowPageSize";
 
@@ -88,6 +91,7 @@ export function TechnicianProcessingWorkflow({
   initialTechnicianIds?: string[];
 }) {
   const { role, user, canAccess } = useAuth();
+  const queryClient = useQueryClient();
   const canComposeTechMessage = role === "admin" || canAccess("tech_quick_chat");
   const [search, setSearch] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>(initialTechnicianIds.slice(0, 8));
@@ -98,6 +102,7 @@ export function TechnicianProcessingWorkflow({
   const [savingId, setSavingId] = useState<string | null>(null);
   const [proposedLabels, setProposedLabels] = useState<Record<string, Label[]>>({});
   const [actionBusyId, setActionBusyId] = useState<string | null>(null);
+  const [flagActions, setFlagActions] = useState<Record<string, "applied" | "requested">>({});
   const [pickerPage, setPickerPage] = useState(1);
   const [pickerPageSize, setPickerPageSizeState] = useState(loadPickerPageSize);
   const setPickerPageSize = (next: number) => {
@@ -117,9 +122,7 @@ export function TechnicianProcessingWorkflow({
     () => selectedIds.map((id) => technicians.find((tech) => tech.id === id)).filter((tech): tech is TechnicianRecord => Boolean(tech)),
     [selectedIds, technicians],
   );
-  // Without a search term the list is capped so 2,855 technicians don't all
-  // render at once. Searching bypasses the cap so a specific person is always
-  // reachable, however deep in the alphabet they sit.
+  // Counts cover the full directory even when only one page is visible.
   const nameCounts = useMemo(() => buildTechnicianNameCounts(technicians), [technicians]);
 
   const filteredTechnicians = useMemo(() => {
@@ -156,9 +159,11 @@ export function TechnicianProcessingWorkflow({
   }, [search, pickerPageSize]);
 
   useEffect(() => {
+    setAiResults({});
+    setProposedLabels({});
+    setAssessments({});
+    setReports({});
     if (!selectedIds.length) {
-      setAssessments({});
-      setReports({});
       return;
     }
     let active = true;
@@ -180,6 +185,7 @@ export function TechnicianProcessingWorkflow({
   }, [selectedIds]);
 
   const toggleTech = (id: string) => {
+    if (busy) return;
     setSelectedIds((current) => {
       if (current.includes(id)) return current.filter((selectedId) => selectedId !== id);
       if (current.length >= 8) {
@@ -199,15 +205,17 @@ export function TechnicianProcessingWorkflow({
       const { data, error } = await supabase.functions.invoke("technician-chat-assessment", { body: { action: "assess", technicianIds: selectedIds } });
       if (error) throw error;
       const results = (data?.results ?? []) as AiResult[];
+      if (results.length !== selectedIds.length) throw new Error("The report was incomplete. Please retry.");
       const indexed = Object.fromEntries(results.map((result) => [result.technicianId, result]));
       setAiResults(indexed);
-      setProposedLabels((current) => ({ ...current, ...Object.fromEntries(results.map((result) => [result.technicianId, result.labels])) }));
+      setProposedLabels((current) => ({ ...current, ...Object.fromEntries(results.filter((result) => !result.error).map((result) => [result.technicianId, result.labels])) }));
       setReports((current) => ({
         ...current,
         ...Object.fromEntries(results.map((result) => [result.technicianId, {
           technicianId: result.technicianId,
           jobsCompleted: result.jobCounts.completed,
           jobsPaid: result.jobCounts.paid,
+          error: result.jobCounts.error,
           countBasis: "Exact technician-name match; completed includes job_done and paid. Duplicate technician names may share historical counts.",
         }])),
       }));
@@ -275,6 +283,8 @@ export function TechnicianProcessingWorkflow({
           requesterId: user.id,
         });
       }
+      setFlagActions((current) => ({ ...current, [`${tech.id}:${changeType}`]: role === "admin" ? "applied" : "requested" }));
+      if (role === "admin") void queryClient.invalidateQueries({ queryKey: TECHNICIANS_ROOT_KEY });
       toast.success(role === "admin" ? "Technician record updated." : "Change sent to Admin for approval.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not submit technician change.");
@@ -299,12 +309,12 @@ export function TechnicianProcessingWorkflow({
         <div className="mt-4 flex items-center gap-2">
           <Search className="h-4 w-4 text-muted-foreground" />
           <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Find technician by name, phone, area, or service" className="h-9" />
-          <Button variant="outline" size="sm" onClick={() => setSelectedIds([])} disabled={!selectedIds.length}>Clear</Button>
+          <Button variant="outline" size="sm" onClick={() => setSelectedIds([])} disabled={!selectedIds.length || busy}>Clear</Button>
         </div>
         <div className="mt-3 grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
           {visibleTechnicians.map((tech) => (
             <label key={tech.id} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-muted/60">
-              <Checkbox checked={selectedIds.includes(tech.id)} onCheckedChange={() => toggleTech(tech.id)} />
+              <Checkbox checked={selectedIds.includes(tech.id)} disabled={busy} onCheckedChange={() => toggleTech(tech.id)} />
               <span className="flex min-w-0 flex-1 items-center gap-1.5">
                 <span className="truncate">
                   {tech.name?.trim() || <span className="italic text-muted-foreground">Unnamed technician</span>}
@@ -391,12 +401,13 @@ export function TechnicianProcessingWorkflow({
                 <p className="text-xs text-muted-foreground">{tech.service || "Service not set"} · {tech.area || "Area not set"} · {tech.phone_number || "No phone"}</p>
               </div>
               <div className="flex flex-wrap gap-2 text-xs">
-                <Badge variant="outline">{report?.jobsCompleted ?? 0} jobs completed</Badge>
-                <Badge variant="outline">{report?.jobsPaid ?? 0} jobs paid</Badge>
+                <Badge variant="outline">{report?.jobsCompleted ?? "—"} jobs completed</Badge>
+                <Badge variant="outline">{report?.jobsPaid ?? "—"} jobs paid</Badge>
                 {assessment?.last_assessed_at && <span className="text-muted-foreground">Reviewed {new Date(assessment.last_assessed_at).toLocaleString()}</span>}
               </div>
             </div>
-            {report?.countBasis && <p className="text-[11px] text-muted-foreground">{report.countBasis}</p>}
+            {report?.error && <p className="text-xs text-destructive">{report.error}</p>}
+            {report?.countBasis && !report.error && <p className="text-[11px] text-muted-foreground">{report.countBasis}</p>}
 
             <div className="flex flex-wrap gap-2">
               {LABELS.map(([key, label]) => {
@@ -416,12 +427,22 @@ export function TechnicianProcessingWorkflow({
               <div className="space-y-2 rounded-lg bg-muted/30 p-3">
                 <p className="text-sm">{result?.summary ?? assessment?.ai_summary}</p>
                 <p className="text-[11px] text-muted-foreground">Reviewed {result?.conversationsReviewed ?? assessment?.conversations_reviewed ?? 0} conversations · {result?.messagesReviewed ?? assessment?.messages_reviewed ?? 0} messages{result?.error ? ` · Error: ${result.error}` : ""}</p>
-                {(result?.evidence ?? assessment?.ai_evidence ?? []).map((item, index) => item.quote ? <blockquote key={index} className="border-l-2 border-primary/50 pl-2 text-xs italic text-muted-foreground">{item.quote}</blockquote> : null)}
+                {(result?.evidence ?? assessment?.ai_evidence ?? []).map((item, index) => item.quote ? <blockquote key={index} className="border-l-2 border-primary/50 pl-2 text-xs italic text-muted-foreground">{item.source ? `${item.source}: ` : ""}{item.quote}</blockquote> : null)}
+              </div>
+            )}
+
+            {recommendations.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                <span className="text-muted-foreground">Suggested next steps:</span>
+                {recommendations.includes("suggest_inactive") && <Badge variant="outline">Review for inactivity</Badge>}
+                {recommendations.includes("review_payment") && <Badge variant="outline">Review payment history</Badge>}
+                {recommendations.includes("review_rates") && <Badge variant="outline">Review rates</Badge>}
+                {recommendations.includes("suggest_check_job_message") && <Badge variant="outline">Compose job check-in</Badge>}
               </div>
             )}
 
             <div className="flex flex-wrap gap-2 border-t pt-3">
-              {(recommendsInactive || labels.some((label) => ["tech_dont_respond", "tech_is_scammer", "never_responded"].includes(label))) && tech.is_active !== false && (
+              {(recommendsInactive || labels.some((label) => ["tech_dont_respond", "tech_is_scammer", "never_responded"].includes(label))) && tech.is_active !== false && !flagActions[`${tech.id}:set_active`] && (
                 <Button variant="outline" size="sm" disabled={actionBusyId === tech.id} onClick={() => void requestFlag(tech, "set_active", false)}><UserX className="mr-1.5 h-3.5 w-3.5" />{role === "admin" ? "Mark inactive" : "Request inactive"}</Button>
               )}
               {canComposeTechMessage && (recommendsMessage || labels.includes("good_tech")) && tech.phone_number && (
@@ -429,9 +450,11 @@ export function TechnicianProcessingWorkflow({
                   <Button variant="outline" size="sm"><MessageSquareText className="mr-1.5 h-3.5 w-3.5" />Compose job check-in</Button>
                 </QuoPhoneTrigger>
               )}
-              {labels.includes("good_tech") && !tech.is_good_tech && (
+              {labels.includes("good_tech") && !tech.is_good_tech && !flagActions[`${tech.id}:set_good_tech`] && (
                 <Button variant="outline" size="sm" disabled={actionBusyId === tech.id} onClick={() => void requestFlag(tech, "set_good_tech", true)}><Star className="mr-1.5 h-3.5 w-3.5" />{role === "admin" ? "Mark Good Tech" : "Request Good Tech"}</Button>
               )}
+              {flagActions[`${tech.id}:set_active`] && <Badge variant="secondary">Inactive {flagActions[`${tech.id}:set_active`]}</Badge>}
+              {flagActions[`${tech.id}:set_good_tech`] && <Badge variant="secondary">Good Tech {flagActions[`${tech.id}:set_good_tech`]}</Badge>}
             </div>
           </article>
         );

@@ -40,6 +40,21 @@ type Recommendation = (typeof ALLOWED_RECOMMENDATIONS)[number];
 type Technician = { id: string; name: string; phone_number: string | null; is_active: boolean | null };
 type Conversation = { id: string; customer_number: string | null; customer_name: string | null };
 type QuoMessage = { conversation_id: string; sender: string; text: string | null; message_time: string | null };
+type JobCounts = { completed: number | null; paid: number | null; error: string | null };
+
+async function countJobs(admin: ReturnType<typeof createClient>, name: string): Promise<JobCounts> {
+  if (!name?.trim()) return { completed: null, paid: null, error: "Technician has no name to match against leads." };
+  const [completed, paid] = await Promise.all([
+    admin.from("leads").select("id", { count: "exact", head: true })
+      .eq("tech_name", name).in("status", ["job_done", "paid"]),
+    admin.from("leads").select("id", { count: "exact", head: true })
+      .eq("tech_name", name).eq("status", "paid"),
+  ]);
+  if (completed.error || paid.error || completed.count === null || paid.count === null) {
+    return { completed: null, paid: null, error: "Could not load lead job counts. Retry the report." };
+  }
+  return { completed: completed.count, paid: paid.count, error: null };
+}
 
 function phoneVariants(value: string | null | undefined): string[] {
   const digits = (value ?? "").replace(/\D/g, "");
@@ -82,10 +97,9 @@ function normalizeForMatch(value: string): string {
  * this the model echoes metadata we injected (job counts, technician fields) as
  * if it were something the technician said.
  */
-function verifiedEvidence(value: unknown, messages: QuoMessage[]): Array<{ label?: string; quote?: string }> {
+function verifiedEvidence(value: unknown, messages: QuoMessage[]): Array<{ label?: string; quote?: string; source?: string }> {
   if (!Array.isArray(value)) return [];
-  const haystack = normalizeForMatch(messages.map((message) => message.text ?? "").join(" "));
-  const verified: Array<{ label?: string; quote?: string }> = [];
+  const verified: Array<{ label?: string; quote?: string; source?: string }> = [];
   for (const item of value.slice(0, 10)) {
     if (!item || typeof item !== "object") continue;
     const entry = item as { label?: unknown; quote?: unknown };
@@ -93,8 +107,14 @@ function verifiedEvidence(value: unknown, messages: QuoMessage[]): Array<{ label
     const needle = normalizeForMatch(entry.quote);
     // Require the quote to actually appear in the transcript. Short quotes are
     // dropped because a handful of normalized characters match far too easily.
-    if (needle.length < 12 || !haystack.includes(needle)) continue;
-    verified.push({ label: typeof entry.label === "string" ? entry.label : undefined, quote: entry.quote.trim().slice(0, 400) });
+    if (needle.length < 12) continue;
+    const matchingMessage = messages.find((message) => normalizeForMatch((message.text ?? "").slice(0, 1200)).includes(needle));
+    if (!matchingMessage) continue;
+    verified.push({
+      label: typeof entry.label === "string" && ALLOWED_LABELS.includes(entry.label as Label) ? entry.label : undefined,
+      quote: entry.quote.trim().slice(0, 400),
+      source: matchingMessage.sender === "agent" ? "Our team" : "Technician / contact",
+    });
   }
   return verified;
 }
@@ -136,16 +156,12 @@ Deno.serve(async (req) => {
       .select("id, name").in("id", technicianIds);
     if (selectedTechsError) return jsonResponse({ error: selectedTechsError.message }, 400);
     const reports = await Promise.all((selectedTechs ?? []).map(async (tech) => {
-      const [completed, paid] = await Promise.all([
-        admin.from("leads").select("id", { count: "exact", head: true })
-          .eq("tech_name", tech.name).in("status", ["job_done", "paid"]),
-        admin.from("leads").select("id", { count: "exact", head: true })
-          .eq("tech_name", tech.name).eq("status", "paid"),
-      ]);
+      const counts = await countJobs(admin, tech.name);
       return {
         technicianId: tech.id,
-        jobsCompleted: completed.count ?? 0,
-        jobsPaid: paid.count ?? 0,
+        jobsCompleted: counts.completed,
+        jobsPaid: counts.paid,
+        error: counts.error,
         countBasis: "Exact technician-name match on leads; completed includes job_done and paid. Duplicate technician names may share historical counts.",
       };
     }));
@@ -196,22 +212,13 @@ Deno.serve(async (req) => {
       ? await admin.from("quo_messages").select("conversation_id, sender, text, message_time")
           .in("conversation_id", [...ids]).order("message_time", { ascending: false }).limit(MAX_MESSAGES_PER_TECH)
       : { data: [], error: null };
-    const techMessages = ((messageRows ?? []) as QuoMessage[]).reverse();
-    const jobCountQueries = await Promise.all([
-      admin.from("leads").select("id", { count: "exact", head: true })
-        .eq("tech_name", tech.name).in("status", ["job_done", "paid"]),
-      admin.from("leads").select("id", { count: "exact", head: true })
-        .eq("tech_name", tech.name).eq("status", "paid"),
-    ]);
-    const jobCounts = {
-      completed: jobCountQueries[0].count ?? 0,
-      paid: jobCountQueries[1].count ?? 0,
-    };
+    const techMessages = ((messageRows ?? []) as QuoMessage[]).filter((message) => message.sender === "agent" || message.sender === "customer").reverse();
+    const jobCounts = await countJobs(admin, tech.name);
 
     let labels: Label[] = [];
     let recommendations: string[] = [];
     let summary = "No matching Quo conversation messages were found for this phone number.";
-    let evidence: Array<{ label?: string; quote?: string }> = [];
+    let evidence: Array<{ label?: string; quote?: string; source?: string }> = [];
     let aiError: string | null = messagesError?.message ?? null;
     if (!aiError && techMessages.length) {
       try {
