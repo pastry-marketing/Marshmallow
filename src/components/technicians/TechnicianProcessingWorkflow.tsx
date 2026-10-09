@@ -61,11 +61,13 @@ type AiResult = {
   evidence: Evidence[];
   conversationsReviewed: number;
   messagesReviewed: number;
+  chatSource?: string;
   jobCounts: { completed: number | null; paid: number | null; error: string | null };
   error: string | null;
 };
 
 const MESSAGE_TEMPLATE = "Hi {name}, just checking in—do you have availability for any upcoming jobs? Please let us know what types of work you can take and your current rates. Thanks!";
+const COUNT_BASIS = "Matched by technician phone number on completed leads (job_done + paid); paid is a subset. Older leads without a technician phone number cannot be attributed, and shared phone numbers may be ambiguous.";
 
 // The picker is paginated rather than capped: an earlier cap meant only the
 // first 100 names in the alphabet were ever reachable.
@@ -216,7 +218,7 @@ export function TechnicianProcessingWorkflow({
           jobsCompleted: result.jobCounts.completed,
           jobsPaid: result.jobCounts.paid,
           error: result.jobCounts.error,
-          countBasis: "Exact technician-name match; completed includes job_done and paid. Duplicate technician names may share historical counts.",
+          countBasis: COUNT_BASIS,
         }])),
       }));
       if (user?.id) {
@@ -299,7 +301,7 @@ export function TechnicianProcessingWorkflow({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-base font-semibold">Technician Processing Workflow</h2>
-            <p className="mt-1 max-w-3xl text-xs text-muted-foreground">Select up to 8 technicians. AI reviews up to the 250 most recent stored text messages per technician and suggests labels; it never marks a technician inactive or sends a message automatically. Reviews can take up to 3 minutes.</p>
+            <p className="mt-1 max-w-3xl text-xs text-muted-foreground">Select up to 8 technicians. AI reviews up to 250 Quo text messages per technician (from the CRM mirror or a saved Quo link) and suggests labels; it never marks a technician inactive or sends a message automatically. Reviews can take up to 3 minutes.</p>
           </div>
           <Button onClick={() => void runAssessment()} disabled={!selectedIds.length || busy} className="gap-2">
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
@@ -409,6 +411,12 @@ export function TechnicianProcessingWorkflow({
             {report?.error && <p className="text-xs text-destructive">{report.error}</p>}
             {report?.countBasis && !report.error && <p className="text-[11px] text-muted-foreground">{report.countBasis}</p>}
 
+            <p className="text-xs text-muted-foreground">Review labels below before saving. AI suggestions do not change the technician record automatically.</p>
+            {result && (
+              <p className="text-xs text-muted-foreground">
+                AI suggested: {result.error ? "Review failed; retry this technician" : result.labels.length ? result.labels.map((label) => LABELS.find(([key]) => key === label)?.[1] ?? label).join(", ") : "No supported status from the available chat"}
+              </p>
+            )}
             <div className="flex flex-wrap gap-2">
               {LABELS.map(([key, label]) => {
                 const checked = labels.includes(key);
@@ -426,7 +434,12 @@ export function TechnicianProcessingWorkflow({
             {(result || assessment) && (
               <div className="space-y-2 rounded-lg bg-muted/30 p-3">
                 <p className="text-sm">{result?.summary ?? assessment?.ai_summary}</p>
-                <p className="text-[11px] text-muted-foreground">Reviewed {result?.conversationsReviewed ?? assessment?.conversations_reviewed ?? 0} conversations · {result?.messagesReviewed ?? assessment?.messages_reviewed ?? 0} messages{result?.error ? ` · Error: ${result.error}` : ""}</p>
+                <p className="text-[11px] text-muted-foreground">Reviewed {result?.conversationsReviewed ?? assessment?.conversations_reviewed ?? 0} conversations · {result?.messagesReviewed ?? assessment?.messages_reviewed ?? 0} messages{result?.chatSource ? ` · ${result.chatSource}` : ""}{result?.error ? ` · Error: ${result.error}` : ""}</p>
+                {(result?.conversationsReviewed ?? assessment?.conversations_reviewed) === 0 && tech.chat_link && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400">
+                    A Quo chat link is saved, but no messages were available from the CRM mirror or the linked conversation. {tech.chat_link.startsWith("https://my.quo.com/") && <a href={tech.chat_link} target="_blank" rel="noopener noreferrer" className="underline">Open Quo chat</a>}
+                  </p>
+                )}
                 {(result?.evidence ?? assessment?.ai_evidence ?? []).map((item, index) => item.quote ? <blockquote key={index} className="border-l-2 border-primary/50 pl-2 text-xs italic text-muted-foreground">{item.source ? `${item.source}: ` : ""}{item.quote}</blockquote> : null)}
               </div>
             )}
