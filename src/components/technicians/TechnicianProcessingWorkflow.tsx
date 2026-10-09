@@ -1,5 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Search, Sparkles, MessageSquareText, UserX, Star } from "lucide-react";
+import {
+  Loader2,
+  Search,
+  Sparkles,
+  MessageSquareText,
+  UserX,
+  Star,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+} from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
@@ -7,10 +18,12 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import QuoPhoneTrigger from "@/components/leads/QuoPhoneTrigger";
 import type { TechnicianRecord } from "@/components/technicians/TechnicianDialog";
 import { TechnicianNameBadges } from "@/components/technicians/TechnicianNameCell";
 import { buildTechnicianNameCounts } from "@/lib/technician-names";
+import { buildPickerPages } from "@/lib/picker-pages";
 import { requestTechnicianChange } from "@/lib/tech-change-requests";
 import { logActivity } from "@/lib/activity";
 
@@ -51,9 +64,21 @@ type AiResult = {
 
 const MESSAGE_TEMPLATE = "Hi {name}, just checking in—do you have availability for any upcoming jobs? Please let us know what types of work you can take and your current rates. Thanks!";
 
-// Technicians arrive name-sorted, so an uncapped list would only ever show the
-// first 100 names in the alphabet. Searching bypasses this cap.
-const UNSEARCHED_TECH_LIMIT = 100;
+// The picker is paginated rather than capped: an earlier cap meant only the
+  // first 100 names in the alphabet were ever reachable.
+const PICKER_PAGE_SIZES = [25, 50, 100, 200] as const;
+const PICKER_PAGE_SIZE_KEY = "marshmallow.technicians.workflowPageSize";
+
+function loadPickerPageSize(): number {
+  try {
+    const raw = localStorage.getItem(PICKER_PAGE_SIZE_KEY);
+    const parsed = Number(raw);
+    if (PICKER_PAGE_SIZES.includes(parsed as (typeof PICKER_PAGE_SIZES)[number])) return parsed;
+  } catch {
+    // ignore storage errors
+  }
+  return 50;
+}
 
 export function TechnicianProcessingWorkflow({
   technicians,
@@ -73,6 +98,16 @@ export function TechnicianProcessingWorkflow({
   const [savingId, setSavingId] = useState<string | null>(null);
   const [proposedLabels, setProposedLabels] = useState<Record<string, Label[]>>({});
   const [actionBusyId, setActionBusyId] = useState<string | null>(null);
+  const [pickerPage, setPickerPage] = useState(1);
+  const [pickerPageSize, setPickerPageSizeState] = useState(loadPickerPageSize);
+  const setPickerPageSize = (next: number) => {
+    setPickerPageSizeState(next);
+    try {
+      localStorage.setItem(PICKER_PAGE_SIZE_KEY, String(next));
+    } catch {
+      // ignore storage errors
+    }
+  };
 
   useEffect(() => {
     if (initialTechnicianIds.length) setSelectedIds(initialTechnicianIds.slice(0, 8));
@@ -89,7 +124,7 @@ export function TechnicianProcessingWorkflow({
 
   const filteredTechnicians = useMemo(() => {
     const query = search.trim().toLowerCase();
-    if (!query) return technicians.slice(0, UNSEARCHED_TECH_LIMIT);
+    if (!query) return technicians;
     return technicians.filter((tech) =>
       [tech.name, tech.phone_number, tech.area, tech.service].some((value) => value?.toLowerCase().includes(query)),
     );
@@ -97,7 +132,7 @@ export function TechnicianProcessingWorkflow({
 
   // Unnamed import rows have no name and often no area, which renders as a bare
   // separator. They sort last so they never crowd out named technicians.
-  const visibleTechnicians = useMemo(
+  const sortedTechnicians = useMemo(
     () =>
       [...filteredTechnicians].sort((left, right) => {
         const leftNamed = left.name?.trim() ? 0 : 1;
@@ -106,6 +141,19 @@ export function TechnicianProcessingWorkflow({
       }),
     [filteredTechnicians],
   );
+
+  const totalPages = Math.max(1, Math.ceil(sortedTechnicians.length / pickerPageSize));
+  const currentPage = Math.min(pickerPage, totalPages);
+  const pageStart = (currentPage - 1) * pickerPageSize;
+  const visibleTechnicians = useMemo(
+    () => sortedTechnicians.slice(pageStart, pageStart + pickerPageSize),
+    [sortedTechnicians, pageStart, pickerPageSize],
+  );
+
+  // A new search or page size can leave the reader past the last page.
+  useEffect(() => {
+    setPickerPage(1);
+  }, [search, pickerPageSize]);
 
   useEffect(() => {
     if (!selectedIds.length) {
@@ -253,12 +301,7 @@ export function TechnicianProcessingWorkflow({
           <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Find technician by name, phone, area, or service" className="h-9" />
           <Button variant="outline" size="sm" onClick={() => setSelectedIds([])} disabled={!selectedIds.length}>Clear</Button>
         </div>
-        <p className="mt-2 text-[11px] text-muted-foreground">
-            {search.trim()
-              ? `${visibleTechnicians.length} match${visibleTechnicians.length === 1 ? "" : "es"}`
-              : `Showing the first ${visibleTechnicians.length} of ${technicians.length} technicians. Search by name, phone, area, or service to reach anyone else.`}
-        </p>
-        <div className="mt-3 grid max-h-56 gap-1 overflow-y-auto sm:grid-cols-2 lg:grid-cols-3">
+        <div className="mt-3 grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
           {visibleTechnicians.map((tech) => (
             <label key={tech.id} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-muted/60">
               <Checkbox checked={selectedIds.includes(tech.id)} onCheckedChange={() => toggleTech(tech.id)} />
@@ -272,6 +315,59 @@ export function TechnicianProcessingWorkflow({
               {tech.is_active === false && <Badge variant="secondary">Inactive</Badge>}
             </label>
           ))}
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t pt-3 text-xs text-muted-foreground">
+          <span>
+            {sortedTechnicians.length === 0
+              ? "No technicians match this search."
+              : `Showing ${pageStart + 1}–${Math.min(pageStart + pickerPageSize, sortedTechnicians.length)} of ${sortedTechnicians.length}${search.trim() ? " matching" : " technicians"}`}
+          </span>
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="flex items-center gap-1.5">
+              Per page
+              <Select value={String(pickerPageSize)} onValueChange={(value) => setPickerPageSize(Number(value))}>
+                <SelectTrigger className="h-7 w-[76px] text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PICKER_PAGE_SIZES.map((size) => (
+                    <SelectItem key={size} value={String(size)}>{size}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </label>
+            <div className="flex items-center gap-1">
+              <Button variant="outline" size="sm" className="h-7 px-2" disabled={currentPage === 1} onClick={() => setPickerPage(1)} title="First page" aria-label="First page">
+                <ChevronsLeft className="h-3.5 w-3.5" />
+              </Button>
+              <Button variant="outline" size="sm" className="h-7 px-2" disabled={currentPage === 1} onClick={() => setPickerPage((page) => Math.max(1, page - 1))} title="Previous page" aria-label="Previous page">
+                <ChevronLeft className="h-3.5 w-3.5" />
+              </Button>
+              {buildPickerPages(currentPage, totalPages).map((page, index) =>
+                page === "ellipsis-left" || page === "ellipsis-right" ? (
+                  <span key={`${page}-${index}`} className="px-1 text-muted-foreground">…</span>
+                ) : (
+                  <Button
+                    key={page}
+                    variant={page === currentPage ? "default" : "outline"}
+                    size="sm"
+                    className="h-7 min-w-7 px-2"
+                    onClick={() => setPickerPage(page)}
+                    aria-current={page === currentPage ? "page" : undefined}
+                  >
+                    {page}
+                  </Button>
+                ),
+              )}
+              <Button variant="outline" size="sm" className="h-7 px-2" disabled={currentPage === totalPages} onClick={() => setPickerPage((page) => Math.min(totalPages, page + 1))} title="Next page" aria-label="Next page">
+                <ChevronRight className="h-3.5 w-3.5" />
+              </Button>
+              <Button variant="outline" size="sm" className="h-7 px-2" disabled={currentPage === totalPages} onClick={() => setPickerPage(totalPages)} title="Last page" aria-label="Last page">
+                <ChevronsRight className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </div>
         </div>
       </div>
 
