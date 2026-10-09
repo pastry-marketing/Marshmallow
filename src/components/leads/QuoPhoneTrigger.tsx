@@ -48,6 +48,7 @@ interface QuoPhoneTriggerProps {
   className?: string;
   children?: ReactNode;
   chatType?: "customer" | "tech";
+  initialMessage?: string;
 }
 
 function getPhoneKey(value: string | null | undefined) {
@@ -166,6 +167,7 @@ export default function QuoPhoneTrigger({
   className,
   children,
   chatType,
+  initialMessage,
 }: QuoPhoneTriggerProps) {
   const auth = useAuth();
   const role = auth.role;
@@ -216,6 +218,10 @@ export default function QuoPhoneTrigger({
   // Quick Chat is available to admins and to any user an admin granted access to.
   const canUseQuickChat = isAdmin || auth.canAccess?.(requiredAccessKey) === true;
   const [lastFromCustomer, setLastFromCustomer] = useState(false);
+
+  useEffect(() => {
+    if (open && initialMessage) setMessageDraft(initialMessage);
+  }, [initialMessage, open]);
 
   // Shared unread-status subscriber: batch all visible numbers to avoid one subscription per trigger.
   useEffect(() => {
