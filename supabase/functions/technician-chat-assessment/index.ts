@@ -110,9 +110,18 @@ Deno.serve(async (req) => {
       .select("id, name").in("id", technicianIds);
     if (selectedTechsError) return jsonResponse({ error: selectedTechsError.message }, 400);
     const reports = await Promise.all((selectedTechs ?? []).map(async (tech) => {
-      const [done, paid] = await Promise.all(["job_done", "paid"].map((status) => admin.from("leads")
-        .select("id", { count: "exact", head: true }).eq("tech_name", tech.name).eq("status", status)));
-      return { technicianId: tech.id, jobsDone: done.count ?? 0, jobsPaid: paid.count ?? 0, countBasis: "Exact technician-name match on leads; duplicate technician names may share historical counts." };
+      const [completed, paid] = await Promise.all([
+        admin.from("leads").select("id", { count: "exact", head: true })
+          .eq("tech_name", tech.name).in("status", ["job_done", "paid"]),
+        admin.from("leads").select("id", { count: "exact", head: true })
+          .eq("tech_name", tech.name).eq("status", "paid"),
+      ]);
+      return {
+        technicianId: tech.id,
+        jobsCompleted: completed.count ?? 0,
+        jobsPaid: paid.count ?? 0,
+        countBasis: "Exact technician-name match on leads; completed includes job_done and paid. Duplicate technician names may share historical counts.",
+      };
     }));
     return jsonResponse({ assessments: rows ?? [], reports });
   }
@@ -162,10 +171,14 @@ Deno.serve(async (req) => {
           .in("conversation_id", [...ids]).order("message_time", { ascending: false }).limit(MAX_MESSAGES_PER_TECH)
       : { data: [], error: null };
     const techMessages = ((messageRows ?? []) as QuoMessage[]).reverse();
-    const jobCountQueries = await Promise.all(["job_done", "paid"].map((status) => admin.from("leads")
-      .select("id", { count: "exact", head: true }).eq("tech_name", tech.name).eq("status", status)));
+    const jobCountQueries = await Promise.all([
+      admin.from("leads").select("id", { count: "exact", head: true })
+        .eq("tech_name", tech.name).in("status", ["job_done", "paid"]),
+      admin.from("leads").select("id", { count: "exact", head: true })
+        .eq("tech_name", tech.name).eq("status", "paid"),
+    ]);
     const jobCounts = {
-      job_done: jobCountQueries[0].count ?? 0,
+      completed: jobCountQueries[0].count ?? 0,
       paid: jobCountQueries[1].count ?? 0,
     };
 
