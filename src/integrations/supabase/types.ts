@@ -62,6 +62,30 @@ export type Database = {
           },
         ]
       }
+      ai_status_refresh_runs: {
+        Row: {
+          id: boolean
+          last_finished_at: string | null
+          last_started_at: string | null
+          last_summary: Json | null
+          last_trigger: string | null
+        }
+        Insert: {
+          id?: boolean
+          last_finished_at?: string | null
+          last_started_at?: string | null
+          last_summary?: Json | null
+          last_trigger?: string | null
+        }
+        Update: {
+          id?: boolean
+          last_finished_at?: string | null
+          last_started_at?: string | null
+          last_summary?: Json | null
+          last_trigger?: string | null
+        }
+        Relationships: []
+      }
       calls: {
         Row: {
           call_date: string
@@ -178,8 +202,173 @@ export type Database = {
         }
         Relationships: []
       }
+      google_sheets_sync_errors: {
+        Row: {
+          action: string
+          detail: Json | null
+          id: number
+          lead_id: string | null
+          message: string
+          occurred_at: string
+        }
+        Insert: {
+          action?: string
+          detail?: Json | null
+          id?: number
+          lead_id?: string | null
+          message: string
+          occurred_at?: string
+        }
+        Update: {
+          action?: string
+          detail?: Json | null
+          id?: number
+          lead_id?: string | null
+          message?: string
+          occurred_at?: string
+        }
+        Relationships: []
+      }
+      google_sheets_sync_health: {
+        Row: {
+          consecutive_failures: number
+          id: string
+          last_attempt_at: string | null
+          last_error_at: string | null
+          last_error_message: string | null
+          last_success_at: string | null
+          reconcile_active: boolean
+          reconcile_clear_pending: boolean
+          reconcile_lock_token: string | null
+          reconcile_lock_until: string | null
+          status: string
+          synced_total: number
+          updated_at: string
+          watermark_at: string | null
+        }
+        Insert: {
+          consecutive_failures?: number
+          id?: string
+          last_attempt_at?: string | null
+          last_error_at?: string | null
+          last_error_message?: string | null
+          last_success_at?: string | null
+          reconcile_active?: boolean
+          reconcile_clear_pending?: boolean
+          reconcile_lock_token?: string | null
+          reconcile_lock_until?: string | null
+          status?: string
+          synced_total?: number
+          updated_at?: string
+          watermark_at?: string | null
+        }
+        Update: {
+          consecutive_failures?: number
+          id?: string
+          last_attempt_at?: string | null
+          last_error_at?: string | null
+          last_error_message?: string | null
+          last_success_at?: string | null
+          reconcile_active?: boolean
+          reconcile_clear_pending?: boolean
+          reconcile_lock_token?: string | null
+          reconcile_lock_until?: string | null
+          status?: string
+          synced_total?: number
+          updated_at?: string
+          watermark_at?: string | null
+        }
+        Relationships: []
+      }
+      google_sheets_sync_queue: {
+        Row: {
+          attempts: number
+          enqueued_at: string
+          generation: number
+          job_id: string | null
+          last_error: string | null
+          lead_id: string
+          lease_token: string | null
+          lease_until: string | null
+          next_attempt_at: string
+          op: string
+          previous_statuses: string[]
+          updated_at: string
+        }
+        Insert: {
+          attempts?: number
+          enqueued_at?: string
+          generation?: number
+          job_id?: string | null
+          last_error?: string | null
+          lead_id: string
+          lease_token?: string | null
+          lease_until?: string | null
+          next_attempt_at?: string
+          op?: string
+          previous_statuses?: string[]
+          updated_at?: string
+        }
+        Update: {
+          attempts?: number
+          enqueued_at?: string
+          generation?: number
+          job_id?: string | null
+          last_error?: string | null
+          lead_id?: string
+          lease_token?: string | null
+          lease_until?: string | null
+          next_attempt_at?: string
+          op?: string
+          previous_statuses?: string[]
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      lead_ai_statuses: {
+        Row: {
+          checked_at: string
+          last_message_at: string | null
+          lead_id: string
+          message_count: number
+          model: string | null
+          source: string
+          status: string
+        }
+        Insert: {
+          checked_at?: string
+          last_message_at?: string | null
+          lead_id: string
+          message_count?: number
+          model?: string | null
+          source?: string
+          status: string
+        }
+        Update: {
+          checked_at?: string
+          last_message_at?: string | null
+          lead_id?: string
+          message_count?: number
+          model?: string | null
+          source?: string
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lead_ai_statuses_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: true
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       lead_cancellation_requests: {
         Row: {
+          ai_reason_applied: boolean
+          ai_reason_code: string | null
+          ai_suggested_at: string | null
+          ai_suggested_reason: string | null
           comment: string
           created_at: string
           id: string
@@ -198,6 +387,10 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          ai_reason_applied?: boolean
+          ai_reason_code?: string | null
+          ai_suggested_at?: string | null
+          ai_suggested_reason?: string | null
           comment: string
           created_at?: string
           id?: string
@@ -216,6 +409,10 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          ai_reason_applied?: boolean
+          ai_reason_code?: string | null
+          ai_suggested_at?: string | null
+          ai_suggested_reason?: string | null
           comment?: string
           created_at?: string
           id?: string
@@ -828,6 +1025,77 @@ export type Database = {
           },
         ]
       }
+      lead_urgent_review_requests: {
+        Row: {
+          ai_checked_at: string | null
+          ai_issues: Json
+          ai_model: string | null
+          ai_summary: string | null
+          created_at: string
+          id: string
+          lead_customer_name: string | null
+          lead_id: string
+          lead_job_id: string | null
+          previous_status: string
+          requested_by: string | null
+          requested_by_name: string | null
+          review_note: string | null
+          reviewed_at: string | null
+          reviewed_by: string | null
+          reviewed_by_name: string | null
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          ai_checked_at?: string | null
+          ai_issues?: Json
+          ai_model?: string | null
+          ai_summary?: string | null
+          created_at?: string
+          id?: string
+          lead_customer_name?: string | null
+          lead_id: string
+          lead_job_id?: string | null
+          previous_status: string
+          requested_by?: string | null
+          requested_by_name?: string | null
+          review_note?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          reviewed_by_name?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          ai_checked_at?: string | null
+          ai_issues?: Json
+          ai_model?: string | null
+          ai_summary?: string | null
+          created_at?: string
+          id?: string
+          lead_customer_name?: string | null
+          lead_id?: string
+          lead_job_id?: string | null
+          previous_status?: string
+          requested_by?: string | null
+          requested_by_name?: string | null
+          review_note?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          reviewed_by_name?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lead_urgent_review_requests_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       leads: {
         Row: {
           address: string | null
@@ -836,6 +1104,10 @@ export type Database = {
           booked_at: string | null
           cancellation_reason: string | null
           city: string | null
+          coverage_area_label: string | null
+          coverage_checked_at: string | null
+          coverage_level: string | null
+          coverage_tech_count: number | null
           created_at: string | null
           created_by: string | null
           created_by_name: string | null
@@ -894,6 +1166,10 @@ export type Database = {
           booked_at?: string | null
           cancellation_reason?: string | null
           city?: string | null
+          coverage_area_label?: string | null
+          coverage_checked_at?: string | null
+          coverage_level?: string | null
+          coverage_tech_count?: number | null
           created_at?: string | null
           created_by?: string | null
           created_by_name?: string | null
@@ -952,6 +1228,10 @@ export type Database = {
           booked_at?: string | null
           cancellation_reason?: string | null
           city?: string | null
+          coverage_area_label?: string | null
+          coverage_checked_at?: string | null
+          coverage_level?: string | null
+          coverage_tech_count?: number | null
           created_at?: string | null
           created_by?: string | null
           created_by_name?: string | null
@@ -1164,6 +1444,42 @@ export type Database = {
           },
         ]
       }
+      optimized_areas: {
+        Row: {
+          city: string | null
+          id: string
+          is_active: boolean
+          label: string
+          marked_at: string
+          marked_by: string | null
+          note: string | null
+          state: string | null
+          zip_code: string | null
+        }
+        Insert: {
+          city?: string | null
+          id?: string
+          is_active?: boolean
+          label: string
+          marked_at?: string
+          marked_by?: string | null
+          note?: string | null
+          state?: string | null
+          zip_code?: string | null
+        }
+        Update: {
+          city?: string | null
+          id?: string
+          is_active?: boolean
+          label?: string
+          marked_at?: string
+          marked_by?: string | null
+          note?: string | null
+          state?: string | null
+          zip_code?: string | null
+        }
+        Relationships: []
+      }
       organization_members: {
         Row: {
           created_at: string
@@ -1305,6 +1621,8 @@ export type Database = {
           conversation_id: string
           created_at: string
           followed_up_at: string | null
+          followed_up_by: string | null
+          followed_up_by_name: string | null
           is_dead: boolean
           is_delayed: boolean
           is_important: boolean
@@ -1321,6 +1639,8 @@ export type Database = {
           conversation_id: string
           created_at?: string
           followed_up_at?: string | null
+          followed_up_by?: string | null
+          followed_up_by_name?: string | null
           is_dead?: boolean
           is_delayed?: boolean
           is_important?: boolean
@@ -1337,6 +1657,8 @@ export type Database = {
           conversation_id?: string
           created_at?: string
           followed_up_at?: string | null
+          followed_up_by?: string | null
+          followed_up_by_name?: string | null
           is_dead?: boolean
           is_delayed?: boolean
           is_important?: boolean
@@ -1792,6 +2114,140 @@ export type Database = {
         }
         Relationships: []
       }
+      technician_area_coordinate_cache: {
+        Row: {
+          area: string
+          area_key: string
+          city: string | null
+          latitude: number | null
+          longitude: number | null
+          resolved_at: string
+          state_code: string | null
+        }
+        Insert: {
+          area: string
+          area_key: string
+          city?: string | null
+          latitude?: number | null
+          longitude?: number | null
+          resolved_at?: string
+          state_code?: string | null
+        }
+        Update: {
+          area?: string
+          area_key?: string
+          city?: string | null
+          latitude?: number | null
+          longitude?: number | null
+          resolved_at?: string
+          state_code?: string | null
+        }
+        Relationships: []
+      }
+      technician_change_requests: {
+        Row: {
+          change_type: string
+          created_at: string
+          id: string
+          previous_value: boolean | null
+          reason: string | null
+          requested_by: string
+          requested_by_name: string | null
+          requested_value: boolean
+          review_note: string | null
+          reviewed_at: string | null
+          reviewed_by: string | null
+          reviewed_by_name: string | null
+          status: string
+          technician_id: string
+          technician_name: string
+          updated_at: string
+        }
+        Insert: {
+          change_type: string
+          created_at?: string
+          id?: string
+          previous_value?: boolean | null
+          reason?: string | null
+          requested_by: string
+          requested_by_name?: string | null
+          requested_value: boolean
+          review_note?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          reviewed_by_name?: string | null
+          status?: string
+          technician_id: string
+          technician_name: string
+          updated_at?: string
+        }
+        Update: {
+          change_type?: string
+          created_at?: string
+          id?: string
+          previous_value?: boolean | null
+          reason?: string | null
+          requested_by?: string
+          requested_by_name?: string | null
+          requested_value?: boolean
+          review_note?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          reviewed_by_name?: string | null
+          status?: string
+          technician_id?: string
+          technician_name?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      technician_workflow_assessments: {
+        Row: {
+          ai_evidence: Json
+          ai_recommendations: string[]
+          ai_summary: string | null
+          conversations_reviewed: number
+          labels: string[]
+          last_assessed_at: string | null
+          messages_reviewed: number
+          technician_id: string
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          ai_evidence?: Json
+          ai_recommendations?: string[]
+          ai_summary?: string | null
+          conversations_reviewed?: number
+          labels?: string[]
+          last_assessed_at?: string | null
+          messages_reviewed?: number
+          technician_id: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          ai_evidence?: Json
+          ai_recommendations?: string[]
+          ai_summary?: string | null
+          conversations_reviewed?: number
+          labels?: string[]
+          last_assessed_at?: string | null
+          messages_reviewed?: number
+          technician_id?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "technician_workflow_assessments_technician_id_fkey"
+            columns: ["technician_id"]
+            isOneToOne: true
+            referencedRelation: "technicians"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       technicians: {
         Row: {
           area: string
@@ -1994,14 +2450,106 @@ export type Database = {
       }
     }
     Functions: {
+      advance_sheets_sync_watermark: { Args: never; Returns: string }
+      apply_urgent_form_fixes: {
+        Args: { p_fixes: Json; p_lead_id: string }
+        Returns: Json
+      }
+      approve_urgent_acknowledgement: {
+        Args: { p_lead_id: string; p_reason?: string }
+        Returns: undefined
+      }
+      approve_urgent_verification: {
+        Args: { p_ai_model?: string; p_ai_summary?: string; p_lead_id: string }
+        Returns: undefined
+      }
+      area_leaderboard: {
+        Args: { _limit?: number }
+        Returns: {
+          cancelled_count: number
+          cities: string
+          closed_count: number
+          closed_rate_pct: number
+          is_optimised: boolean
+          last_closed_at: string
+          scheduled_count: number
+          state: string
+          technicians: number
+        }[]
+      }
+      area_performance: {
+        Args: { _city?: string; _state?: string; _zip?: string }
+        Returns: {
+          area_label: string
+          cancelled_count: number
+          closed_rate_pct: number
+          last_paid_at: string
+          paid_count: number
+          scheduled_count: number
+          technicians: number
+        }[]
+      }
+      assert_urgent_required_data: {
+        Args: { p_lead_id: string }
+        Returns: undefined
+      }
       assign_next_opr_code: { Args: { _user_id: string }; Returns: string }
+      begin_google_sheets_full_reconcile: {
+        Args: never
+        Returns: {
+          lock_token: string
+          queued: number
+        }[]
+      }
+      calculate_lead_technician_coverage: {
+        Args: {
+          _address: string
+          _city: string
+          _latitude: number
+          _longitude: number
+          _state: string
+          _zip: string
+        }
+        Returns: {
+          area_label: string
+          tech_count: number
+        }[]
+      }
       can_access_quo_ai: { Args: never; Returns: boolean }
       can_access_quote_approval: { Args: never; Returns: boolean }
       can_create_manual_lead: { Args: never; Returns: boolean }
       can_manage_map_coverage: { Args: { _user_id: string }; Returns: boolean }
       can_use_quick_chat: { Args: { _user_id: string }; Returns: boolean }
+      claim_ai_status_refresh: {
+        Args: { p_cooldown_seconds?: number; p_trigger: string }
+        Returns: boolean
+      }
+      claim_sheets_sync_queue: {
+        Args: { p_limit?: number }
+        Returns: {
+          attempts: number
+          generation: number
+          job_id: string
+          lead_id: string
+          lease_token: string
+          op: string
+          previous_statuses: string[]
+        }[]
+      }
+      compute_all_lead_coverage: {
+        Args: never
+        Returns: {
+          bad: number
+          checked: number
+          good: number
+          normal: number
+          unlocated: number
+        }[]
+      }
+      cron_google_sheets_sync_worker: { Args: never; Returns: undefined }
       cron_quo_reconcile_sync: { Args: never; Returns: undefined }
       cron_quo_sync_contacts: { Args: never; Returns: undefined }
+      cron_refresh_urgent_ai_status: { Args: never; Returns: undefined }
       current_user_opr_code: { Args: never; Returns: string }
       default_org_id: { Args: never; Returns: string }
       delete_lead_by_admin: { Args: { target_lead_id: string }; Returns: Json }
@@ -2014,6 +2562,38 @@ export type Database = {
         }
         Returns: number
       }
+      enqueue_google_sheets_sync: {
+        Args: {
+          p_job_id: string
+          p_lead_id: string
+          p_op: string
+          p_previous_status?: string
+        }
+        Returns: undefined
+      }
+      finish_ai_status_refresh: {
+        Args: { p_summary?: Json }
+        Returns: undefined
+      }
+      finish_google_sheets_full_reconcile: {
+        Args: { p_lock_token: string }
+        Returns: boolean
+      }
+      finish_sheets_sync_job: {
+        Args: {
+          p_detail?: Json
+          p_generation: number
+          p_lead_id: string
+          p_lease_token: string
+          p_message?: string
+          p_success: boolean
+        }
+        Returns: boolean
+      }
+      get_cs_missed_followup_count: {
+        Args: { p_number_ids?: string[]; p_since?: string; p_until?: string }
+        Returns: number
+      }
       get_opr_codes_summary: {
         Args: never
         Returns: {
@@ -2021,6 +2601,28 @@ export type Database = {
           opr_code: string
         }[]
       }
+      get_sheets_sync_health: {
+        Args: { p_stale_after_seconds?: number }
+        Returns: {
+          behind_seconds: number
+          consecutive_failures: number
+          failed_jobs: number
+          last_attempt_at: string
+          last_error_at: string
+          last_error_message: string
+          last_success_at: string
+          leads_behind: number
+          queue_depth: number
+          queue_oldest_at: string
+          queue_oldest_seconds: number
+          recent_errors: Json
+          seconds_since_success: number
+          status: string
+          synced_total: number
+          watermark_at: string
+        }[]
+      }
+      get_sheets_sync_queue_depth: { Args: never; Returns: number }
       get_top_nearby_populated_areas: {
         Args: { _latitude: number; _longitude: number }
         Returns: {
@@ -2056,15 +2658,99 @@ export type Database = {
             }
             Returns: boolean
           }
+      haversine_miles: {
+        Args: { _lat1: number; _lat2: number; _lng1: number; _lng2: number }
+        Returns: number
+      }
       healthcheck: { Args: never; Returns: Json }
       is_admin_user: { Args: { check_user_id: string }; Returns: boolean }
       is_assigned_opr_code: { Args: { _opr_code: string }; Returns: boolean }
       is_org_member: { Args: { _org_id: string }; Returns: boolean }
+      lead_address_city: { Args: { _address: string }; Returns: string }
+      lead_technician_coverage: {
+        Args: { _lead_id: string }
+        Returns: {
+          area_label: string
+          tech_count: number
+        }[]
+      }
+      leads_owned_by_caller: {
+        Args: { _lead: Database["public"]["Tables"]["leads"]["Row"] }
+        Returns: boolean
+      }
+      list_cs_missed_followups: {
+        Args: { p_number_ids?: string[]; p_since?: string; p_until?: string }
+        Returns: {
+          conversation_id: string
+          customer_name: string
+          customer_number: string
+          is_new_lead: boolean
+          last_agent_at: string
+          last_customer_at: string
+          number: string
+          number_display: string
+          number_id: string
+          number_label: string
+          number_name: string
+          preview: string
+          quo_conversation_id: string
+          quo_phone_number_id: string
+          triage_status: string
+          type: string
+          waited_minutes: number
+        }[]
+      }
       list_opr_codes: {
         Args: never
         Returns: {
           full_name: string
           opr_code: string
+        }[]
+      }
+      list_technician_change_requests: {
+        Args: { p_status?: string }
+        Returns: {
+          change_type: string
+          created_at: string
+          current_is_active: boolean
+          current_is_good_tech: boolean
+          id: string
+          previous_value: boolean
+          reason: string
+          requested_by: string
+          requested_by_name: string
+          requested_value: boolean
+          review_note: string
+          reviewed_at: string
+          reviewed_by_name: string
+          status: string
+          technician_id: string
+          technician_name: string
+        }[]
+      }
+      list_urgent_review_requests: {
+        Args: { p_status?: string }
+        Returns: {
+          ai_issues: Json
+          ai_model: string
+          ai_summary: string
+          created_at: string
+          current_customer_schedule_requirements: string
+          current_quote: string
+          current_service_details: string
+          current_status: string
+          current_terms: string
+          id: string
+          lead_customer_name: string
+          lead_id: string
+          lead_job_id: string
+          previous_status: string
+          requested_by: string
+          requested_by_name: string
+          review_note: string
+          reviewed_at: string
+          reviewed_by_name: string
+          status: string
         }[]
       }
       manual_lead_access: {
@@ -2074,13 +2760,51 @@ export type Database = {
           user_id: string
         }[]
       }
+      mark_cs_followup_handled: {
+        Args: { p_conversation_id: string; p_handled?: boolean }
+        Returns: undefined
+      }
+      optimized_areas_with_performance: {
+        Args: never
+        Returns: {
+          cancelled_count: number
+          city: string
+          closed_rate_pct: number
+          id: string
+          is_active: boolean
+          label: string
+          marked_at: string
+          note: string
+          paid_count: number
+          scheduled_count: number
+          state: string
+          technicians: number
+          zip_code: string
+        }[]
+      }
       org_role: { Args: { _org_id: string }; Returns: string }
+      parse_lead_location: {
+        Args: { _address: string; _city: string; _state: string; _zip: string }
+        Returns: {
+          city: string
+          state: string
+          zip_code: string
+        }[]
+      }
+      pending_technician_change_summary: {
+        Args: never
+        Returns: {
+          change_types: string[]
+          technician_id: string
+          technician_name: string
+        }[]
+      }
       preview_lead_technician_coverage: {
         Args: {
           _address: string
-          _city?: string | null
-          _state?: string | null
-          _zip?: string | null
+          _city?: string
+          _state?: string
+          _zip?: string
         }
         Returns: {
           area_label: string
@@ -2090,17 +2814,18 @@ export type Database = {
       preview_lead_technician_coverage_at_point: {
         Args: {
           _address: string
-          _city: string | null
+          _city: string
           _latitude: number
           _longitude: number
-          _state: string | null
-          _zip: string | null
+          _state: string
+          _zip: string
         }
         Returns: {
           area_label: string
           tech_count: number
         }[]
       }
+      prune_sheets_sync_errors: { Args: { p_keep?: number }; Returns: number }
       quo_conversation_counts_by_number: {
         Args: never
         Returns: {
@@ -2108,6 +2833,21 @@ export type Database = {
           total: number
         }[]
       }
+      raise_sheets_sync_stale_alert: {
+        Args: { p_stale_after_seconds?: number; p_throttle_minutes?: number }
+        Returns: number
+      }
+      recalculate_all_lead_coverage: {
+        Args: never
+        Returns: {
+          bad: number
+          checked: number
+          good: number
+          normal: number
+          unlocated: number
+        }[]
+      }
+      recalculate_lead_coverage: { Args: { _lead_id: string }; Returns: string }
       record_quo_webhook_event: {
         Args: {
           _event_type: string
@@ -2121,9 +2861,61 @@ export type Database = {
         }
         Returns: string
       }
+      record_sheets_sync_failure: {
+        Args: {
+          p_action?: string
+          p_detail?: Json
+          p_lead_id?: string
+          p_message: string
+        }
+        Returns: undefined
+      }
+      record_sheets_sync_success: {
+        Args: { p_lead_id?: string }
+        Returns: undefined
+      }
+      refresh_lead_coverage: { Args: { _lead_id: string }; Returns: undefined }
+      refresh_technician_area_coordinate_cache: { Args: never; Returns: number }
       request_quote_approval: { Args: { _lead_id: string }; Returns: string }
+      request_technician_change: {
+        Args: {
+          p_change_type: string
+          p_reason?: string
+          p_requested_value: boolean
+          p_technician_id: string
+        }
+        Returns: string
+      }
+      request_urgent_review: {
+        Args: {
+          p_ai_issues?: Json
+          p_ai_model?: string
+          p_ai_summary?: string
+          p_lead_customer_name?: string
+          p_lead_id: string
+          p_lead_job_id?: string
+          p_previous_status?: string
+        }
+        Returns: string
+      }
+      retry_sheets_sync_queue_now: {
+        Args: { p_limit?: number }
+        Returns: number
+      }
       review_quote_approval_request: {
         Args: { _decision: string; _request_id: string; _review_note?: string }
+        Returns: string
+      }
+      review_technician_change: {
+        Args: { p_approve: boolean; p_note?: string; p_request_id: string }
+        Returns: string
+      }
+      review_urgent_request: {
+        Args: {
+          p_approve: boolean
+          p_request_id: string
+          p_review_note?: string
+        }
         Returns: string
       }
       search_technicians: {
@@ -2143,6 +2935,56 @@ export type Database = {
       }
       set_can_add_manual_leads: {
         Args: { allowed: boolean; target_user_id: string }
+        Returns: undefined
+      }
+      sheets_sync_lag: {
+        Args: never
+        Returns: {
+          behind_seconds: number
+          leads_behind: number
+          watermark_at: string
+        }[]
+      }
+      tech_paid_performance: {
+        Args: { _from?: string; _to?: string }
+        Returns: {
+          cancelled_count: number
+          city: string
+          good_tech: boolean
+          last_paid_at: string
+          location_label: string
+          opr_code: string
+          paid_count: number
+          paid_rate_pct: number
+          scheduled_count: number
+          state: string
+          tech_name: string
+          zip_code: string
+        }[]
+      }
+      technician_area_place: {
+        Args: { _area: string }
+        Returns: {
+          city: string
+          latitude: number
+          longitude: number
+          state_code: string
+        }[]
+      }
+      urgent_required_missing: {
+        Args: { p_lead_id: string }
+        Returns: string[]
+      }
+      us_place_coordinates: {
+        Args: { _city: string; _state?: string }
+        Returns: {
+          latitude: number
+          longitude: number
+        }[]
+      }
+      us_state_code: { Args: { _text: string }; Returns: string }
+      withdraw_technician_change: {
+        Args: { p_request_id: string }
         Returns: undefined
       }
     }
