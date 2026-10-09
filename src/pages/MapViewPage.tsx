@@ -4,6 +4,7 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
+import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -641,6 +642,7 @@ function leadMarkerLatLng(l: MappedLead): L.LatLngTuple {
 
 export default function MapViewPage() {
   const navigate = useNavigate();
+  const { role } = useAuth();
   const isMobile = useIsMobile();
 
   const mapRef = useRef<L.Map | null>(null);
@@ -668,6 +670,8 @@ export default function MapViewPage() {
   const techFocusTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [selectedTechId, setSelectedTechId] = useState<string | null>(null);
+  const [multiTechSelectMode, setMultiTechSelectMode] = useState(false);
+  const [selectedTechIds, setSelectedTechIds] = useState<string[]>([]);
   const [serviceFilter, setServiceFilter] = useState<string>("all");
   // One unified search box handles technicians, customers, and locations.
   const [omniSearch, setOmniSearch] = useState("");
@@ -980,8 +984,13 @@ export default function MapViewPage() {
   const filteredTechs = useMemo(() => {
     return filteredSearchableTechs
       .filter((t): t is SearchableTech & { coords: LatLng; locationUnavailable: false } => !!t.coords && !t.locationUnavailable)
-      .map((t) => ({ ...t, coords: t.coords }));
-  }, [filteredSearchableTechs]);
+      .map((t) => ({ ...t, coords: t.coords }))
+      .filter((tech) => {
+        const anchor = searchableTechs.find((item) => item.id === selectedTechId);
+        if (!multiTechSelectMode || !anchor?.coords) return true;
+        return haversineMiles(anchor.coords, tech.coords) <= RADIUS_MILES;
+      });
+  }, [filteredSearchableTechs, multiTechSelectMode, searchableTechs, selectedTechId]);
 
   const filteredLeads = useMemo(() => {
     return mappedLeads.filter((l) => {
@@ -1225,19 +1234,39 @@ export default function MapViewPage() {
   const handleTechMarkerClick = useCallback((techId: string, latlng: L.LatLng) => {
     const tech = techDataRefs.current.get(techId);
     if (!tech) return;
+    if (multiTechSelectMode) {
+      const anchor = selectedTechRef.current;
+      if (!anchor?.coords) {
+        selectedTechRef.current = tech;
+        setSelectedTechId(techId);
+        setSelectedTechIds([techId]);
+        return;
+      }
+      if (haversineMiles(anchor.coords, tech.coords) > RADIUS_MILES) {
+        toast(`Choose technicians within ${RADIUS_MILES} miles of the selected anchor.`);
+        return;
+      }
+      setSelectedTechIds((current) => current.includes(techId)
+        ? current.filter((id) => id !== techId)
+        : current.length >= 8
+          ? (toast("Select up to 8 technicians per report."), current)
+          : [...current, techId]);
+      return;
+    }
     cancelLeadVisibilityWork();
     selectedTechRef.current = tech;
     applyTechMarkerSelection(techId);
     openTechPopup(techId, latlng);
     setSelectedTechId(techId);
     if (isMobileRef.current) setSheetOpen(true);
-  }, [applyTechMarkerSelection, cancelLeadVisibilityWork, openTechPopup]);
+  }, [applyTechMarkerSelection, cancelLeadVisibilityWork, multiTechSelectMode, openTechPopup]);
 
   const clearSelectedTech = useCallback(() => {
     cancelLeadVisibilityWork();
     selectedTechRef.current = null;
     applyTechMarkerSelection(null);
     setSelectedTechId(null);
+    setSelectedTechIds([]);
   }, [applyTechMarkerSelection, cancelLeadVisibilityWork]);
 
   useEffect(() => {
@@ -1358,12 +1387,12 @@ export default function MapViewPage() {
           kind: "tech",
           lat: t.coords.latitude,
           lng: t.coords.longitude,
-          selected: t.id === activeSelectedTechIdRef.current,
+          selected: multiTechSelectMode ? selectedTechIds.includes(t.id) : t.id === activeSelectedTechIdRef.current,
         });
       }
     }
     pinLayerRef.current.setPins(pins);
-  }, [filteredLeads, filteredTechs, mapReady, pinRenderVersion, viewMode]);
+  }, [filteredLeads, filteredTechs, mapReady, multiTechSelectMode, pinRenderVersion, selectedTechIds, viewMode]);
 
   // Handle pending customer focus after markers render
   useEffect(() => {
@@ -1814,7 +1843,7 @@ export default function MapViewPage() {
     queryClient.setQueryData<TechnicianRecord[]>(TECHNICIANS_QUERY_KEY, (old) =>
       old ? old.map((t) => (t.id === tech.id ? { ...t, is_good_tech: next } : t)) : old,
     );
-    const { error } = await supabase.from("technicians").update({ is_good_tech: next } as any).eq("id", tech.id);
+    const { error } = await supabase.from("technicians").update({ is_good_tech: next } as never).eq("id", tech.id);
     if (error) {
       queryClient.setQueryData<TechnicianRecord[]>(TECHNICIANS_QUERY_KEY, prev);
       toast.error("Could not update status");
@@ -2034,6 +2063,26 @@ export default function MapViewPage() {
                 <span className={`mr-1.5 inline-block h-2.5 w-2.5 rounded-full border border-white ${showInactiveTechs ? "bg-slate-300" : "bg-slate-400"}`} />
                 {showInactiveTechs ? "Viewing inactive" : "Inactive techs"}
               </Button>
+              {(role === "admin" || role === "processor") && viewMode !== "leads" && (
+                <Button
+                  size="sm"
+                  variant={multiTechSelectMode ? "default" : "outline"}
+                  className="h-10 text-sm sm:h-8 sm:text-xs"
+                  onClick={() => {
+                    if (multiTechSelectMode) {
+                      setMultiTechSelectMode(false);
+                      setSelectedTechIds([]);
+                    } else {
+                      setMultiTechSelectMode(true);
+                      setSelectedTechIds(selectedTechId ? [selectedTechId] : []);
+                      setViewMode("techs");
+                    }
+                  }}
+                  title={`Select technicians within ${RADIUS_MILES} miles of the selected technician`}
+                >
+                  {multiTechSelectMode ? `Selecting ${selectedTechIds.length}` : "Select nearby techs"}
+                </Button>
+              )}
               <Select value={serviceFilter} onValueChange={setServiceFilter}>
                 <SelectTrigger className="h-10 w-full text-sm sm:h-8 sm:w-[180px] sm:text-xs">
                   <SelectValue placeholder="All services" />
@@ -2100,6 +2149,16 @@ export default function MapViewPage() {
                 <Button size="sm" className="h-10 text-sm sm:h-8 sm:text-xs" onClick={runOmniActivate}>Search</Button>
               </div>
               {renderOmniDropdown()}
+
+              {multiTechSelectMode && (
+                <div className="flex w-full flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-xs">
+                  <span>{selectedTechId ? `Choose up to 8 technician pins within ${RADIUS_MILES} miles of the selected technician.` : "Click a technician pin to set the radius anchor, then choose nearby technicians."} Selected: {selectedTechIds.length}/8</span>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="ghost" className="h-7" onClick={() => setSelectedTechIds([])}>Clear selection</Button>
+                    <Button size="sm" className="h-7" disabled={!selectedTechIds.length} onClick={() => navigate(`/technicians?workflow=${encodeURIComponent(selectedTechIds.join(","))}`)}>Open Processing Workflow</Button>
+                  </div>
+                </div>
+              )}
 
               {/* Coverage tool: draw a green "good coverage" radius on click. */}
               <div className="flex items-center gap-1.5">
