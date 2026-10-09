@@ -68,7 +68,6 @@ import CancellationRequestSheet from "./CancellationRequestSheet";
 import QuoPhoneTrigger from "./QuoPhoneTrigger";
 import { adminApi } from "@/lib/admin-api";
 import { logActivity } from "@/lib/activity";
-import { buildCompleteLeadCopyText, copyTextToClipboard } from "@/lib/lead-copy";
 import {
   canCreateCancellationRequest,
   createCancellationRequest,
@@ -745,7 +744,6 @@ function LeadCard({
   const [pendingCancellationRequest, setPendingCancellationRequest] = useState<LeadCancellationRequest | null>(
     initialPendingCancellationRequest !== undefined ? initialPendingCancellationRequest : null
   );
-  const [completeCopied, setCompleteCopied] = useState(false);
   const [bookingDialogOpen, setBookingDialogOpen] = useState(false);
   const [bookingDialogMode, setBookingDialogMode] = useState<"add" | "edit">("add");
   const [assignOprOpen, setAssignOprOpen] = useState(false);
@@ -897,7 +895,6 @@ function LeadCard({
     if (quote) return { heading: "Quote", value: quote };
     return null;
   })();
-  const canCompleteCopy = isAdmin || isProcessor || isOpr;
   const currentTag = lead.cs_tag ?? null;
   const assignableTags = getAssignableLeadTags(role, { isQuotationMaster: profile?.is_quotation_master });
 
@@ -919,18 +916,6 @@ function LeadCard({
   const isFarFutureSchedule = isScheduleRequirementFarFuture(lead.customer_schedule_requirements, 3);
   const shouldBlinkCard = baseShouldBlink && !isFarFutureSchedule;
 
-  const handleCompleteCopy = async () => {
-    const text = buildCompleteLeadCopyText(lead);
-    if (!text) {
-      toast.error("No service details, address, schedule requirement, or quote available to copy");
-      return;
-    }
-
-    await copyTextToClipboard(text);
-    setCompleteCopied(true);
-    toast.success("Complete lead details copied");
-    window.setTimeout(() => setCompleteCopied(false), 1400);
-  };
 
   const secondaryDetailRows = [
     // A second number, marked so nobody tries to text it.
@@ -2027,14 +2012,12 @@ function LeadCard({
             <div
               className={`grid items-center gap-1.5 ${
                 isAdmin
-                  ? "grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)_36px_36px_36px]"
+                  ? "grid-cols-[minmax(0,1fr)_36px_36px_36px]"
                   : isProcessor
-                    ? "grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)_36px]"
+                    ? "grid-cols-[minmax(0,1fr)_36px]"
                     : isOpr
-                      ? (canCompleteCopy ? "grid-cols-1" : "hidden")
-                      : canCompleteCopy
-                        ? "grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)]"
-                        : "grid-cols-1"
+                      ? "hidden"
+                      : "grid-cols-1"
               }`}
             >
               {!isOpr && (
@@ -2046,19 +2029,6 @@ function LeadCard({
                 >
                   <Pencil className="h-3 w-3 shrink-0" />
                   <span className="truncate">Edit Lead</span>
-                </Button>
-              )}
-
-              {canCompleteCopy && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="crm-lead-card-inner h-11 min-w-0 w-full gap-1 rounded-[14px] border-border/60 bg-transparent px-1.5 text-[10px] font-semibold hover:border-primary/28 hover:bg-primary/[0.05]"
-                  onClick={handleCompleteCopy}
-                >
-                  {completeCopied ? <Check className="h-3 w-3 shrink-0" /> : <Copy className="h-3 w-3 shrink-0" />}
-                  <span className="whitespace-nowrap">{completeCopied ? "Copied" : "Complete Details"}</span>
                 </Button>
               )}
 
