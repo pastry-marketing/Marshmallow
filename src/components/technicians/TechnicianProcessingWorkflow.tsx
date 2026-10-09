@@ -78,7 +78,17 @@ export function TechnicianProcessingWorkflow({
   );
   const visibleTechnicians = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return technicians.filter((tech) => !query || [tech.name, tech.phone_number, tech.area, tech.service].some((value) => value?.toLowerCase().includes(query))).slice(0, 100);
+    return technicians
+      .filter((tech) => !query || [tech.name, tech.phone_number, tech.area, tech.service].some((value) => value?.toLowerCase().includes(query)))
+      // Unnamed import rows have no name and often no area, which renders as a
+      // bare separator. Surface them by phone so they stay identifiable.
+      .sort((left, right) => {
+        const leftNamed = left.name?.trim() ? 0 : 1;
+        const rightNamed = right.name?.trim() ? 0 : 1;
+        if (leftNamed !== rightNamed) return leftNamed - rightNamed;
+        return (left.name ?? "").localeCompare(right.name ?? "");
+      })
+      .slice(0, 100);
   }, [search, technicians]);
 
   useEffect(() => {
@@ -231,7 +241,11 @@ export function TechnicianProcessingWorkflow({
           {visibleTechnicians.map((tech) => (
             <label key={tech.id} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-muted/60">
               <Checkbox checked={selectedIds.includes(tech.id)} onCheckedChange={() => toggleTech(tech.id)} />
-              <span className="min-w-0 flex-1 truncate">{tech.name} <span className="text-muted-foreground">· {tech.area}</span></span>
+              <span className="min-w-0 flex-1 truncate">
+                {tech.name?.trim() || <span className="italic text-muted-foreground">Unnamed technician</span>}
+                <span className="text-muted-foreground">{tech.area ? ` · ${tech.area}` : ""}</span>
+              </span>
+              {!tech.name?.trim() && <Badge variant="outline">No name</Badge>}
               {tech.is_active === false && <Badge variant="secondary">Inactive</Badge>}
             </label>
           ))}
@@ -246,13 +260,13 @@ export function TechnicianProcessingWorkflow({
         const recommendations = result?.recommendations ?? assessment?.ai_recommendations ?? [];
         const recommendsInactive = recommendations.includes("suggest_inactive");
         const recommendsMessage = recommendations.includes("suggest_check_job_message");
-        const draft = MESSAGE_TEMPLATE.replace("{name}", tech.name.split(/\s+/)[0] || "there");
+        const draft = MESSAGE_TEMPLATE.replace("{name}", tech.name?.trim().split(/\s+/)[0] || "there");
         return (
           <article key={tech.id} className="space-y-3 rounded-xl border bg-card p-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h3 className="font-semibold">{tech.name}</h3>
-                <p className="text-xs text-muted-foreground">{tech.service || "Service not set"} · {tech.area} · {tech.phone_number || "No phone"}</p>
+                <h3 className="font-semibold">{tech.name?.trim() || "Unnamed technician"}</h3>
+                <p className="text-xs text-muted-foreground">{tech.service || "Service not set"} · {tech.area || "Area not set"} · {tech.phone_number || "No phone"}</p>
               </div>
               <div className="flex flex-wrap gap-2 text-xs">
                 <Badge variant="outline">{report?.jobsCompleted ?? 0} jobs completed</Badge>
