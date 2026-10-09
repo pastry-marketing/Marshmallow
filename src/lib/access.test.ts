@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canAccessNavItem, canAddLeadViaExtension, canAddManualLead, canDeleteTechnicians, canSeeTechDetails, getDefaultNavAccess } from "@/lib/access";
+import { canAccessNavItem, canAddLeadViaExtension, canAddManualLead, canDeleteTechnicians, canSeeTechDetails, canViewLeadCoverageAnalytics, getDefaultNavAccess } from "@/lib/access";
 import type { NavigationPermission } from "@/types";
 
 describe("cancellation request navigation access", () => {
@@ -55,6 +55,15 @@ describe("technician details", () => {
   it("stay visible to everyone else", () => {
     for (const role of ["admin", "processor", "customer_service", "opr"] as const) {
       expect(canSeeTechDetails(role)).toBe(true);
+    }
+  });
+});
+
+describe("lead coverage and source analytics", () => {
+  it("is available only to Admin, independent of broader Analytics navigation grants", () => {
+    expect(canViewLeadCoverageAnalytics("admin")).toBe(true);
+    for (const role of ["processor", "customer_service", "cs_admin", "opr", "opr_admin", null, undefined] as const) {
+      expect(canViewLeadCoverageAnalytics(role)).toBe(false);
     }
   });
 });

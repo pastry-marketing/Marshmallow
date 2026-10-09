@@ -7,12 +7,13 @@ export interface LeadCoordinates {
   city: string | null;
   state: string | null;
   zip: string | null;
+  provider?: "google" | "census";
 }
 
 const CACHE_LIMIT = 100;
 const geocodeCache = new Map<string, LeadCoordinates | null>();
 
-/** Resolve a US street address through the authenticated Census geocoder proxy. */
+/** Resolve a street address through Google, with an explicitly labelled Census fallback. */
 export async function geocodeLeadAddress(address: string | null | undefined): Promise<LeadCoordinates | null> {
   const normalized = address?.trim().replace(/\s+/g, " ") ?? "";
   if (normalized.length < 8) return null;
@@ -38,6 +39,7 @@ export async function geocodeLeadAddress(address: string | null | undefined): Pr
     city: typeof point.city === "string" ? point.city : null,
     state: typeof point.state === "string" ? point.state : null,
     zip: typeof point.zip === "string" ? point.zip : null,
+    provider: point.provider === "google" ? "google" : "census",
   };
   remember(cacheKey, result);
   return result;
@@ -59,6 +61,7 @@ export async function geocodeAndPersistLeadAddress(
     const { data, error } = await supabase
       .from("leads")
       .update({
+        ...(point.provider === "google" && point.matchedAddress ? { address: point.matchedAddress } : {}),
         city: point.city,
         state: point.state,
         zip_code: point.zip,

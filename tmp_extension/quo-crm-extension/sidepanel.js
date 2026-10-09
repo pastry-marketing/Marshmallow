@@ -954,8 +954,9 @@ async function handleCreateLead(event) {
           true
         );
       } else if (check && check.state === "issues") {
+        const total = typeof check.total === "number" ? check.total : check.issues.length;
         showFeedback(
-          `Lead created, but it was not marked urgent. The conversation check found ${check.issues.length} thing${check.issues.length === 1 ? "" : "s"} to fix:${renderUrgentIssues(check.issues)}${reviewLink}`,
+          `Lead created, but it was not marked urgent. The latest-agreement review found ${total} item${total === 1 ? "" : "s"} to confirm:${renderUrgentIssues(check.issues)}${reviewLink}`,
           "info",
           true
         );

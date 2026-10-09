@@ -200,6 +200,35 @@ async function previewLeadCoverage(address) {
   };
 }
 
+// Insert can legitimately take a while: the database recalculates technician
+// coverage for the lead inside the same transaction. Give it room instead of
+// letting the panel sit on a spinner, and never leave a job id unreleased, so a
+// retry after an unknown outcome cannot produce a second lead.
+const LEAD_INSERT_TIMEOUT_MS = 45000;
+const PENDING_JOB_KEY = "pendingLeadJobId";
+
+async function reserveJobId(jobId) {
+  await chrome.storage.local.set({ [PENDING_JOB_KEY]: jobId });
+  return jobId;
+}
+
+async function releaseJobId(jobId) {
+  const stored = await chrome.storage.local.get(PENDING_JOB_KEY);
+  if (stored[PENDING_JOB_KEY] === jobId) {
+    await chrome.storage.local.remove(PENDING_JOB_KEY);
+  }
+}
+
+async function findLeadByJobId(jobId) {
+  const { data, error } = await supabaseClient
+    .from("leads")
+    .select("id, job_id, customer_name, customer_phone, status, created_at")
+    .eq("job_id", jobId)
+    .maybeSingle();
+  if (error) return null;
+  return data || null;
+}
+
 async function geocodeCensusAddress(address) {
   const normalizedAddress = String(address || "").trim();
   if (normalizedAddress.length < 8) return null;
@@ -598,7 +627,11 @@ async function createLead() {
     throw new Error("Customer Name or Customer Number is required.");
   }
 
-  const jobId = generateJobId();
+  // Reuse a reserved job id across retries. leads.job_id is unique, so a repeat
+  // attempt can only ever re-find this lead, never create a second one.
+  const stored = await chrome.storage.local.get(PENDING_JOB_KEY);
+  const jobId = stored[PENDING_JOB_KEY] || generateJobId();
+  await reserveJobId(jobId);
 
   const insertData = {
     job_id: jobId,
@@ -679,14 +712,55 @@ async function createLead() {
     insertData.quote = draft.quote.trim();
   }
 
-  const { data, error } = await supabaseClient
-    .from("leads")
-    .insert(insertData)
-    .select()
-    .single();
+  const insertController = new AbortController();
+  const insertTimer = setTimeout(() => insertController.abort(), LEAD_INSERT_TIMEOUT_MS);
 
-  if (error) {
-    throw new Error(error.message);
+  let data = null;
+  let insertError = null;
+  try {
+    const result = await supabaseClient
+      .from("leads")
+      .insert(insertData)
+      .select()
+      .single()
+      .abortSignal(insertController.signal);
+    data = result.data;
+    insertError = result.error;
+  } catch (networkError) {
+    insertError = networkError;
+  } finally {
+    clearTimeout(insertTimer);
+  }
+
+  if (insertError || !data) {
+    const message = insertError?.message || "The lead could not be saved.";
+    const code = String(insertError?.code || "");
+    const aborted = insertError?.name === "AbortError";
+    const timedOut = aborted || /statement timeout|canceling statement/i.test(message);
+
+    // Either the row landed and the response was lost, or it did not. Ask the
+    // database before telling the user anything, because "failed" invites a
+    // duplicate and "saved" must not be a guess.
+    const existing = await findLeadByJobId(jobId);
+    if (existing) {
+      data = existing;
+      await releaseJobId(jobId);
+    } else if (code === "23505" || timedOut || aborted) {
+      if (code !== "23505") {
+        // Keep the reservation: the next attempt reuses this job id, so the
+        // unique index still prevents a second lead for this capture.
+        throw new Error(
+          "The save did not finish, and we could not confirm whether this lead was created. Do not create it again — check Leads for this customer, then press Create Lead once more to finish the same lead."
+        );
+      }
+      await releaseJobId(jobId);
+      throw new Error(message);
+    } else {
+      await releaseJobId(jobId);
+      throw new Error(message);
+    }
+  } else {
+    await releaseJobId(jobId);
   }
 
   // Same RPC the CRM calls. The lead already exists and is parked safely in
@@ -799,6 +873,8 @@ async function runUrgentCheck(leadId) {
     }
 
     const issues = Array.isArray(data?.issues) ? data.issues : [];
+    const fixes = Array.isArray(data?.fixes) ? data.fixes : [];
+    const flags = Array.isArray(data?.flags) ? data.flags : [];
     const summary = typeof data?.summary === "string" ? data.summary : "";
     const notice = typeof data?.notice === "string" ? data.notice : "";
 
@@ -811,7 +887,10 @@ async function runUrgentCheck(leadId) {
     }
 
     if (!data?.clean) {
-      return { state: "issues", issues, summary, applied: false, error: null, notice };
+      // The latest-agreement review reports corrections and missing details, not
+      // only contradiction issues. Count both so the panel never says "found 0".
+      const total = issues.length + fixes.length + flags.length;
+      return { state: "issues", issues, fixes, flags, summary, applied: false, error: null, notice, total };
     }
 
     // Clean. Record the verification, which is what lets the lead through the

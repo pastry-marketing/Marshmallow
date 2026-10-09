@@ -1,4 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { lookupGoogleAddress } from "../_shared/google-address.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -49,6 +50,13 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: "Enter a full street address to look up" }, 400);
   }
 
+  const google = await lookupGoogleAddress(address, Deno.env.get("GOOGLE_MAPS_API_KEY") ?? Deno.env.get("GOOGLE_GEOCODING_API_KEY"));
+  if (google.match) return jsonResponse({ match: {
+    latitude: google.match.latitude, longitude: google.match.longitude,
+    matchedAddress: google.match.formattedAddress, city: google.match.city,
+    state: google.match.state, zip: google.match.zip, provider: "google",
+  } });
+
   const url = new URL(CENSUS_GEOCODER_URL);
   url.searchParams.set("address", address);
   url.searchParams.set("benchmark", CENSUS_BENCHMARK);
@@ -85,7 +93,9 @@ Deno.serve(async (req) => {
         zip: typeof match?.addressComponents?.zip === "string"
           ? match.addressComponents.zip.trim()
           : null,
+        provider: "census",
       },
+      googleReason: google.reason,
     });
   } catch (error) {
     console.error("Census address lookup failed:", error);
