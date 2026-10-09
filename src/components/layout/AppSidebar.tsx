@@ -198,9 +198,9 @@ export default function AppSidebar() {
     queryKey: ["pending-urgent-review-count"],
     enabled: canSeeUrgentReview,
     queryFn: async () => {
-      const { data, error } = await supabase.rpc("list_urgent_review_requests", {
+      const { data, error } = await supabase.rpc("list_urgent_review_requests" as never, {
         p_status: "pending",
-      });
+      } as never);
       if (error) {
         console.error("Error fetching pending urgent review count:", error.message);
         return 0;

@@ -142,12 +142,12 @@ export async function fetchTechniciansPage(params: {
     const totalCount = rows.length > 0 ? Number(rows[0].total_count ?? 0) : 0;
 
     // Attach opr_code / created_at (and legacy code) for the returned rows.
-    let extra = new Map<string, { code: string | null; opr_code: string | null; is_active: boolean; created_by: string | null; created_at: string | null; updated_at: string | null }>();
+    let extra = new Map<string, { code: string | null; opr_code: string | null; is_active: boolean; is_good_tech: boolean | null; created_by: string | null; created_at: string | null; updated_at: string | null }>();
     if (rows.length > 0) {
       try {
         const ids = rows.map((r) => r.id);
         const { data: ex } = await supabase.from("technicians").select("id, code, opr_code, is_active, is_good_tech, created_by, created_at, updated_at").in("id", ids);
-        const exRows = (ex ?? []) as Array<{ id: string; code: string | null; opr_code: string | null; is_active: boolean; created_by: string | null; created_at: string | null; updated_at: string | null }>;
+        const exRows = (ex ?? []) as unknown as Array<{ id: string; code: string | null; opr_code: string | null; is_active: boolean; is_good_tech: boolean | null; created_by: string | null; created_at: string | null; updated_at: string | null }>;
         extra = new Map(exRows.map((c) => [c.id, { code: c.code ?? null, opr_code: c.opr_code ?? null, is_active: c.is_active, is_good_tech: c.is_good_tech, created_by: c.created_by ?? null, created_at: c.created_at ?? null, updated_at: c.updated_at ?? null }]));
       } catch {
         // ignore if columns missing
