@@ -11,13 +11,19 @@ import {
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
+  RotateCcw,
+  ClipboardCheck,
+  Clock3,
+  MapPin,
 } from "lucide-react";
+import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import QuoPhoneTrigger from "@/components/leads/QuoPhoneTrigger";
@@ -28,6 +34,7 @@ import { buildPickerPages } from "@/lib/picker-pages";
 import { requestTechnicianChange } from "@/lib/tech-change-requests";
 import { logActivity } from "@/lib/activity";
 import { TECHNICIANS_ROOT_KEY } from "@/lib/technicians";
+import { REVIEW_STATES, technicianLabelClass, technicianReviewState } from "@/lib/technician-review";
 
 const LABELS = [
   ["tech_dont_respond", "Tech don't respond"],
@@ -62,6 +69,11 @@ type AiResult = {
   conversationsReviewed: number;
   messagesReviewed: number;
   chatSource?: string;
+  incomingMessages?: number;
+  outgoingMessages?: number;
+  historyLimited?: boolean;
+  reviewedFrom?: string | null;
+  reviewedTo?: string | null;
   jobCounts: { completed: number | null; paid: number | null; error: string | null };
   error: string | null;
 };
@@ -101,12 +113,20 @@ export function TechnicianProcessingWorkflow({
   const [reports, setReports] = useState<Record<string, Report>>({});
   const [aiResults, setAiResults] = useState<Record<string, AiResult>>({});
   const [busy, setBusy] = useState(false);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [messageDrafts, setMessageDrafts] = useState<Record<string, string>>({});
   const [savingId, setSavingId] = useState<string | null>(null);
   const [proposedLabels, setProposedLabels] = useState<Record<string, Label[]>>({});
   const [actionBusyId, setActionBusyId] = useState<string | null>(null);
   const [flagActions, setFlagActions] = useState<Record<string, "applied" | "requested">>({});
   const [pickerPage, setPickerPage] = useState(1);
   const [pickerPageSize, setPickerPageSizeState] = useState(loadPickerPageSize);
+  useEffect(() => {
+    if (startedAt === null) return;
+    const timer = window.setInterval(() => setElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+    return () => window.clearInterval(timer);
+  }, [startedAt]);
   const setPickerPageSize = (next: number) => {
     setPickerPageSizeState(next);
     try {
@@ -198,19 +218,24 @@ export function TechnicianProcessingWorkflow({
     });
   };
 
-  const runAssessment = async () => {
-    if (!selectedIds.length) return;
+  const runAssessment = async (ids = selectedIds) => {
+    if (!ids.length || busy) return;
     setBusy(true);
-    setAiResults({});
-    const toastId = toast.loading(`Reviewing Quo conversations for ${selectedIds.length} technician${selectedIds.length === 1 ? "" : "s"}… This may take up to 3 minutes.`);
+    setStartedAt(Date.now());
+    setElapsedSeconds(0);
+    const toastId = toast.loading(`Reviewing Quo conversations for ${ids.length} technician${ids.length === 1 ? "" : "s"}… This may take up to 3 minutes.`);
     try {
-      const { data, error } = await supabase.functions.invoke("technician-chat-assessment", { body: { action: "assess", technicianIds: selectedIds } });
+      const { data, error } = await supabase.functions.invoke("technician-chat-assessment", { body: { action: "assess", technicianIds: ids } });
       if (error) throw error;
       const results = (data?.results ?? []) as AiResult[];
-      if (results.length !== selectedIds.length) throw new Error("The report was incomplete. Please retry.");
+      if (results.length !== ids.length || new Set(results.map((result) => result.technicianId)).size !== ids.length || results.some((result) => !ids.includes(result.technicianId))) throw new Error("The report was incomplete. Please retry.");
       const indexed = Object.fromEntries(results.map((result) => [result.technicianId, result]));
-      setAiResults(indexed);
-      setProposedLabels((current) => ({ ...current, ...Object.fromEntries(results.filter((result) => !result.error).map((result) => [result.technicianId, result.labels])) }));
+      setAiResults((current) => ({ ...current, ...indexed }));
+      // A retry refreshes AI advice without overwriting a user's manual choices.
+      setProposedLabels((current) => ({
+        ...Object.fromEntries(results.filter((result) => !result.error).map((result) => [result.technicianId, assessments[result.technicianId]?.labels ?? result.labels])),
+        ...current,
+      }));
       setReports((current) => ({
         ...current,
         ...Object.fromEntries(results.map((result) => [result.technicianId, {
@@ -230,15 +255,16 @@ export function TechnicianProcessingWorkflow({
           }).catch((auditError) => console.warn("Technician assessment succeeded, but audit logging failed", auditError)),
         ));
       }
-      const failures = results.filter((result) => result.error);
+      const failures = results.filter((result) => result.error || result.messagesReviewed === 0);
       toast[failures.length ? "warning" : "success"](
-        failures.length ? `${results.length - failures.length} assessments completed; ${failures.length} need retry.` : "Technician conversation review complete.",
+        failures.length ? `${results.length - failures.length} reviews completed; ${failures.length} need chat access or retry.` : "Technician conversation review complete.",
         { id: toastId },
       );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Technician assessment failed.", { id: toastId });
     } finally {
       setBusy(false);
+      setStartedAt(null);
     }
   };
 
@@ -297,17 +323,24 @@ export function TechnicianProcessingWorkflow({
 
   return (
     <section className="space-y-4">
-      <div className="rounded-xl border bg-card p-4">
+      <div className="rounded-xl border border-primary/20 bg-gradient-to-br from-primary/10 via-card to-card p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-base font-semibold">Technician Processing Workflow</h2>
-            <p className="mt-1 max-w-3xl text-xs text-muted-foreground">Select up to 8 technicians. AI reviews up to 250 Quo text messages per technician (from the CRM mirror or a saved Quo link) and suggests labels; it never marks a technician inactive or sends a message automatically. Reviews can take up to 3 minutes.</p>
+            <div className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-primary"><Sparkles className="h-4 w-4" />Technician intelligence</div>
+            <h2 className="text-xl font-semibold">Processing Workflow</h2>
+            <p className="mt-1 max-w-3xl text-sm text-muted-foreground">Select nearby technicians, review their relationship history, then choose your next action. Up to 8 technicians per batch · target review time 2–3 minutes.</p>
           </div>
           <Button onClick={() => void runAssessment()} disabled={!selectedIds.length || busy} className="gap-2">
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
             {busy ? "Reviewing conversations…" : `Quick Report (${selectedIds.length})`}
           </Button>
         </div>
+        <div className="mt-4 grid gap-2 text-xs sm:grid-cols-3">
+          <div className="rounded-lg border bg-background/50 p-3"><span className="font-medium">1. Select</span><p className="mt-1 text-muted-foreground">{selectedIds.length}/8 selected · <Link to="/map-view" className="inline-flex items-center gap-1 text-primary underline"><MapPin className="h-3 w-3" />Choose on map</Link></p></div>
+          <div className="rounded-lg border bg-background/50 p-3"><span className="font-medium">2. Review evidence</span><p className="mt-1 text-muted-foreground">Latest 250 messages per technician. Missing history is flagged, never treated as misconduct.</p></div>
+          <div className="rounded-lg border bg-background/50 p-3"><span className="font-medium">3. Take action</span><p className="mt-1 text-muted-foreground">Save reviewed labels, request inactivity, or compose a message.</p></div>
+        </div>
+        {busy && <div role="status" aria-live="polite" className="mt-4 flex items-center gap-3 rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm"><Loader2 className="h-4 w-4 animate-spin text-primary" /><div><p className="font-medium">Reading chats and checking evidence</p><p className="text-xs text-muted-foreground"><Clock3 className="mr-1 inline h-3 w-3" />{Math.floor(elapsedSeconds / 60)}:{String(elapsedSeconds % 60).padStart(2, "0")} elapsed · {elapsedSeconds >= 150 ? "Taking longer than expected. Keep this page open; your saved labels are preserved." : "Reports appear when this batch completes. Keep this page open."}</p></div></div>}
         <div className="mt-4 flex items-center gap-2">
           <Search className="h-4 w-4 text-muted-foreground" />
           <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Find technician by name, phone, area, or service" className="h-9" />
@@ -315,7 +348,7 @@ export function TechnicianProcessingWorkflow({
         </div>
         <div className="mt-3 grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
           {visibleTechnicians.map((tech) => (
-            <label key={tech.id} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-muted/60">
+            <label key={tech.id} className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2 py-2 text-xs hover:bg-muted/60 ${selectedIds.includes(tech.id) ? "border-primary/30 bg-primary/10" : "border-transparent"}`}>
               <Checkbox checked={selectedIds.includes(tech.id)} disabled={busy} onCheckedChange={() => toggleTech(tech.id)} />
               <span className="flex min-w-0 flex-1 items-center gap-1.5">
                 <span className="truncate">
@@ -383,6 +416,8 @@ export function TechnicianProcessingWorkflow({
         </div>
       </div>
 
+      {selectedTechnicians.length > 0 && <details className="rounded-lg border bg-card px-4 py-3 text-xs text-muted-foreground"><summary className="cursor-pointer font-medium text-foreground">How to read this report · job counts and review limits</summary><p className="mt-2">{COUNT_BASIS} Counts of paid jobs do not establish that a technician paid our business. AI suggestions are advisory; manually saved labels are shown separately. A neutral chat can require manual review without indicating a bad technician.</p></details>}
+
       {selectedTechnicians.map((tech) => {
         const assessment = assessments[tech.id];
         const result = aiResults[tech.id];
@@ -391,12 +426,17 @@ export function TechnicianProcessingWorkflow({
         const recommendations = result?.recommendations ?? assessment?.ai_recommendations ?? [];
         const recommendsInactive = recommendations.includes("suggest_inactive");
         const recommendsMessage = recommendations.includes("suggest_check_job_message");
-        const draft = MESSAGE_TEMPLATE.replace("{name}", tech.name?.trim().split(/\s+/)[0] || "there");
+        const suggestedLabels = result?.labels ?? [...new Set((assessment?.ai_evidence ?? []).map((item) => item.label).filter((label): label is Label => LABELS.some(([key]) => key === label)))];
+        const messagesReviewed = result?.messagesReviewed ?? assessment?.messages_reviewed ?? 0;
+        const reviewState = technicianReviewState({ reviewed: Boolean(result || assessment?.last_assessed_at), error: result?.error, messages: messagesReviewed, suggestedLabels });
+        const stateStyle = REVIEW_STATES[reviewState];
+        const draft = messageDrafts[tech.id] ?? MESSAGE_TEMPLATE.replace("{name}", tech.name?.trim().split(/\s+/)[0] || "there");
         return (
-          <article key={tech.id} className="space-y-3 rounded-xl border bg-card p-4">
+          <article key={tech.id} className="space-y-4 rounded-xl border bg-card p-5 shadow-sm">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h3 className="flex flex-wrap items-center gap-1.5 font-semibold">
+                <div className="mb-2 flex flex-wrap gap-2"><Badge variant="outline" className={stateStyle.className}>{stateStyle.title}</Badge>{tech.is_active === false && <Badge variant="secondary">Inactive</Badge>}</div>
+                <h3 className="flex flex-wrap items-center gap-1.5 text-lg font-semibold">
                   <span>{tech.name?.trim() || "Unnamed technician"}</span>
                   <TechnicianNameBadges tech={tech} nameCounts={nameCounts} />
                 </h3>
@@ -409,32 +449,33 @@ export function TechnicianProcessingWorkflow({
               </div>
             </div>
             {report?.error && <p className="text-xs text-destructive">{report.error}</p>}
-            {report?.countBasis && !report.error && <p className="text-[11px] text-muted-foreground">{report.countBasis}</p>}
+            <div className="space-y-2"><h4 className="flex items-center gap-2 text-sm font-semibold"><Sparkles className="h-4 w-4 text-primary" />AI-supported labels</h4><div className="flex flex-wrap gap-2">{suggestedLabels.length && !result?.error ? suggestedLabels.map((label) => <Badge key={label} variant="outline" className={technicianLabelClass(label)}>{LABELS.find(([key]) => key === label)?.[1] ?? label}</Badge>) : <p className="text-xs text-muted-foreground">{reviewState === "not_reviewed" ? "Run Quick Report to review this technician." : reviewState === "unavailable" ? "Restore chat access and retry. No conclusion about this technician can be drawn." : "No predefined label is established. Review the chat and add labels manually if appropriate."}</p>}</div></div>
 
-            <p className="text-xs text-muted-foreground">Review labels below before saving. AI suggestions do not change the technician record automatically.</p>
-            {result && (
-              <p className="text-xs text-muted-foreground">
-                AI suggested: {result.error ? "Review failed; retry this technician" : result.labels.length ? result.labels.map((label) => LABELS.find(([key]) => key === label)?.[1] ?? label).join(", ") : "No supported status from the available chat"}
-              </p>
-            )}
+            <div className="space-y-2 rounded-lg border bg-muted/20 p-3">
+            <h4 className="flex items-center gap-2 text-sm font-semibold"><ClipboardCheck className="h-4 w-4" />Your reviewed labels</h4>
+            <p className="text-xs text-muted-foreground">Select or adjust labels manually, including when AI cannot assign a status. Save to confirm your choices.</p>
             <div className="flex flex-wrap gap-2">
               {LABELS.map(([key, label]) => {
                 const checked = labels.includes(key);
                 return (
-                  <button key={key} type="button" onClick={() => setProposedLabels((current) => ({ ...current, [tech.id]: checked ? labels.filter((item) => item !== key) : [...labels, key] }))} className={`rounded-full border px-2.5 py-1 text-xs ${checked ? "border-primary bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground"}`}>
+                  <button key={key} type="button" aria-pressed={checked} disabled={busy || savingId === tech.id} onClick={() => setProposedLabels((current) => ({ ...current, [tech.id]: checked ? labels.filter((item) => item !== key) : [...labels, key] }))} className={`rounded-full border px-2.5 py-1.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 ${checked ? technicianLabelClass(key) : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}>
                     {label}
                   </button>
                 );
               })}
-              <Button variant="outline" size="sm" className="h-7" disabled={savingId === tech.id} onClick={() => void saveLabels(tech.id)}>
+              <Button variant="outline" size="sm" className="h-8" disabled={busy || savingId === tech.id} onClick={() => void saveLabels(tech.id)}>
                 {savingId === tech.id ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}Save labels
               </Button>
+            </div>
             </div>
 
             {(result || assessment) && (
               <div className="space-y-2 rounded-lg bg-muted/30 p-3">
-                <p className="text-sm">{result?.summary ?? assessment?.ai_summary}</p>
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Relationship summary</h4>
+                <p className="text-sm leading-relaxed">{result?.summary ?? assessment?.ai_summary}</p>
                 <p className="text-[11px] text-muted-foreground">Reviewed {result?.conversationsReviewed ?? assessment?.conversations_reviewed ?? 0} conversations · {result?.messagesReviewed ?? assessment?.messages_reviewed ?? 0} messages{result?.chatSource ? ` · ${result.chatSource}` : ""}{result?.error ? ` · Error: ${result.error}` : ""}</p>
+                {result?.incomingMessages !== undefined && <p className="text-xs text-muted-foreground">{result.incomingMessages} incoming · {result.outgoingMessages ?? 0} outgoing{result.reviewedFrom && result.reviewedTo ? ` · ${new Date(result.reviewedFrom).toLocaleDateString()} – ${new Date(result.reviewedTo).toLocaleDateString()}` : ""}</p>}
+                {result?.historyLimited && <p className="text-xs text-amber-700 dark:text-amber-300">Recent-history sample: older messages may change this assessment. Review the full chat before making a relationship decision.</p>}
                 {(result?.conversationsReviewed ?? assessment?.conversations_reviewed) === 0 && tech.chat_link && (
                   <p className="text-xs text-amber-600 dark:text-amber-400">
                     {result?.error ? "A Quo chat link is saved, but it was not reviewed. Configure the QUO_API_KEY Edge Function secret or sync the conversation to the CRM mirror." : "A Quo chat link is saved, but no messages were found in the CRM mirror or linked conversation."} {tech.chat_link.startsWith("https://my.quo.com/") && <a href={tech.chat_link} target="_blank" rel="noopener noreferrer" className="underline">Open Quo chat</a>}
@@ -444,31 +485,33 @@ export function TechnicianProcessingWorkflow({
               </div>
             )}
 
-            {recommendations.length > 0 && (
-              <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                <span className="text-muted-foreground">Suggested next steps:</span>
+            {(result || assessment?.last_assessed_at) && (
+              <div className={`space-y-2 rounded-lg border p-3 text-xs ${stateStyle.className}`}>
+                <p className="font-semibold">Suggested next step</p>
+                {reviewState === "unavailable" && <p>Check the saved Quo link, restore or sync message history, then retry this technician. Missing chat is not evidence of a bad relationship.</p>}
+                {reviewState === "manual_review" && <p>Review the full conversation and follow up if needed. If the situation falls outside the nine labels, leave labels unchanged rather than force a match.</p>}
+                {reviewState === "supported" && <p>Confirm the quoted evidence, adjust your reviewed labels, then save. Relationship changes are separate actions below.</p>}
+                <div className="flex flex-wrap gap-1.5">
                 {recommendations.includes("suggest_inactive") && <Badge variant="outline">Review for inactivity</Badge>}
                 {recommendations.includes("review_payment") && <Badge variant="outline">Review payment history</Badge>}
                 {recommendations.includes("review_rates") && <Badge variant="outline">Review rates</Badge>}
                 {recommendations.includes("suggest_check_job_message") && <Badge variant="outline">Compose job check-in</Badge>}
+                </div>
               </div>
             )}
 
             <div className="flex flex-wrap gap-2 border-t pt-3">
+              <Button variant="outline" size="sm" disabled={busy} onClick={() => void runAssessment([tech.id])}><RotateCcw className="mr-1.5 h-3.5 w-3.5" />{result || assessment?.last_assessed_at ? "Retry review" : "Review technician"}</Button>
               {(recommendsInactive || labels.some((label) => ["tech_dont_respond", "tech_is_scammer", "never_responded"].includes(label))) && tech.is_active !== false && !flagActions[`${tech.id}:set_active`] && (
-                <Button variant="outline" size="sm" disabled={actionBusyId === tech.id} onClick={() => void requestFlag(tech, "set_active", false)}><UserX className="mr-1.5 h-3.5 w-3.5" />{role === "admin" ? "Mark inactive" : "Request inactive"}</Button>
-              )}
-              {canComposeTechMessage && (recommendsMessage || labels.includes("good_tech")) && tech.phone_number && (
-                <QuoPhoneTrigger contactName={tech.name} phone={tech.phone_number} chatType="tech" initialMessage={draft}>
-                  <Button variant="outline" size="sm"><MessageSquareText className="mr-1.5 h-3.5 w-3.5" />Compose job check-in</Button>
-                </QuoPhoneTrigger>
+                <Button variant="outline" size="sm" disabled={busy || actionBusyId === tech.id} onClick={() => void requestFlag(tech, "set_active", false)}><UserX className="mr-1.5 h-3.5 w-3.5" />{role === "admin" ? "Mark inactive" : "Request inactive"}</Button>
               )}
               {labels.includes("good_tech") && !tech.is_good_tech && !flagActions[`${tech.id}:set_good_tech`] && (
-                <Button variant="outline" size="sm" disabled={actionBusyId === tech.id} onClick={() => void requestFlag(tech, "set_good_tech", true)}><Star className="mr-1.5 h-3.5 w-3.5" />{role === "admin" ? "Mark Good Tech" : "Request Good Tech"}</Button>
+                <Button variant="outline" size="sm" disabled={busy || actionBusyId === tech.id} onClick={() => void requestFlag(tech, "set_good_tech", true)}><Star className="mr-1.5 h-3.5 w-3.5" />{role === "admin" ? "Mark Good Tech" : "Request Good Tech"}</Button>
               )}
               {flagActions[`${tech.id}:set_active`] && <Badge variant="secondary">Inactive {flagActions[`${tech.id}:set_active`]}</Badge>}
               {flagActions[`${tech.id}:set_good_tech`] && <Badge variant="secondary">Good Tech {flagActions[`${tech.id}:set_good_tech`]}</Badge>}
             </div>
+            {canComposeTechMessage && tech.phone_number && <details className="rounded-lg border border-primary/20 bg-primary/5 p-3" open={recommendsMessage || labels.includes("good_tech") || undefined}><summary className="cursor-pointer text-sm font-medium">{recommendsMessage || labels.includes("good_tech") ? "Recommended: compose job check-in" : "Manual follow-up: compose a message"}</summary><div className="mt-3 space-y-2"><label htmlFor={`draft-${tech.id}`} className="text-xs text-muted-foreground">Edit your draft before opening Tech Quick Chat</label><Textarea id={`draft-${tech.id}`} value={draft} onChange={(event) => setMessageDrafts((current) => ({ ...current, [tech.id]: event.target.value }))} className="min-h-[90px] bg-background" /><QuoPhoneTrigger contactName={tech.name} phone={tech.phone_number} chatType="tech" initialMessage={draft}><Button variant="outline" size="sm" disabled={busy || !draft.trim()}><MessageSquareText className="mr-1.5 h-3.5 w-3.5" />Open draft in Tech Quick Chat</Button></QuoPhoneTrigger><p className="text-xs text-muted-foreground">Opening the chat does not send this message. Review the recipient and send from the chat.</p></div></details>}
           </article>
         );
       })}

@@ -1,5 +1,5 @@
-import { createClient } from "npm:@supabase/supabase-js@2";
-import { technicianJobCounts, type CompletedLead, type TechnicianJobCounts } from "../_shared/technician-job-counts.ts";
+import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
+import { technicianJobCounts, technicianPhoneKey, type CompletedLead, type TechnicianJobCounts } from "../_shared/technician-job-counts.ts";
 import { parseTechnicianQuoLink } from "../_shared/technician-quo-link.ts";
 import { supportsTechnicianLabel } from "../_shared/technician-label-evidence.ts";
 
@@ -41,11 +41,11 @@ const ALLOWED_RECOMMENDATIONS = [
 type Recommendation = (typeof ALLOWED_RECOMMENDATIONS)[number];
 
 type Technician = { id: string; name: string; phone_number: string | null; chat_link: string | null; is_active: boolean | null };
-type Conversation = { id: string; customer_number: string | null; customer_name: string | null };
+type Conversation = { id: string; quo_conversation_id: string; customer_number: string | null; customer_name: string | null };
 type QuoMessage = { conversation_id: string; sender: string; text: string | null; message_time: string | null };
 const COUNT_BASIS = "Matched by technician phone number on completed leads (job_done + paid); paid is a subset. Older leads without a technician phone number cannot be attributed, and shared phone numbers may be ambiguous.";
 
-async function loadCompletedLeads(admin: ReturnType<typeof createClient>): Promise<{ leads: CompletedLead[]; error: string | null }> {
+async function loadCompletedLeads(admin: SupabaseClient): Promise<{ leads: CompletedLead[]; error: string | null }> {
   const leads: CompletedLead[] = [];
   const pageSize = 1000;
   for (let offset = 0; ; offset += pageSize) {
@@ -249,22 +249,33 @@ Deno.serve(async (req) => {
   const completedLeads = await loadCompletedLeads(admin);
 
   const allVariants = [...new Set(technicians.flatMap((tech) => phoneVariants(tech.phone_number)))];
-  const { data: conversations, error: conversationsError } = allVariants.length
-    ? await admin.from("quo_conversations").select("id, customer_number, customer_name").in("customer_number", allVariants)
-    : { data: [], error: null };
+  const savedConversationIds = [...new Set(technicians.map((tech) => parseTechnicianQuoLink(tech.chat_link)?.conversationId).filter((id): id is string => Boolean(id)))];
+  // A saved link can locate a mirrored conversation even when its participant
+  // phone is formatted differently. Still verify phone identity before using it.
+  const [phoneLookup, linkLookup] = await Promise.all([
+    allVariants.length
+      ? admin.from("quo_conversations").select("id, quo_conversation_id, customer_number, customer_name").in("customer_number", allVariants)
+      : Promise.resolve({ data: [], error: null }),
+    savedConversationIds.length
+      ? admin.from("quo_conversations").select("id, quo_conversation_id, customer_number, customer_name").in("quo_conversation_id", savedConversationIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  const conversationsError = phoneLookup.error ?? linkLookup.error;
   if (conversationsError) return jsonResponse({ error: conversationsError.message }, 400);
-
-  const convoRows = (conversations ?? []) as Conversation[];
+  const convoRows = [...new Map([...(phoneLookup.data ?? []), ...(linkLookup.data ?? [])].map((row) => [row.id, row])).values()] as Conversation[];
 
   const results = await Promise.all(technicians.map(async (tech: Technician) => {
-    const variants = new Set(phoneVariants(tech.phone_number));
-    const techConversations = convoRows.filter((conversation) => variants.has(conversation.customer_number ?? ""));
+    const phoneKey = technicianPhoneKey(tech.phone_number);
+    const techConversations = convoRows.filter((conversation) => phoneKey && technicianPhoneKey(conversation.customer_number) === phoneKey);
     const ids = new Set(techConversations.map((conversation) => conversation.id));
     const { data: messageRows, error: messagesError } = ids.size
       ? await admin.from("quo_messages").select("conversation_id, sender, text, message_time")
-          .in("conversation_id", [...ids]).order("message_time", { ascending: false }).limit(MAX_MESSAGES_PER_TECH)
+          .in("conversation_id", [...ids]).in("sender", ["agent", "customer"])
+          .not("text", "is", null).neq("text", "")
+          .order("message_time", { ascending: false, nullsFirst: false }).limit(MAX_MESSAGES_PER_TECH + 1)
       : { data: [], error: null };
-    let techMessages = ((messageRows ?? []) as QuoMessage[]).filter((message) => message.sender === "agent" || message.sender === "customer").reverse();
+    let historyLimited = (messageRows?.length ?? 0) > MAX_MESSAGES_PER_TECH;
+    let techMessages = ((messageRows ?? []) as QuoMessage[]).slice(0, MAX_MESSAGES_PER_TECH).reverse();
     let conversationCount = techConversations.length;
     let chatSource = "CRM mirror";
     let linkedChatError: string | null = null;
@@ -276,6 +287,7 @@ Deno.serve(async (req) => {
         techMessages = linked.messages;
         conversationCount = 1;
         chatSource = "Quo direct";
+        historyLimited = linked.messages.length >= MAX_MESSAGES_PER_TECH;
       }
     }
     const jobCounts = countsFor(tech.phone_number, completedLeads);
@@ -369,6 +381,11 @@ Deno.serve(async (req) => {
       conversationsReviewed: conversationCount,
       messagesReviewed: techMessages.length,
       chatSource,
+      incomingMessages: techMessages.filter((message) => message.sender === "customer").length,
+      outgoingMessages: techMessages.filter((message) => message.sender === "agent").length,
+      historyLimited: historyLimited || transcript(techMessages).length >= 100_000 || techMessages.some((message) => (message.text?.length ?? 0) > 1200),
+      reviewedFrom: techMessages.find((message) => message.message_time)?.message_time ?? null,
+      reviewedTo: [...techMessages].reverse().find((message) => message.message_time)?.message_time ?? null,
       jobCounts,
       isActive: tech.is_active !== false,
       error: aiError,
