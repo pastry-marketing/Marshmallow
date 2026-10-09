@@ -249,8 +249,9 @@ export function TechnicianProcessingWorkflow({
         const result = aiResults[tech.id];
         const report = reports[tech.id];
         const labels = proposedLabels[tech.id] ?? assessment?.labels ?? [];
-        const recommendsInactive = result?.recommendations.includes("suggest_inactive") || assessment?.ai_recommendations?.includes("suggest_inactive");
-        const recommendsMessage = result?.recommendations.includes("suggest_check_job_message") || assessment?.ai_recommendations?.includes("suggest_check_job_message");
+        const recommendations = result?.recommendations ?? assessment?.ai_recommendations ?? [];
+        const recommendsInactive = recommendations.includes("suggest_inactive");
+        const recommendsMessage = recommendations.includes("suggest_check_job_message");
         const draft = MESSAGE_TEMPLATE.replace("{name}", tech.name.split(/\s+/)[0] || "there");
         return (
           <article key={tech.id} className="space-y-3 rounded-xl border bg-card p-4">
