@@ -57,7 +57,9 @@ export function TechnicianDetailsContent({ technician, compact = false, onToggle
               <Star className={`h-4 w-4 transition-colors ${technician.is_good_tech ? "fill-amber-500 text-amber-500" : "text-muted-foreground/30 hover:text-muted-foreground"}`} />
             </button>
           ) : technician.is_good_tech ? (
-            <Star className="h-4 w-4 fill-amber-500 text-amber-500" title="Good Tech" />
+            <span title="Good Tech">
+              <Star className="h-4 w-4 fill-amber-500 text-amber-500" />
+            </span>
           ) : null}
         </div>
       </div>

@@ -59,7 +59,8 @@ export async function resolveLeadLocation(
   } as never);
 
   if (error) throw error;
-  const row = (Array.isArray(data) ? data[0] : data) as ResolvedLocation | null;
+  const rows = (data ?? []) as ResolvedLocation[];
+  const row = rows[0] ?? null;
   return {
     city: row?.city ?? null,
     state: row?.state ?? null,
@@ -86,8 +87,8 @@ export async function fetchAreaPerformance(
   } as never);
 
   if (error) throw error;
-  const row = (Array.isArray(data) ? data[0] : data) as AreaPerformance | null;
-  return row ?? null;
+  const rows = (data ?? []) as AreaPerformance[];
+  return rows[0] ?? null;
 }
 
 /** A state ranked on the jobs that closed in it. */

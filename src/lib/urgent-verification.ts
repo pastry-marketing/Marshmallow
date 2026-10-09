@@ -200,11 +200,11 @@ export async function runUrgentVerification(leadId: string): Promise<UrgentVerif
  * activity log.
  */
 export async function applyUrgentVerification(leadId: string, summary: string) {
-  const { error } = await supabase.rpc("approve_urgent_verification", {
+  const { error } = await supabase.rpc("approve_urgent_verification" as never, {
     p_lead_id: leadId,
     p_ai_summary: summary || null,
     p_ai_model: "gpt-4o-mini",
-  });
+  } as never);
 
   if (error) throw new Error(error.message);
 }
@@ -214,10 +214,10 @@ export async function applyUrgentVerification(leadId: string, summary: string) {
  * acknowledgement so it never reads as a passed check in reporting.
  */
 export async function applyUrgentAcknowledgement(leadId: string, reason: string) {
-  const { error } = await supabase.rpc("approve_urgent_acknowledgement", {
+  const { error } = await supabase.rpc("approve_urgent_acknowledgement" as never, {
     p_lead_id: leadId,
     p_reason: reason || null,
-  });
+  } as never);
 
   if (error) throw new Error(error.message);
 }
@@ -226,10 +226,10 @@ export async function applyUrgentAcknowledgement(leadId: string, reason: string)
  * Apply AI-suggested form fixes.
  */
 export async function applyUrgentFormFixes(leadId: string, fixes: { field: string; old: string; new: string }[]) {
-  const { data, error } = await supabase.rpc("apply_urgent_form_fixes", {
+  const { data, error } = await supabase.rpc("apply_urgent_form_fixes" as never, {
     p_lead_id: leadId,
-    p_fixes: fixes as unknown as Record<string, unknown>[],
-  });
+    p_fixes: fixes,
+  } as never);
 
   if (error) throw new Error(error.message);
   const result = (data ?? {}) as { applied?: Array<{ field: string }>; skipped?: Array<{ field: string; reason: string }> };
@@ -256,15 +256,15 @@ export async function submitUrgentReviewRequest(input: {
   customerName?: string | null;
   previousStatus?: string | null;
 }) {
-  const { data, error } = await supabase.rpc("request_urgent_review", {
+  const { data, error } = await supabase.rpc("request_urgent_review" as never, {
     p_lead_id: input.leadId,
-    p_ai_issues: input.issues as unknown as Record<string, unknown>[],
+    p_ai_issues: input.issues,
     p_ai_summary: input.summary || null,
     p_ai_model: "gpt-4o-mini",
     p_lead_job_id: input.jobId ?? null,
     p_lead_customer_name: input.customerName ?? null,
     p_previous_status: input.previousStatus ?? null,
-  });
+  } as never);
 
   if (error) throw new Error(error.message);
   return data as string | null;
@@ -308,7 +308,7 @@ export type UrgentReviewRequest = {
 };
 
 export async function listUrgentReviewRequests(status: UrgentReviewStatus): Promise<UrgentReviewRequest[]> {
-  const { data, error } = await supabase.rpc("list_urgent_review_requests", { p_status: status });
+  const { data, error } = await supabase.rpc("list_urgent_review_requests" as never, { p_status: status } as never);
 
   if (error) throw new Error(error.message);
 
@@ -324,11 +324,11 @@ export async function reviewUrgentRequest(input: {
   approve: boolean;
   note?: string | null;
 }): Promise<string> {
-  const { data, error } = await supabase.rpc("review_urgent_request", {
+  const { data, error } = await supabase.rpc("review_urgent_request" as never, {
     p_request_id: input.requestId,
     p_approve: input.approve,
     p_review_note: input.note?.trim() || null,
-  });
+  } as never);
 
   if (error) throw new Error(error.message);
   return typeof data === "string" ? data : "Done.";
