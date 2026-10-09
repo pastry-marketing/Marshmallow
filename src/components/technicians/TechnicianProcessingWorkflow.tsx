@@ -34,7 +34,7 @@ type Assessment = {
   messages_reviewed: number;
   last_assessed_at: string | null;
 };
-type Report = { technicianId: string; jobsDone: number; jobsPaid: number; countBasis: string };
+type Report = { technicianId: string; jobsCompleted: number; jobsPaid: number; countBasis: string };
 type AiResult = {
   technicianId: string;
   labels: Label[];
@@ -43,17 +43,11 @@ type AiResult = {
   evidence: Array<{ label?: string; quote?: string }>;
   conversationsReviewed: number;
   messagesReviewed: number;
-  jobCounts: { job_done: number; paid: number };
+  jobCounts: { completed: number; paid: number };
   error: string | null;
 };
 
 const MESSAGE_TEMPLATE = "Hi {name}, just checking in—do you have availability for any upcoming jobs? Please let us know what types of work you can take and your current rates. Thanks!";
-
-function labelsFromUnknown(value: unknown): Label[] {
-  if (!Array.isArray(value)) return [];
-  const allowed = new Set(LABELS.map(([key]) => key));
-  return [...new Set(value.filter((item): item is Label => typeof item === "string" && allowed.has(item as Label)))];
-}
 
 export function TechnicianProcessingWorkflow({
   technicians,
@@ -138,9 +132,9 @@ export function TechnicianProcessingWorkflow({
         ...current,
         ...Object.fromEntries(results.map((result) => [result.technicianId, {
           technicianId: result.technicianId,
-          jobsDone: result.jobCounts.job_done,
+          jobsCompleted: result.jobCounts.completed,
           jobsPaid: result.jobCounts.paid,
-          countBasis: "Exact technician-name match; duplicate technician names may share historical counts.",
+          countBasis: "Exact technician-name match; completed includes job_done and paid. Duplicate technician names may share historical counts.",
         }])),
       }));
       if (user?.id) {
@@ -261,7 +255,7 @@ export function TechnicianProcessingWorkflow({
                 <p className="text-xs text-muted-foreground">{tech.service || "Service not set"} · {tech.area} · {tech.phone_number || "No phone"}</p>
               </div>
               <div className="flex flex-wrap gap-2 text-xs">
-                <Badge variant="outline">{report?.jobsDone ?? 0} jobs completed</Badge>
+                <Badge variant="outline">{report?.jobsCompleted ?? 0} jobs completed</Badge>
                 <Badge variant="outline">{report?.jobsPaid ?? 0} jobs paid</Badge>
                 {assessment?.last_assessed_at && <span className="text-muted-foreground">Reviewed {new Date(assessment.last_assessed_at).toLocaleString()}</span>}
               </div>
