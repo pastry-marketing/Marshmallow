@@ -1,10 +1,11 @@
 -- =============================================================================
--- Migration: 20261106000000_technician_processing_workflow.sql
+-- Migration: 20261117000000_technician_processing_workflow.sql
 -- Purpose: Persist technician conversation assessments and relationship labels
---          for the new Technician Processing Workflow.
--- Defect fixed: Technician notes, active/Good Tech flags, and Quo chat history
---               currently have no joined assessment record, so multi-tech AI
---               reviews cannot be saved, audited, or safely resumed.
+--          while restricting direct access to the intended roles.
+-- Defect fixed: Technician reviews had no durable assessment record, and the
+--               initial schema left default table grants in place for anon.
+--               This unique version also avoids colliding with the remote
+--               20261106000000 migration version.
 -- ROLLBACK:
 --   DROP TABLE IF EXISTS public.technician_workflow_assessments;
 --   DROP FUNCTION IF EXISTS public.set_technician_workflow_updated_at();
@@ -48,12 +49,14 @@ CREATE POLICY "Admin and processor read technician workflow assessments"
 
 -- Writes are performed by the authenticated, role-checked Edge Function using
 -- service_role. No direct authenticated INSERT/UPDATE policy is granted.
-REVOKE INSERT, UPDATE, DELETE ON public.technician_workflow_assessments FROM authenticated;
+REVOKE ALL ON TABLE public.technician_workflow_assessments FROM PUBLIC, anon, authenticated;
 GRANT SELECT ON public.technician_workflow_assessments TO authenticated;
 GRANT ALL ON public.technician_workflow_assessments TO service_role;
 
 CREATE INDEX IF NOT EXISTS technician_workflow_updated_idx
   ON public.technician_workflow_assessments (updated_at DESC);
+CREATE INDEX IF NOT EXISTS technician_workflow_updated_by_idx
+  ON public.technician_workflow_assessments (updated_by);
 
 CREATE OR REPLACE FUNCTION public.set_technician_workflow_updated_at()
 RETURNS trigger
@@ -65,6 +68,8 @@ BEGIN
   RETURN NEW;
 END;
 $$;
+
+REVOKE ALL ON FUNCTION public.set_technician_workflow_updated_at() FROM PUBLIC, anon, authenticated;
 
 DROP TRIGGER IF EXISTS set_technician_workflow_updated_at
   ON public.technician_workflow_assessments;
