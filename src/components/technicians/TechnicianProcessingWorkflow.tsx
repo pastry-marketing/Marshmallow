@@ -437,7 +437,7 @@ export function TechnicianProcessingWorkflow({
                 <p className="text-[11px] text-muted-foreground">Reviewed {result?.conversationsReviewed ?? assessment?.conversations_reviewed ?? 0} conversations · {result?.messagesReviewed ?? assessment?.messages_reviewed ?? 0} messages{result?.chatSource ? ` · ${result.chatSource}` : ""}{result?.error ? ` · Error: ${result.error}` : ""}</p>
                 {(result?.conversationsReviewed ?? assessment?.conversations_reviewed) === 0 && tech.chat_link && (
                   <p className="text-xs text-amber-600 dark:text-amber-400">
-                    A Quo chat link is saved, but no messages were available from the CRM mirror or the linked conversation. {tech.chat_link.startsWith("https://my.quo.com/") && <a href={tech.chat_link} target="_blank" rel="noopener noreferrer" className="underline">Open Quo chat</a>}
+                    {result?.error ? "A Quo chat link is saved, but it was not reviewed. Configure the QUO_API_KEY Edge Function secret or sync the conversation to the CRM mirror." : "A Quo chat link is saved, but no messages were found in the CRM mirror or linked conversation."} {tech.chat_link.startsWith("https://my.quo.com/") && <a href={tech.chat_link} target="_blank" rel="noopener noreferrer" className="underline">Open Quo chat</a>}
                   </p>
                 )}
                 {(result?.evidence ?? assessment?.ai_evidence ?? []).map((item, index) => item.quote ? <blockquote key={index} className="border-l-2 border-primary/50 pl-2 text-xs italic text-muted-foreground">{item.source ? `${item.source}: ` : ""}{item.quote}</blockquote> : null)}

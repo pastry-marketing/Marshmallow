@@ -1,6 +1,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { technicianJobCounts, type CompletedLead, type TechnicianJobCounts } from "../_shared/technician-job-counts.ts";
 import { parseTechnicianQuoLink } from "../_shared/technician-quo-link.ts";
+import { supportsTechnicianLabel } from "../_shared/technician-label-evidence.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -270,6 +271,7 @@ Deno.serve(async (req) => {
     if (!messagesError && !techMessages.length && parseTechnicianQuoLink(tech.chat_link)) {
       const linked = await fetchLinkedQuoMessages(tech);
       linkedChatError = linked.error;
+      if (linked.error) chatSource = "Quo direct unavailable";
       if (linked.messages.length) {
         techMessages = linked.messages;
         conversationCount = 1;
@@ -305,14 +307,13 @@ Deno.serve(async (req) => {
         const payload = await response.json();
         const result = jsonObject(payload.choices?.[0]?.message?.content ?? "{}");
         evidence = verifiedEvidence(result.evidence, techMessages);
-        const evidenceLabels = new Set(
-          evidence
-            .map((item) => item.label)
-            .filter((item): item is Label => typeof item === "string" && ALLOWED_LABELS.includes(item as Label)),
-        );
-        // A label is only kept when at least one verified quote supports it. This
-        // is what stops a label from resting on a quote the technician never said.
-        labels = safeLabels(result.labels).filter((label) => evidenceLabels.has(label));
+        const proposed = safeLabels(result.labels);
+        const evidenceLabels = new Set(evidence.map((item) => item.label));
+        // Source-matched quotes are necessary, but refund/scope conversations
+        // still need semantic checks before suggesting a conduct/payment label.
+        labels = proposed.filter((label) => evidenceLabels.has(label) && supportsTechnicianLabel(label, evidence));
+        const withheldLabels = proposed.filter((label) => !labels.includes(label));
+        evidence = evidence.filter((item) => item.label && labels.includes(item.label as Label));
         recommendations = safeRecommendations(result.recommendations).filter((recommendation) => {
           if (recommendation === "suggest_inactive") {
             return labels.some((label) => ["tech_dont_respond", "tech_is_scammer", "never_responded"].includes(label));
@@ -327,12 +328,18 @@ Deno.serve(async (req) => {
         if (labels.includes("high_rates")) recommendations.push("review_rates");
         recommendations = [...new Set(recommendations)];
         summary = typeof result.summary === "string" ? result.summary.slice(0, 1400) : "Assessment complete.";
-        if (!evidence.length) summary = `${summary.slice(0, 1200)} No status was suggested without a verified supporting quote.`;
+        if (withheldLabels.length) {
+          summary = "The proposed status was not established by the conversation evidence. A refund, unsuitable job, or unconfirmed accusation is not proof of misconduct or late payment. Review the chat before applying a label.";
+        } else if (!evidence.length) {
+          summary = `${summary.slice(0, 1200)} No status was suggested without a verified supporting quote.`;
+        }
       } catch (error) {
         aiError = error instanceof Error ? error.message : "AI assessment failed.";
       }
     } else if (aiError) {
-      summary = "Could not load Quo messages for this technician.";
+      summary = linkedChatError
+        ? "The saved Quo chat is missing from the CRM mirror, and direct access is unavailable. No chat assessment was made."
+        : "Could not load Quo messages for this technician.";
     }
 
     if (chatSource === "Quo direct" && !aiError) {
