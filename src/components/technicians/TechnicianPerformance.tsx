@@ -100,7 +100,10 @@ export function TechnicianPerformance() {
       if (error) throw error;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["tech-performance"] });
+      void queryClient.invalidateQueries({ queryKey: ["tech-performance"] });
+      // The same flag is rendered by the directory and the map, so they go stale
+      // too unless they are invalidated with this write.
+      void queryClient.invalidateQueries({ queryKey: TECHNICIANS_ROOT_KEY });
     },
     onError: (err: Error) => toast.error(`Could not update Good Tech: ${err.message}`),
   });
