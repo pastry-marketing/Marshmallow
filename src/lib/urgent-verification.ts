@@ -86,6 +86,7 @@ export type UrgentFix = {
   suggested: string;
   reason: string;
   kind: string;
+  evidence?: Array<{ message_id: string; quote: string }>;
 };
 
 export type UrgentFlag = {
@@ -119,19 +120,17 @@ const UNAVAILABLE: UrgentVerificationResult = {
   reason: "",
 };
 
-// Generous next to the function's own eight second abort on the model call,
-// because this covers the whole round trip including the network.
-const REQUEST_TIMEOUT_MS = 15_000;
+// Includes paginated history, the model's 45-second deadline and Google lookup.
+const REQUEST_TIMEOUT_MS = 90_000;
 
 export async function runUrgentVerification(leadId: string): Promise<UrgentVerificationResult> {
   if (!leadId) throw new Error("Missing lead ID.");
 
   // supabase.functions.invoke has no timeout of its own. The edge function
-  // aborts its OpenAI call after eight seconds, but that covers only the model
+  // aborts its OpenAI call after 45 seconds, but that covers only the model
   // call: DNS, TLS and the hop to Supabase can each stall well past that, and a
   // customer waiting on a dispatch decision should not be left looking at a
-  // spinner with no way out. Fifteen seconds is well past the expected one or
-  // two, and past anything legitimate.
+  // spinner with no way out. The complete review has a bounded round trip.
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
@@ -233,7 +232,16 @@ export async function applyUrgentFormFixes(leadId: string, fixes: { field: strin
   });
 
   if (error) throw new Error(error.message);
-  return data;
+  const result = (data ?? {}) as { applied?: Array<{ field: string }>; skipped?: Array<{ field: string; reason: string }> };
+  const appliedFields = new Set((result.applied ?? []).map((fix) => fix.field));
+  const missing = fixes.filter((fix) => !appliedFields.has(fix.field));
+  if (missing.length) {
+    const reasons = result.skipped?.filter((fix) => missing.some((item) => item.field === fix.field)).map((fix) => fix.reason) ?? [];
+    throw new Error(reasons.includes("not_allowed")
+      ? "This correction requires the latest database migration. Edit the field manually until it is applied."
+      : "The correction was not applied because the lead changed or the value was rejected. Refresh the review before trying again.");
+  }
+  return result;
 }
 
 /**

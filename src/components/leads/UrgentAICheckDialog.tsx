@@ -17,9 +17,9 @@ import { toast } from "sonner";
 // =============================================================================
 // The one-time form check that runs before a lead becomes urgent.
 //
-// Form-only phase: this checks the lead's own form fields for formatting issues
-// (spelling, capitalization, city/state, service type). It does NOT read the
-// customer chat. For each suggested correction the user must either Apply it or
+// Reviews the latest confirmed customer scope/quote in all matched stored chat
+// messages, and uses Google's verified address as the location baseline.
+// For each suggested correction the user must either Apply it or
 // Dismiss it; the lead cannot be marked urgent until every suggestion is
 // resolved. Missing required details are shown as flags for staff to fill in.
 //
@@ -97,11 +97,11 @@ export default function UrgentAICheckDialog({
     if (appliedFields.size) parts.push(`${appliedFields.size} applied`);
     if (dismissedFields.size) parts.push(`${dismissedFields.size} dismissed`);
     const summary = parts.length
-      ? `Form check: ${parts.join(", ")}.`
-      : result?.summary || "Form checked — nothing to correct.";
+      ? `${result?.summary || "Latest agreement reviewed."} ${parts.join(", ")}.`
+      : result?.summary || "Latest customer agreement checked — nothing to correct.";
     try {
       await applyUrgentVerification(leadId, summary);
-      toast.success("Form checked. Marked urgent.");
+      toast.success("Lead reviewed. Marked urgent.");
       onProceed();
       onOpenChange(false);
     } catch (err: unknown) {
@@ -175,10 +175,10 @@ export default function UrgentAICheckDialog({
             ) : (
               <ShieldAlert className="h-5 w-5 text-amber-600" />
             )}
-            Clean up the form before dispatch
+            Review the latest agreement before dispatch
           </DialogTitle>
           <DialogDescription>
-            We checked the job form for formatting issues. Apply or dismiss each suggestion, then mark the lead urgent.
+            Review the latest agreed job details, final quote, and Google-formatted address. Apply or dismiss each correction before marking urgent.
           </DialogDescription>
         </DialogHeader>
 
@@ -186,17 +186,19 @@ export default function UrgentAICheckDialog({
           <div className="py-10 text-center space-y-3">
             <Loader2 className="h-8 w-8 animate-spin mx-auto text-muted-foreground" />
             <p className="text-sm text-muted-foreground">
-              Checking the job form for formatting issues. This usually takes a couple of seconds.
+              Reading the full stored customer conversation, checking the latest agreement, and looking up the service address. This may take up to a minute.
             </p>
           </div>
         )}
+
+        {!busy && result?.state === "checked" && <div className="space-y-1 rounded-lg border bg-muted/40 p-3 text-xs text-muted-foreground"><p className="font-medium text-foreground">Reviewed {result.messageCount} stored messages, oldest to newest</p>{result.notice && <p>{result.notice}</p>}</div>}
 
         {!busy && result && clean && (
           <div className="space-y-4">
             <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 flex gap-3">
               <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
               <div>
-                <p className="font-medium text-emerald-900">The form looks clean</p>
+                <p className="font-medium text-emerald-900">No supported corrections found</p>
                 <p className="text-sm text-emerald-800 mt-1">
                   {result.summary || "Nothing to correct. You can mark this lead urgent."}
                 </p>
@@ -213,7 +215,7 @@ export default function UrgentAICheckDialog({
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 flex gap-3">
               <HelpCircle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
               <div>
-                <p className="font-medium text-amber-900">The form check could not run</p>
+                <p className="font-medium text-amber-900">The complete review could not run</p>
                 <p className="text-sm text-amber-800 mt-1">{result.notice}</p>
               </div>
             </div>
@@ -266,9 +268,10 @@ export default function UrgentAICheckDialog({
                         </div>
                         <p className="text-sm">
                           <span className="text-muted-foreground line-through mr-2">{fix.current || "(empty)"}</span>
-                          <span className="font-medium text-emerald-600 dark:text-emerald-400">→ {fix.suggested}</span>
+                          <span className="whitespace-pre-wrap font-medium text-emerald-600 dark:text-emerald-400">→ {fix.suggested}</span>
                         </p>
                         {fix.reason && <p className="text-xs text-muted-foreground">{fix.reason}</p>}
+                        {fix.evidence?.map((item, evidenceIndex) => <blockquote key={evidenceIndex} className="border-l-2 border-primary/30 pl-2 text-xs text-muted-foreground">“{item.quote}”</blockquote>)}
                       </div>
                       {isApplied ? (
                         <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 shrink-0">

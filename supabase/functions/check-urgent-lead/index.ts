@@ -1,20 +1,10 @@
 // =============================================================================
-// check-urgent-lead  (form-only phase)
+// check-urgent-lead: latest customer agreement + verified Google address.
 //
-// Checks a lead's FORM FIELDS for formatting problems before the lead is allowed
-// to become urgent, and returns one-click corrections plus flags for missing
-// required details.
-//
-// -----------------------------------------------------------------------------
-// THIS PHASE DOES NOT READ THE QUO CUSTOMER CHAT
-// -----------------------------------------------------------------------------
-//
-// An earlier version compared the record against the customer's conversation.
-// For this phase the correction is deliberately form-only: it looks at the saved
-// lead fields alone (spelling, grammar, capitalization, formatting, city/state,
-// and whether the service type matches the recorded work) so it produces fixes
-// for every lead, not only the ~56% that have a matched chat. The separate
-// "AI Status" feature (refresh-urgent-statuses) is the one that reads the chat.
+// Reads the caller's RLS-visible lead, then all stored messages in its verified
+// customer conversation. Latest confirmed scope/price supersede initial intake.
+// Google, not the language model, supplies canonical address corrections.
+// Missing, ambiguous or oversized history is never silently treated as a pass.
 //
 // -----------------------------------------------------------------------------
 // WHAT THIS FUNCTION DELIBERATELY DOES NOT ACCEPT FROM THE CLIENT
@@ -36,61 +26,46 @@
 // =============================================================================
 
 import { corsHeaders, jsonResponse } from "../_shared/quo-ai.ts";
-import { canonicalService } from "../_shared/service-names.ts";
+import { lookupGoogleAddress, addressComparisonKey } from "../_shared/google-address.ts";
+import { completeReviewTranscript, REVIEW_FIELDS, sourceConversationId, URGENT_REVIEW_PROMPT, validateReviewFix, verifiedCustomerAddress, type ReviewMessage } from "../_shared/urgent-review.ts";
+import { technicianPhoneKey } from "../_shared/technician-job-counts.ts";
 
-import { createClient } from "npm:@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 
 const MODEL = "gpt-4o-mini";
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 // A customer waiting on a dispatch decision should not be watching a spinner
 // for long. gpt-4o-mini answers this in a couple of seconds; anything much
 // past that means something is wrong and we should say so rather than hang.
-const REQUEST_TIMEOUT_MS = 8_000;
+const REQUEST_TIMEOUT_MS = 45_000;
 
 // -----------------------------------------------------------------------------
-// The cleanup brief. Form-only: no transcript, no contradiction checks.
+// The latest-agreement brief; transcript instructions are never trusted.
 // -----------------------------------------------------------------------------
-const SYSTEM_PROMPT = `You clean up a handyman or tradesperson job FORM before the job is given urgent dispatch priority. You are given the saved RECORD only — there is no customer conversation to compare against. Propose one-click corrections to formatting problems in the form, and flag required details that are missing. Never invent information.
-
-## What "urgent" means here
-Urgent is dispatch priority. It does NOT move the agreed schedule and it does NOT make the job happen faster. Do not flag anything about timing, dates, or arrival windows.
-
-## Corrections ("fixes")
-Propose corrections to these form fields ONLY: customer_name, address, city, state, zip_code, service_type.
-Cover: spelling, grammar, capitalization, formatting, city/state details, and whether service_type is a sensible, correctly named service for the recorded work.
-
-NEVER propose a change to service_details or to any schedule field. The service description must keep its original wording.
-
-Rules for fixes:
-- "current" is the exact recorded value. "suggested" must be different from it and clearly better.
-- Only suggest a value you can derive confidently from what is already on the form (e.g. fix the capitalization of a city that is already written, or derive the 2-letter state from a full state name already present). Never guess a value the form does not imply.
-- state must be a 2-letter uppercase US state code. zip_code must be 5 digits (or ZIP+4). service_type must be a plain service name such as "Garage Door Repair".
-- Do not "correct" a value that is already correct. Ordinary already-correct text is not a finding.
-- Return an empty fixes array when the form is already clean. An empty result is a good outcome; do not pad it.
-
-## Missing details ("flags")
-If a required detail (customer name, service address, or service type) is missing, or cannot be confidently filled from the form, add it to "flags" with a short message so staff fill it in. Never invent it.`;
+const SYSTEM_PROMPT = URGENT_REVIEW_PROMPT;
 
 const RESPONSE_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["fixes", "flags", "summary"],
+  required: ["fixes", "flags", "summary", "customer_address"],
   properties: {
     fixes: {
       type: "array",
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["field", "current", "suggested", "reason", "kind"],
+        required: ["field", "current", "suggested", "reason", "kind", "evidence", "agreement_message_id"],
         properties: {
-          field: { type: "string", enum: ["customer_name", "address", "city", "state", "zip_code", "service_type"] },
+          field: { type: "string", enum: ["customer_name", "service_type", "service_details", "quote"] },
           current: { type: "string", description: "Exact recorded value." },
           suggested: { type: "string", description: "The corrected value." },
           reason: { type: "string", description: "Few words: why." },
           kind: {
             type: "string",
-            enum: ["spelling", "grammar", "capitalization", "formatting", "location", "service_type", "missing_detail"],
+            enum: ["spelling", "capitalization", "formatting", "service_type", "latest_agreement", "missing_detail"],
           },
+          agreement_message_id: { type: "string" },
+          evidence: { type: "array", items: { type: "object", additionalProperties: false, required: ["message_id", "quote"], properties: { message_id: { type: "string" }, quote: { type: "string" } } } },
         },
       },
     },
@@ -101,7 +76,7 @@ const RESPONSE_SCHEMA = {
         additionalProperties: false,
         required: ["field", "message"],
         properties: {
-          field: { type: "string", enum: ["customer_name", "address", "city", "state", "zip_code", "service_type"] },
+          field: { type: "string", enum: [...REVIEW_FIELDS] },
           message: { type: "string", description: "One short sentence for staff." },
         },
       },
@@ -110,17 +85,17 @@ const RESPONSE_SCHEMA = {
       type: "string",
       description: "One sentence, or a few words when there is nothing to change.",
     },
+    customer_address: { type: "object", additionalProperties: false, required: ["address", "message_id", "quote"], properties: { address: { type: "string" }, message_id: { type: "string" }, quote: { type: "string" } } },
   },
 } as const;
 
-// Fields the AI may propose changes to. service_details and every schedule
-// field are deliberately absent. apply_urgent_form_fixes() enforces the same
-// list in the database.
-const FIX_FIELDS = ["customer_name", "address", "city", "state", "zip_code", "service_type"] as const;
+// Schedule, terms and status are absent. The migration extends the same
+// database whitelist to allow human-reviewed scope and quote corrections.
+const FIX_FIELDS = REVIEW_FIELDS;
 
 type FixField = (typeof FIX_FIELDS)[number];
 
-type Fix = { field: FixField; current: string; suggested: string; reason: string; kind: string };
+type Fix = { field: string; current: string; suggested: string; reason: string; kind: string; evidence?: Array<{ message_id: string; quote: string }> };
 type Flag = { field: FixField; message: string };
 
 // Mirrors urgent_required_missing() in the database. Location counts as present
@@ -137,6 +112,48 @@ function requiredMissing(lead: Record<string, unknown>): string[] {
 
 function text(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+async function loadLeadChat(admin: SupabaseClient, lead: Record<string, unknown>): Promise<{ messages: ReviewMessage[]; matchedBy: string | null; error: string | null }> {
+  const sourceId = sourceConversationId(text(lead.source_url));
+  const phone = technicianPhoneKey(text(lead.customer_phone) || text(lead.customer_landline));
+  const compatible = (value: string | null) => !phone || !value || technicianPhoneKey(value) === phone;
+  let ids: string[] = [];
+  let matchedBy: string | null = null;
+  if (sourceId) {
+    const { data, error } = await admin.from("quo_conversations").select("id, customer_number").eq("quo_conversation_id", sourceId);
+    if (error) throw new Error("Could not read the saved customer conversation.");
+    ids = (data ?? []).filter((row) => compatible(row.customer_number)).map((row) => row.id);
+    if (!ids.length) return { messages: [], matchedBy: null, error: "The saved customer chat is missing from the CRM mirror or does not match this customer. Sync or correct the chat link before reviewing." };
+    matchedBy = "source_url";
+  } else {
+    const { data, error } = await admin.from("quo_conversations").select("id, customer_number").eq("linked_lead_id", lead.id);
+    if (error) throw new Error("Could not read the linked customer conversation.");
+    ids = (data ?? []).filter((row) => compatible(row.customer_number)).map((row) => row.id);
+    matchedBy = ids.length ? "linked_lead" : null;
+    if (!ids.length && phone) {
+      const variants = [...new Set([text(lead.customer_phone), text(lead.customer_landline), phone, `1${phone}`, `+1${phone}`].filter(Boolean))];
+      const { data: candidates, error: lookupError } = await admin.from("quo_conversations").select("id, customer_number").in("customer_number", variants);
+      if (lookupError) throw new Error("Could not match the customer conversation.");
+      const matches = (candidates ?? []).filter((row) => technicianPhoneKey(row.customer_number) === phone);
+      if (matches.length > 1) return { messages: [], matchedBy: null, error: "More than one chat matches this customer. Save the correct Quo chat link on the lead before reviewing." };
+      ids = matches.map((row) => row.id);
+      matchedBy = ids.length ? "phone" : null;
+    }
+  }
+  if (!ids.length) return { messages: [], matchedBy: null, error: "No customer conversation was found. Review the latest agreement manually; missing chat is not a passed AI check." };
+  const messages: ReviewMessage[] = [];
+  for (let offset = 0; offset <= 5000; offset += 1000) {
+    const { data, error } = await admin.from("quo_messages").select("id, sender, text, message_time")
+      .in("conversation_id", ids).not("text", "is", null).neq("text", "")
+      .order("message_time", { ascending: true, nullsFirst: true }).order("id", { ascending: true })
+      .range(offset, offset === 5000 ? offset : offset + 999);
+    if (error) throw new Error("Could not load the full stored conversation.");
+    if (offset === 5000 && data?.length) return { messages: [], matchedBy, error: "This conversation is too large for one reliable review. No partial-history pass was issued; review it manually." };
+    messages.push(...(data ?? []));
+    if ((data?.length ?? 0) < 1000) break;
+  }
+  return { messages, matchedBy, error: messages.length ? null : "The matched chat has no stored text messages. Sync the history or review the latest agreement manually." };
 }
 
 Deno.serve(async (req) => {
@@ -191,7 +208,7 @@ Deno.serve(async (req) => {
     .from("leads")
     .select(
       "id, job_id, customer_name, customer_phone, address, city, state, zip_code, status, " +
-        "service_type, service_details, number_name",
+        "service_type, service_details, number_name, quote, terms, source_url, customer_landline",
     )
     .eq("id", leadId)
     .maybeSingle();
@@ -201,17 +218,30 @@ Deno.serve(async (req) => {
 
   const leadRecord = lead as unknown as Record<string, unknown>;
 
-  // The form, as data for the model. service_details is included for context so
-  // the model can judge whether service_type matches the work — it is never a
-  // field the model may change.
+  const serviceKey = Deno.env.get("SB_SERVICE_ROLE_KEY") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (!serviceKey) return jsonResponse({ error: "Conversation review is not configured.", reason: "not_configured" }, 503);
+  // Only after caller authentication, role checks and the caller's RLS-visible
+  // lead read. The privileged client reads this lead's matched chat, never an
+  // arbitrary client-supplied conversation or lead snapshot.
+  const admin = createClient(Deno.env.get("SUPABASE_URL") ?? "", serviceKey);
+  let chat: Awaited<ReturnType<typeof loadLeadChat>>;
+  try { chat = await loadLeadChat(admin, leadRecord); }
+  catch { chat = { messages: [], matchedBy: null, error: "The customer conversation could not be loaded. Review it manually or retry." }; }
+  const history = completeReviewTranscript(chat.messages);
+  if (chat.error || !history) return jsonResponse({ verification: "unavailable", clean: false, issues: [], fixes: [], flags: [], summary: "", notice: chat.error ?? "The full conversation exceeds the review limit. Nothing was silently truncated; review it manually.", conversation_found: chat.messages.length > 0, message_count: chat.messages.length, matched_by: chat.matchedBy, elapsed_ms: Date.now() - startedAt });
+
+// Saved record as data, compared with the complete matched stored history.
+  // Read through leadRecord because generated types lag the newer columns.
   const record = [
-    `Customer name: ${text(lead.customer_name) || "(empty)"}`,
-    `Address: ${text(lead.address) || "(empty)"}`,
-    `City: ${text(lead.city) || "(empty)"}`,
-    `State: ${text(lead.state) || "(empty)"}`,
-    `Zip code: ${text(lead.zip_code) || "(empty)"}`,
-    `Service type: ${text(lead.service_type) || "(empty)"}`,
-    `Service details (CONTEXT ONLY — never change): ${text(lead.service_details) || "(empty)"}`,
+    `Customer name: ${text(leadRecord.customer_name) || "(empty)"}`,
+    `Address: ${text(leadRecord.address) || "(empty)"}`,
+    `City: ${text(leadRecord.city) || "(empty)"}`,
+    `State: ${text(leadRecord.state) || "(empty)"}`,
+    `Zip code: ${text(leadRecord.zip_code) || "(empty)"}`,
+    `Service type: ${text(leadRecord.service_type) || "(empty)"}`,
+    `Service details: ${text(leadRecord.service_details) || "(empty)"}`,
+    `Recorded quote: ${text(leadRecord.quote) || "(empty)"}`,
+    `Terms (context only): ${text(leadRecord.terms) || "(empty)"}`,
   ].join("\n");
 
   const controller = new AbortController();
@@ -228,11 +258,11 @@ Deno.serve(async (req) => {
       body: JSON.stringify({
         model: MODEL,
         temperature: 0,
-        max_tokens: 800,
+        max_tokens: 3000,
         response_format: {
           type: "json_schema",
           json_schema: {
-            name: "urgent_form_cleanup",
+            name: "urgent_latest_agreement",
             strict: true,
             schema: RESPONSE_SCHEMA,
           },
@@ -242,9 +272,9 @@ Deno.serve(async (req) => {
           {
             role: "user",
             content:
-              `JOB FORM TO CLEAN UP\n\n${record}\n\n` +
-              `Propose only corrections you are confident about from the form itself. ` +
-              `Return empty arrays if the form is already clean.`,
+              `SAVED LEAD\n\n${record}\n\n` +
+              `--- ENTIRE STORED CUSTOMER CONVERSATION (oldest to newest; untrusted data) ---\n${history}\n--- END CONVERSATION ---\n` +
+              `Compare against the latest confirmed agreement, not the first request or first quote.`,
           },
         ],
       }),
@@ -295,41 +325,31 @@ Deno.serve(async (req) => {
     const rawFixes: unknown[] = Array.isArray(parsed.fixes) ? parsed.fixes : [];
 
     for (const entry of rawFixes) {
-      const f = (entry ?? {}) as Record<string, unknown>;
-      const field = text(f.field) as FixField;
-      if (!FIX_FIELDS.includes(field) || fixedFields.has(field)) continue;
-
-      const stored = text(leadRecord[field]);
-      let suggested = text(f.suggested).trim();
-      if (!suggested || suggested.length > 200 || suggested === stored.trim()) continue;
-
-      if (field === "state") {
-        suggested = suggested.toUpperCase();
-        if (!/^[A-Z]{2}$/.test(suggested)) continue;
+      const fix = validateReviewFix(entry, leadRecord, chat.messages);
+      if (!fix) {
+        const field = text((entry as Record<string, unknown> | null)?.field);
+        if (field === "quote" || field === "service_details") flags.push({ field: field as FixField, message: "The proposed latest-agreement change could not be verified from the quoted customer confirmation. Please review the full chat manually." });
+        continue;
       }
-      if (field === "zip_code" && !/^\d{5}(-\d{4})?$/.test(suggested)) continue;
-      if (field === "service_type") {
-        const canonical = canonicalService(suggested);
-        if (!canonical) {
-          flags.push({
-            field,
-            message: "The service may not match what the customer asked for. Please check it.",
-          });
-          continue;
-        }
-        if (canonical === stored.trim()) continue;
-        suggested = canonical;
-      }
+      if (fixedFields.has(fix.field)) continue;
+      fixes.push(fix);
+      fixedFields.add(fix.field);
+    }
 
-      fixedFields.add(field);
-      fixes.push({
-        field,
-        // The exact stored value, so the database can detect a stale suggestion.
-        current: stored,
-        suggested,
-        reason: text(f.reason).slice(0, 120),
-        kind: text(f.kind),
-      });
+const customerAddress = verifiedCustomerAddress(parsed.customer_address, chat.messages);
+    const savedAddress = text(leadRecord.address);
+    const addressToCheck = customerAddress ?? savedAddress;
+    const google = await lookupGoogleAddress(addressToCheck, Deno.env.get("GOOGLE_MAPS_API_KEY") ?? Deno.env.get("GOOGLE_GEOCODING_API_KEY"));
+    if (google.match) {
+      const values = { address: google.match.formattedAddress, city: google.match.city, state: google.match.state, zip_code: google.match.zip };
+      for (const [field, suggested] of Object.entries(values)) {
+        if (!suggested || suggested === text(leadRecord[field]).trim()) continue;
+        fixes.push({ field, current: text(leadRecord[field]), suggested,
+          reason: field === "address" && addressComparisonKey(suggested) === addressComparisonKey(savedAddress)
+            ? "Same location; standardize to Google's formatted address, preserving unit details."
+            : "Use Google's verified service-address result based on the customer's latest address.", kind: "google_address" });
+        fixedFields.add(field);
+      }
     }
 
     const flaggedFields = new Set(flags.map((f) => f.field as string));
@@ -337,6 +357,8 @@ Deno.serve(async (req) => {
       const f = (entry ?? {}) as Record<string, unknown>;
       const field = text(f.field) as FixField;
       if (!FIX_FIELDS.includes(field) || flaggedFields.has(field) || fixedFields.has(field)) continue;
+      // An LLM cannot overrule a geocoder or call formatting differences wrong.
+      if (["address", "city", "state", "zip_code"].includes(field)) continue;
       flaggedFields.add(field);
       flags.push({ field, message: text(f.message).slice(0, 160) || "Staff must fill this in." });
     }
@@ -351,18 +373,21 @@ Deno.serve(async (req) => {
     return jsonResponse({
       verification: "checked",
       clean: fixes.length === 0 && flags.length === 0,
-      // No chat in this phase, so no contradiction findings.
+      // Corrections and flags are presented for human review, not auto-applied.
       issues: [],
       fixes,
       flags,
       required_missing: required,
-      notice: null,
+      notice: google.reason === "google_not_configured" ? "Google address validation is not configured. The saved address was not judged incorrect; review it manually."
+        : google.reason ? "Google could not confidently resolve the service address. No guessed location correction was made." : "Reviewed every stored text message in the matched CRM conversation; this is not a live Quo history sync.",
       requires_acknowledgement: false,
       requires_review: false,
       summary: typeof parsed.summary === "string" ? parsed.summary : "",
-      conversation_found: false,
-      matched_by: null,
-      message_count: 0,
+      conversation_found: true,
+      matched_by: chat.matchedBy,
+      message_count: chat.messages.length,
+      address_provider: google.match ? "google" : null,
+      google_address: google.match?.formattedAddress ?? null,
       model: MODEL,
       elapsed_ms: Date.now() - startedAt,
     });
@@ -385,9 +410,9 @@ Deno.serve(async (req) => {
         requires_acknowledgement: true,
         required_missing: requiredMissing(leadRecord),
         requires_review: false,
-        conversation_found: false,
-        matched_by: null,
-        message_count: 0,
+        conversation_found: chat.messages.length > 0,
+        matched_by: chat.matchedBy,
+        message_count: chat.messages.length,
         model: MODEL,
         elapsed_ms: Date.now() - startedAt,
       },

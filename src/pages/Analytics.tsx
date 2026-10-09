@@ -9,9 +9,12 @@ import { preloadZipDataset } from "@/lib/zipCentroids";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { fetchAllRows } from "@/lib/supabase-paginate";
+import { useAuth } from "@/contexts/AuthContext";
+import { canViewLeadCoverageAnalytics } from "@/lib/access";
+import { LeadCoverageSources } from "@/components/analytics/LeadCoverageSources";
 import { Card, CardContent } from "@/components/ui/card";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
-import { format, subDays, eachDayOfInterval, parseISO, startOfDay } from "date-fns";
+import { format, subDays, eachDayOfInterval, parseISO, startOfDay, endOfDay, isValid } from "date-fns";
 import { TrendingUp, Users, Calendar, Sparkles, Activity, CheckCircle2, AlertTriangle, Clock3, Percent, Briefcase, UserCheck, ShieldAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
@@ -36,10 +39,18 @@ interface AnalyticsLeadRow {
 }
 
 const Analytics = () => {
-  const [activeTab, setActiveTab] = useState<"overview" | "cs_report">("overview");
+  const { role } = useAuth();
+  const canCoverageReport = canViewLeadCoverageAnalytics(role);
+  const [activeTab, setActiveTab] = useState<"overview" | "cs_report" | "coverage_sources">("overview");
   const [dateFilter, setDateFilter] = useState<"7d" | "30d" | "90d" | "all" | "custom">("30d");
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
+  const rangeError = dateFilter === "custom" && (
+    (customStart && !isValid(parseISO(customStart))) || (customEnd && !isValid(parseISO(customEnd)))
+      ? "Choose valid start and end dates."
+      : customStart && customEnd && parseISO(customStart) > parseISO(customEnd)
+        ? "Start date must be on or before the end date." : null
+  );
 
   // Fetch full details of all leads (operational fields only)
   const { data: allLeads = [] } = useQuery<AnalyticsLeadRow[]>({
@@ -131,7 +142,7 @@ const Analytics = () => {
   // Calculate current range start/end timestamps
   const filteredRange = useMemo(() => {
     let startMs = 0;
-    let endMs = Date.now();
+    let endMs = endOfDay(new Date()).getTime();
 
     if (dateFilter === "7d") {
       startMs = subDays(new Date(), 7).getTime();
@@ -141,12 +152,12 @@ const Analytics = () => {
       startMs = subDays(new Date(), 90).getTime();
     } else if (dateFilter === "custom") {
       if (customStart) {
-        const start = new Date(customStart);
+        const start = parseISO(customStart);
         start.setHours(0, 0, 0, 0);
         startMs = start.getTime();
       }
       if (customEnd) {
-        const end = new Date(customEnd);
+        const end = parseISO(customEnd);
         end.setHours(23, 59, 59, 999);
         endMs = end.getTime();
       }
@@ -217,8 +228,8 @@ const Analytics = () => {
     } else if (dateFilter === "90d") {
       start = subDays(new Date(), 90);
     } else if (dateFilter === "custom") {
-      if (customStart) start = new Date(customStart);
-      if (customEnd) end = new Date(customEnd);
+      if (customStart && isValid(parseISO(customStart))) start = parseISO(customStart);
+      if (customEnd && isValid(parseISO(customEnd))) end = parseISO(customEnd);
     } else {
       if (allLeads.length > 0) {
         const times = allLeads.map((l) => new Date(l.created_at).getTime());
@@ -237,7 +248,7 @@ const Analytics = () => {
   const days = useMemo(() => {
     return eachDayOfInterval({
       start: startOfDay(chartInterval.start),
-      end: startOfDay(chartInterval.end),
+      end: startOfDay(chartInterval.end < chartInterval.start ? chartInterval.start : chartInterval.end),
     });
   }, [chartInterval]);
 
@@ -540,9 +551,9 @@ const Analytics = () => {
               Advanced Analytics
             </div>
 
-            <h1 className="text-2xl font-bold tracking-[-0.03em] text-foreground sm:text-3xl">Operations Performance</h1>
+            <h1 className="text-2xl font-bold tracking-[-0.03em] text-foreground sm:text-3xl">{activeTab === "coverage_sources" && canCoverageReport ? "Lead Coverage & Sources" : "Operations Performance"}</h1>
             <p className="mt-2 text-sm text-muted-foreground">
-              Monitor conversions, stage progressions, response rates, and team assignments.
+              {activeTab === "coverage_sources" && canCoverageReport ? "Track incoming jobs by technician coverage, geographic area, and intake source." : "Monitor conversions, stage progressions, response rates, and team assignments."}
             </p>
           </motion.div>
 
@@ -572,6 +583,7 @@ const Analytics = () => {
             <div className="flex items-center gap-2">
               <input
                 type="date"
+                aria-label="Analytics start date"
                 value={customStart}
                 onChange={(e) => {
                   setCustomStart(e.target.value);
@@ -582,6 +594,7 @@ const Analytics = () => {
               <span className="text-[10px] text-muted-foreground/70">to</span>
               <input
                 type="date"
+                aria-label="Analytics end date"
                 value={customEnd}
                 onChange={(e) => {
                   setCustomEnd(e.target.value);
@@ -594,7 +607,7 @@ const Analytics = () => {
         </div>
       </div>
 
-      <div className="flex gap-2 border-b border-border pb-px" role="tablist" aria-label="Analytics views">
+      <div className="flex flex-wrap gap-2 border-b border-border pb-px" role="tablist" aria-label="Analytics views">
         <button
           type="button"
           role="tab"
@@ -623,6 +636,7 @@ const Analytics = () => {
         >
           CS Team Performance
         </button>
+        {canCoverageReport && <button type="button" role="tab" aria-selected={activeTab === "coverage_sources"} onClick={() => setActiveTab("coverage_sources")} className={cn("rounded-t-lg px-4 py-2.5 text-[13px] font-semibold transition-colors", activeTab === "coverage_sources" ? "relative z-10 -mb-px border border-b-0 border-border bg-card text-blue-600 dark:text-blue-400" : "text-muted-foreground hover:text-foreground")}>Lead Coverage &amp; Sources</button>}
       </div>
 
       {activeTab === "overview" ? (
@@ -991,6 +1005,8 @@ const Analytics = () => {
         </div>
       </div>
         </div>
+      ) : activeTab === "coverage_sources" ? (
+        <LeadCoverageSources startMs={filteredRange.startMs} endMs={filteredRange.endMs} rangeError={rangeError} />
       ) : (
         <div className="space-y-6">
           <Card className="rounded-[28px] border border-border bg-card shadow-[0_18px_52px_-34px_rgba(0,0,0,0.09)] dark:shadow-[0_18px_52px_-34px_rgba(0,0,0,0.42)] overflow-hidden">

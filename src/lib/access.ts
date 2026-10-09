@@ -39,6 +39,11 @@ export function canExportData(role: AppRole | null | undefined): boolean {
   return role === "admin";
 }
 
+/** Full lead intake coverage/source reporting is an Admin-only Analytics view. */
+export function canViewLeadCoverageAnalytics(role: AppRole | null | undefined): boolean {
+  return role === "admin";
+}
+
 /**
  * Whether this user may create a lead from inside the CRM (the "New Lead"
  * button and the ⌘N command). Admin and CS Admin always may; a CS user needs
