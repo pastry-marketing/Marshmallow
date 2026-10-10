@@ -68,6 +68,7 @@ import CancellationRequestSheet from "./CancellationRequestSheet";
 import QuoPhoneTrigger from "./QuoPhoneTrigger";
 import { adminApi } from "@/lib/admin-api";
 import { logActivity } from "@/lib/activity";
+import LeadPhotoActions from "./LeadPhotoActions";
 import {
   canCreateCancellationRequest,
   createCancellationRequest,
@@ -1731,6 +1732,7 @@ function LeadCard({
                   </Button>
                 )}
 
+                <LeadPhotoActions paths={photoPaths} techNumber={lead.tech_number} />
                 {photoPaths.map((path, index) => (
                   <Button
                     key={path}

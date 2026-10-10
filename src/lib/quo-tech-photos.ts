@@ -22,3 +22,27 @@ export async function resolveTechPhotoChat(phone: string): Promise<string> {
   }
   return getQuoChatUrl(conversation.quo_conversation_id, normalized, conversation.quo_phone_numbers?.quo_phone_number_id);
 }
+
+/** Hand original photos to Donut; Quo's own Send button completes delivery. */
+export function prepareTechPhotos(chatUrl: string, photoUrls: string[]): Promise<void> {
+  const requestId = crypto.randomUUID();
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("message", onMessage);
+    };
+    const onMessage = (event: MessageEvent) => {
+      if (event.source !== window || event.origin !== window.location.origin ||
+        event.data?.action !== "QUO_PREPARE_PHOTOS_RESPONSE" || event.data.requestId !== requestId) return;
+      cleanup();
+      if (event.data.success) resolve();
+      else reject(new Error(event.data.error || "Could not attach photos in Quo."));
+    };
+    const timer = window.setTimeout(() => {
+      cleanup();
+      reject(new Error("Donut did not respond. Install/reload the latest extension and refresh the CRM and Quo tabs. Check Quo before retrying."));
+    }, 60000);
+    window.addEventListener("message", onMessage);
+    window.postMessage({ action: "QUO_PREPARE_PHOTOS", requestId, chatUrl, photoUrls }, window.location.origin);
+  });
+}

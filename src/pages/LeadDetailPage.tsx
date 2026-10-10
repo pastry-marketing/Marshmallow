@@ -38,6 +38,7 @@ import MultiDateTimePicker from "@/components/leads/MultiDateTimePicker";
 import { useDuplicatePhoneCheck } from "@/hooks/useDuplicatePhoneCheck";
 import PaymentDialog from "@/components/leads/PaymentDialog";
 import ImageLightbox from "@/components/leads/ImageLightbox";
+import LeadPhotoActions from "@/components/leads/LeadPhotoActions";
 import CopyLeadButton from "@/components/leads/CopyLeadButton";
 import ReminderButton from "@/components/leads/ReminderButton";
 import NoteThread from "@/components/leads/NoteThread";
@@ -1887,6 +1888,8 @@ export default function LeadDetailPage() {
                 Add supporting images so the next teammate can understand the job without back-and-forth.
               </p>
             </div>
+
+            <LeadPhotoActions paths={photos.map((photo) => photo.path)} techNumber={originalLead?.tech_number} />
 
             {photos.length > PHOTO_PREVIEW_LIMIT && (
               <div className="flex items-center justify-between gap-3 rounded-2xl border border-border/50 bg-muted/[0.12] px-3.5 py-2.5">

@@ -117,24 +117,74 @@ export const copyImageToClipboard = async (url: string) => {
   }
 };
 
-export const copyImagesToClipboard = async (urls: string[]) => {
+/** Chrome supports only one clipboard item. Copy a numbered contact sheet,
+ * rather than silently dropping photos or requesting unsupported multi-item writes.
+ * A promise lets callers start signing URLs without losing clipboard activation.
+ */
+export const copyImagesToClipboard = async (urls: string[] | Promise<string[]>) => {
   try {
     if (!navigator?.clipboard?.write || typeof ClipboardItem === "undefined") {
       throw new Error("Clipboard API not supported in this browser");
     }
 
-    const blobs = await Promise.all(urls.map(async (url) => {
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`Failed to download image (${response.status})`);
-      const blob = await response.blob();
-      return blob.type === "image/png" ? blob : convertToPngBlob(url);
-    }));
-    const clipboardItems = blobs.map((blob) => new ClipboardItem({ "image/png": blob }));
-    await navigator.clipboard.write(clipboardItems);
-    toast.success(`${urls.length} photos copied to clipboard`);
+    const image = Promise.resolve(urls).then(buildPhotoSheet);
+    // Register the write immediately during the click, before downloads finish.
+    // Also observe image failures if the browser rejects the write early.
+    void image.catch(() => undefined);
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": image })]);
+    toast.success(`${(await urls).length} photos copied as one image — paste into your chat`);
   } catch (err) {
     console.error("Failed to copy photos:", err);
     toast.error("Failed to copy photos due to browser or network restrictions");
   }
 };
+
+export async function buildPhotoSheet(urls: string[]): Promise<Blob> {
+  if (!urls.length) throw new Error("No photos to copy");
+  const objectUrls: string[] = [];
+  try {
+    const images = [];
+    // Sequential decoding keeps large lead albums from downloading simultaneously.
+    for (const url of urls) {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`Failed to download image (${response.status})`);
+      const source = URL.createObjectURL(await response.blob());
+      objectUrls.push(source);
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error("Could not decode a lead photo"));
+        image.src = source;
+      });
+      images.push(img);
+    }
+    const columns = Math.ceil(Math.sqrt(images.length));
+    const rows = Math.ceil(images.length / columns);
+    const cell = Math.min(1200, Math.floor(4096 / Math.max(columns, rows)));
+    const canvas = document.createElement("canvas");
+    canvas.width = columns * cell;
+    canvas.height = rows * cell;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas context is null");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    images.forEach((img, index) => {
+      const x = (index % columns) * cell;
+      const y = Math.floor(index / columns) * cell;
+      const labelHeight = Math.max(24, Math.floor(cell * 0.035));
+      const scale = Math.min((cell - 16) / img.naturalWidth, (cell - labelHeight - 16) / img.naturalHeight);
+      const width = img.naturalWidth * scale;
+      const height = img.naturalHeight * scale;
+      ctx.drawImage(img, x + (cell - width) / 2, y + labelHeight + (cell - labelHeight - height) / 2, width, height);
+      ctx.fillStyle = "#111827";
+      ctx.font = `${Math.max(14, labelHeight - 6)}px sans-serif`;
+      ctx.fillText(`Photo ${index + 1}`, x + 8, y + labelHeight - 4);
+    });
+    return await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Could not create photo sheet")), "image/png");
+    });
+  } finally {
+    objectUrls.forEach((url) => URL.revokeObjectURL(url));
+  }
+}
 

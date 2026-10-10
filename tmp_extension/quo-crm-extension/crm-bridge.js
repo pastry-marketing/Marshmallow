@@ -3,9 +3,21 @@
 
 window.addEventListener("message", (event) => {
   // Only accept messages from the same window
-  if (event.source !== window) return;
+  if (event.source !== window || event.origin !== window.location.origin) return;
 
   const data = event.data;
+  if (data?.action === "QUO_PREPARE_PHOTOS" && typeof data.requestId === "string") {
+    chrome.runtime.sendMessage({
+      type: "QUO_PREPARE_PHOTOS", chatUrl: data.chatUrl, photoUrls: data.photoUrls
+    }, (response) => {
+      const error = chrome.runtime.lastError?.message || response?.error;
+      window.postMessage({
+        action: "QUO_PREPARE_PHOTOS_RESPONSE", requestId: data.requestId,
+        success: !error && response?.success === true, error
+      }, window.location.origin);
+    });
+    return;
+  }
   if (data?.action === "QUO_PREPARE_CHAT" && data.chatUrl) {
     chrome.runtime.sendMessage({
       type: "QUO_PREPARE_CHAT",

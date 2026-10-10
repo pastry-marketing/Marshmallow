@@ -7,6 +7,7 @@ import { useIsLastMessageFromCustomer } from "@/hooks/useIsLastMessageFromCustom
 import StatusBadge from "./StatusBadge";
 import LeadCoverageBadge from "./LeadCoverageBadge";
 import ImageLightbox from "./ImageLightbox";
+import LeadPhotoActions from "./LeadPhotoActions";
 import NoteThread from "./NoteThread";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
@@ -163,6 +164,7 @@ export default function OprLeadCard({ lead, initialPhotoPaths, initialHasOprNote
                   Photos ({photos.length})
                 </span>
               </div>
+              <div className="mb-2"><LeadPhotoActions paths={photoPaths} techNumber={lead.tech_number} /></div>
               <div className="grid grid-cols-4 gap-2">
                 {photos.map((u, i) => (
                   <button
