@@ -41,7 +41,14 @@ export default function CompleteLeadCopyButton({ lead, className }: CompleteLead
       onClick={handleCopy}
     >
       {copied ? <Check className="h-3.5 w-3.5 shrink-0" /> : <Copy className="h-3.5 w-3.5 shrink-0" />}
-      <span>{copied ? "Copied" : "Copy Complete Details"}</span>
+      {copied ? (
+        <span>Copied</span>
+      ) : (
+        <>
+          <span className="md:hidden">Copy Details</span>
+          <span className="hidden md:inline">Copy Complete Details</span>
+        </>
+      )}
     </Button>
   );
 }
