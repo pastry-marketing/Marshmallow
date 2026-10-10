@@ -1,14 +1,11 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { lookupGoogleAddress, preserveAddressUnit } from "../_shared/google-address.ts";
+import { lookupCensusAddress } from "../_shared/census-address.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
-
-const CENSUS_GEOCODER_URL = "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress";
-const CENSUS_BENCHMARK = "Public_AR_Current";
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -50,53 +47,10 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: "Enter a full street address to look up" }, 400);
   }
 
-  const google = await lookupGoogleAddress(address, Deno.env.get("GOOGLE_MAPS_API_KEY") ?? Deno.env.get("GOOGLE_GEOCODING_API_KEY"));
-  if (google.match) return jsonResponse({ match: {
-    latitude: google.match.latitude, longitude: google.match.longitude,
-    matchedAddress: google.match.formattedAddress, city: google.match.city,
-    state: google.match.state, zip: google.match.zip, provider: "google",
-  } });
-
-  const url = new URL(CENSUS_GEOCODER_URL);
-  url.searchParams.set("address", address);
-  url.searchParams.set("benchmark", CENSUS_BENCHMARK);
-  url.searchParams.set("format", "json");
-
   try {
-    const response = await fetch(url, { signal: AbortSignal.timeout(8000) });
-    if (!response.ok) {
-      return jsonResponse({ error: "Address provider is temporarily unavailable" }, 502);
-    }
-    const payload = await response.json();
-    const match = payload?.result?.addressMatches?.[0];
-    const longitude = Number(match?.coordinates?.x);
-    const latitude = Number(match?.coordinates?.y);
-
-    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)
-        || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
-      return jsonResponse({ match: null });
-    }
-
-    return jsonResponse({
-      match: {
-        latitude,
-        longitude,
-        matchedAddress: typeof match?.matchedAddress === "string"
-          ? preserveAddressUnit(match.matchedAddress.trim(), address)
-          : null,
-        city: typeof match?.addressComponents?.city === "string"
-          ? match.addressComponents.city.trim()
-          : null,
-        state: typeof match?.addressComponents?.state === "string"
-          ? match.addressComponents.state.trim().toUpperCase()
-          : null,
-        zip: typeof match?.addressComponents?.zip === "string"
-          ? match.addressComponents.zip.trim()
-          : null,
-        provider: "census",
-      },
-      googleReason: google.reason,
-    });
+    // Shared coordinate endpoint for CRM/Donut/coverage. Google credentials
+    // intentionally have no effect on the free OpenStreetMap coordinate path.
+    return jsonResponse({ match: await lookupCensusAddress(address) });
   } catch (error) {
     console.error("Census address lookup failed:", error);
     return jsonResponse({ error: "Address provider is temporarily unavailable" }, 502);

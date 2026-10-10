@@ -8,7 +8,7 @@ and include behavior tests. `AGENTS.md` and `GEMINI.md` make this mandatory.
 | Technician intelligence | Technicians → Processing Workflow; map selection up to 8 | Native Technician Intelligence panel for the captured phone, reviewed-label saving, full-workflow link for batch selection/flag approvals/chat actions | `technician-chat-assessment`: Admin/Processor only; identical AI prompt, evidence checks, counts and labels. Missing history is unavailable, not misconduct. |
 | Technician flags | Admin applies; Processor requests review | Opens full workflow for the same reviewed actions | Existing `request_technician_change` approval RPC and technician flag trigger; never write flags directly in Donut. |
 | Urgent lead review | Latest customer agreement, corrections and missing details | Same check; displays issues, corrections and flags; opens saved-lead review for confirmed corrections/approval | `check-urgent-lead`, urgent verification/review RPCs and database status gate. No duplicate prompt or approval bypass. |
-| Address lookup | Authenticated lookup, labelled provider and preserved units | Same function for Find Address, coverage preview and submission coordinates | `geocode-lead-address`: Google only when configured, free Census fallback. Preserve Apt/Suite/Unit/#. |
+| Address lookup / map coordinates | Authenticated Census-only lookup and preserved units | Same function for Find Address, coverage preview and submission coordinates | `geocode-lead-address`: only Census coordinates may be cached/persisted for the free map. Google or unlabelled points are rejected by both clients. Preserve Apt/Suite/Unit/#. |
 | Lead submission | Saves stored record before AI follow-up; mutation errors distinguished from follow-up errors | In-flight guard, reserved job ID through acknowledgement, uncertain retries reuse ID; draft cleanup does not redefine a saved lead as failed | Existing unique lead job ID and RLS. Selected photo-upload failures are reported explicitly. |
 | Coverage | Admin coverage/source analytics; map and lead coverage badges | Intake coverage preview; Admin link to the full coverage analytics report | Existing coverage RPC/lead columns/trigger. Technician phone and status counts use actual stored data. |
 | Photos | Single combined-image copy; original-file technician handoff | Original file attachment handoff to exact technician chat | Authenticated signed storage URLs; user's Quo Send action completes delivery. |
@@ -46,9 +46,15 @@ sync the conversation from the CRM. The native Donut panel uses the same endpoin
 
 ## Free address lookup
 
-Google Maps' public website is not a Geocoding API credential. This project keeps
-US Census geocoding as its no-key/free fallback. If Google Geocoding is wanted,
-configure `GOOGLE_MAPS_API_KEY` (or `GOOGLE_GEOCODING_API_KEY`) server-side with the
-Geocoding API enabled; Google's API billing/free allowance is separate from Maps
-website use. Both clients display the actual provider, never claim a Census result
-was Google-verified, and preserve secondary unit details.
+The free Leaflet/OpenStreetMap uses Census-derived street coordinates. The shared
+`geocode-lead-address` endpoint never calls Google, even if Google keys exist.
+Both clients reject non-Census coordinate responses rather than treating an unknown
+provider as Census. CRM coordinate updates preserve the customer's address and
+use an optimistic address guard. Nearby-area generation persists only a Census
+match of the saved location; city/ZIP/unsaved-preview fallbacks cannot overwrite
+the lead's map point. Apartment/unit details remain intact.
+
+Optional Google address confirmation in the urgent-review service is a separate
+flow; its latitude/longitude are not used for this free map. A Google key is not
+required for map coordinates or coverage previews. Review Google's content storage
+and attribution terms before enabling optional Google-derived address content.

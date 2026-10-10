@@ -14,6 +14,15 @@ describe("Donut shared-flow regression checks", () => {
     expect(invoke).toHaveBeenCalledWith("geocode-lead-address", expect.objectContaining({ body: { address: "755 Vienna St #4B, San Francisco CA" } }));
   });
 
+  it.each(["google", undefined])("refuses %s coordinate responses in Donut", async (provider) => {
+    const invoke = vi.fn().mockResolvedValue({ data: { match: { latitude: 37.7, longitude: -122.4, provider } }, error: null });
+    const handler = background.slice(background.indexOf("async function geocodeCensusAddress("), background.indexOf("async function ensureDraft("));
+    const cache = new Map();
+    const geocode = runInNewContext(`${handler}; geocodeCensusAddress`, { supabaseClient: { functions: { invoke } }, CENSUS_GEOCODE_CACHE: cache, AbortSignal: { timeout: () => new AbortController().signal } });
+    await expect(geocode("755 Vienna St San Francisco CA")).rejects.toThrow("must come from Census");
+    expect(cache.size).toBe(0);
+  });
+
   it("does not report a confirmed saved lead as failed when draft cleanup fails", async () => {
     const showFeedback = vi.fn();
     const button = { disabled: false, innerHTML: "" };

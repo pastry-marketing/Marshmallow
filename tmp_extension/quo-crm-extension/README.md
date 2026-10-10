@@ -144,8 +144,10 @@ Workflow** provides map selection, batches up to 8, flag approval and next actio
 CS/OPR roles cannot call this API. AI advice never automatically changes flags.
 
 Find Address, coverage preview and intake coordinates now use the CRM's
-`geocode-lead-address` endpoint, including its free Census fallback and unit
-preservation. Urgent intake displays corrections and missing-detail flags as well
+`geocode-lead-address` endpoint, using Census-only map coordinates and unit
+preservation. Google/unknown-provider points are rejected and cannot be used for
+intake coordinates or coverage previews. No Google key is needed for the free map.
+Urgent intake displays corrections and missing-detail flags as well
 as contradictions. The saved-lead review remains the authority for applying fixes
 and approval. If a lead saved but draft cleanup failed, the panel says so explicitly.
 Unknown save outcomes retain the job ID until the draft is cleared.

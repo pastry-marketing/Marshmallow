@@ -252,17 +252,18 @@ async function geocodeCensusAddress(address) {
   const cacheKey = normalizedAddress.toLowerCase().replace(/\s+/g, " ");
   if (CENSUS_GEOCODE_CACHE.has(cacheKey)) return CENSUS_GEOCODE_CACHE.get(cacheKey);
 
-  // Same authenticated provider and unit-preservation rules as the CRM.
+  // Same authenticated Census-only coordinate provider as the CRM/free map.
   const { data, error } = await supabaseClient.functions.invoke("geocode-lead-address", {
     body: { address: normalizedAddress }, signal: AbortSignal.timeout(20000)
   });
   if (error || data?.error) throw new Error(data?.error || error?.message || "Address lookup failed");
   const match = data?.match;
   if (!match) return null;
-  const latitude = Number(match.latitude);
-  const longitude = Number(match.longitude);
+  if (match.provider !== "census") throw new Error("Map coordinates must come from Census. Reload Donut and retry after the address service is updated.");
+  const latitude = match.latitude;
+  const longitude = match.longitude;
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)
-      || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+      || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180 || (latitude === 0 && longitude === 0)) {
     CENSUS_GEOCODE_CACHE.set(cacheKey, null);
     return null;
   }
@@ -273,7 +274,7 @@ async function geocodeCensusAddress(address) {
     city: match.city ?? null,
     state: match.state ?? null,
     zip: match.zip ?? null,
-    provider: match.provider ?? "census"
+    provider: "census"
   };
   if (CENSUS_GEOCODE_CACHE.size >= 100) {
     CENSUS_GEOCODE_CACHE.delete(CENSUS_GEOCODE_CACHE.keys().next().value);

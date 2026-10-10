@@ -7,13 +7,13 @@ export interface LeadCoordinates {
   city: string | null;
   state: string | null;
   zip: string | null;
-  provider?: "google" | "census";
+  provider: "census";
 }
 
 const CACHE_LIMIT = 100;
 const geocodeCache = new Map<string, LeadCoordinates | null>();
 
-/** Resolve a street address through Google, with an explicitly labelled Census fallback. */
+/** Resolve Census-only street coordinates for the free map and coverage. */
 export async function geocodeLeadAddress(address: string | null | undefined): Promise<LeadCoordinates | null> {
   const normalized = address?.trim().replace(/\s+/g, " ") ?? "";
   if (normalized.length < 8) return null;
@@ -27,7 +27,9 @@ export async function geocodeLeadAddress(address: string | null | undefined): Pr
   if (error) throw new Error(error.message || "Address geocoding failed");
 
   const point = data?.match;
-  if (!point || !Number.isFinite(point.latitude) || !Number.isFinite(point.longitude)) {
+  if (point && point.provider !== "census") throw new Error("Map coordinates must come from Census. Retry after the address service is updated.");
+  if (!point || !Number.isFinite(point.latitude) || !Number.isFinite(point.longitude) ||
+    Math.abs(point.latitude) > 90 || Math.abs(point.longitude) > 180 || (point.latitude === 0 && point.longitude === 0)) {
     remember(cacheKey, null);
     return null;
   }
@@ -39,7 +41,7 @@ export async function geocodeLeadAddress(address: string | null | undefined): Pr
     city: typeof point.city === "string" ? point.city : null,
     state: typeof point.state === "string" ? point.state : null,
     zip: typeof point.zip === "string" ? point.zip : null,
-    provider: point.provider === "google" ? "google" : "census",
+    provider: "census",
   };
   remember(cacheKey, result);
   return result;
@@ -61,7 +63,6 @@ export async function geocodeAndPersistLeadAddress(
     const { data, error } = await supabase
       .from("leads")
       .update({
-        ...(point.provider === "google" && point.matchedAddress ? { address: point.matchedAddress } : {}),
         city: point.city,
         state: point.state,
         zip_code: point.zip,

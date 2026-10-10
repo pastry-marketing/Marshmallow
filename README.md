@@ -331,6 +331,12 @@ automatic installation. Prepare every extension release with
 timestamps, release metadata and ZIP together. Builds run `extension:check` to reject
 unpackaged source changes. Publish the CRM to make the release and notices available.
 
+**Free map coordinates** — CRM and Donut use the authenticated Census-only
+`geocode-lead-address` endpoint. Adding a Google API key cannot change the map
+coordinate provider. Both clients reject non-Census coordinate results. Nearby
+area previews can use approximate free fallbacks, but only Census matches of the
+saved address are persisted to a lead's map coordinates.
+
 **Realtime** — conversation changes invalidate the dashboard query directly; new chats
 appear without a manual refresh.
 

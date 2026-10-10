@@ -1,7 +1,7 @@
 {
   "name": "Donut",
-  "version": "1.6.1",
-  "releasedAt": "2026-10-10T06:23:13.821Z",
-  "summary": "Technician intelligence parity, fresh Quo evidence, shared unit-safe address lookup, urgent findings, and duplicate-safe lead/photo recovery.",
-  "sourceSha256": "6a326498b5a55805edd9a3d54bc75508b9b3adcb5397c1452f3927e135eefa8e"
+  "version": "1.7.0",
+  "releasedAt": "2026-10-10T07:16:33.639Z",
+  "summary": "Census-only free-map coordinates, strict provider validation, and protected nearby-area coordinate updates.",
+  "sourceSha256": "3967f942d22a3f29a9407618ea1ce68a93f8dc3d79615dadbc702d70f0da143f"
 }

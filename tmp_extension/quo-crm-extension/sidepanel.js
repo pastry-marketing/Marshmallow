@@ -1315,7 +1315,7 @@ async function fetchAddressSuggestions(query) {
       return;
     }
 
-    renderAddressSuggestions(normalizedResults, response.provider);
+    renderAddressSuggestions(normalizedResults);
   } catch (error) {
     console.error("Address suggestion lookup failed:", error);
     if ((error?.message || "").includes("Extension context invalidated")) {
@@ -1326,14 +1326,14 @@ async function fetchAddressSuggestions(query) {
   }
 }
 
-function renderAddressSuggestions(results, provider) {
+function renderAddressSuggestions(results) {
   if (!addressSuggestions || !addressSuggestionsStatus || !addressSuggestionsList) {
     return;
   }
 
   addressSuggestions.hidden = false;
   delete addressSuggestions.dataset.state;
-  addressSuggestionsStatus.textContent = `Suggestions from ${provider === "google" ? "Google Geocoding" : ADDRESS_PROVIDER_NAME}`;
+  addressSuggestionsStatus.textContent = `Suggestions from ${ADDRESS_PROVIDER_NAME}`;
   addressSuggestionsList.innerHTML = "";
 
   results.forEach((result) => {
