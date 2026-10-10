@@ -1714,10 +1714,6 @@ function LeadCard({
           </div>
         </div>
 
-        <div className="border-t border-border/55 px-4 py-3">
-          <CompleteLeadCopyButton lead={lead} className="w-full" />
-        </div>
-
         {(lead.payment_screenshot_url || photoPaths.length > 0) && (
           <div className="relative flex flex-wrap gap-2 border-t border-border/55 px-4 py-3">
                 {lead.payment_screenshot_url && (
@@ -2031,15 +2027,21 @@ function LeadCard({
               }`}
             >
               {!isOpr && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="crm-lead-card-inner h-11 min-w-0 w-full overflow-hidden rounded-[14px] px-1.5 text-[10px] font-semibold transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/28 hover:bg-primary/[0.05] hover:shadow-[0_18px_28px_-20px_rgba(59,130,246,0.2)] dark:hover:bg-primary/[0.10] dark:hover:shadow-none"
-                  onClick={(event) => openLeadFromClick(event, lead.id, navigate)}
-                >
-                  <Pencil className="h-3 w-3 shrink-0" />
-                  <span className="truncate">Edit Lead</span>
-                </Button>
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="crm-lead-card-inner h-11 min-w-0 flex-1 overflow-hidden rounded-[14px] px-2 text-[11px] font-semibold transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/28 hover:bg-primary/[0.05] hover:shadow-[0_18px_28px_-20px_rgba(59,130,246,0.2)] dark:hover:bg-primary/[0.10] dark:hover:shadow-none"
+                    onClick={(event) => openLeadFromClick(event, lead.id, navigate)}
+                  >
+                    <Pencil className="h-3 w-3 shrink-0" />
+                    <span className="truncate">Edit Lead</span>
+                  </Button>
+                  <CompleteLeadCopyButton
+                    lead={lead}
+                    className="crm-lead-card-inner h-11 shrink-0 whitespace-nowrap rounded-[14px] px-3 text-[11px] font-semibold transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/28 hover:bg-primary/[0.05] hover:shadow-[0_18px_28px_-20px_rgba(59,130,246,0.2)] dark:hover:bg-primary/[0.10] dark:hover:shadow-none"
+                  />
+                </div>
               )}
 
               {isAdmin && (
