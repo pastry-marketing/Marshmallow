@@ -9,6 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="sidepanel.css" />
+    <link rel="stylesheet" href="release-status.css" />
   </head>
   <body>
     <main class="panel">
@@ -97,6 +98,8 @@
       </header>
 
       <!-- Feedback Toast Notification Area -->
+      <p id="donut-release-status" class="donut-release-status" aria-label="Installed Donut version and release date"></p>
+      <section id="donut-update-notice" class="donut-update-notice" role="status" hidden></section>
       <section id="feedback" class="feedback-toast" hidden></section>
 
       <!-- Login Screen View -->
@@ -494,5 +497,6 @@
 
     <script src="supabase.js"></script>
     <script src="sidepanel.js"></script>
+    <script src="release-status.js"></script>
   </body>
 </html>

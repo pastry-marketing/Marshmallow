@@ -1,0 +1,5 @@
+.donut-release-status { font-size: 11px; line-height: 1.6; color: var(--text-secondary, #64748b); margin: 8px 0; }
+.donut-update-notice { border: 1px solid #d97706; border-radius: 12px; padding: 12px; margin: 8px 0; font-size: 12px; line-height: 1.6; background: rgba(245, 158, 11, .08); }
+.donut-update-notice[hidden] { display: none; }
+.donut-update-notice p { margin: 6px 0; }
+.donut-update-notice a { color: #2563eb; font-weight: 600; }

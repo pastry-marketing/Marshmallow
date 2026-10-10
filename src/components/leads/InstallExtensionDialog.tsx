@@ -1,4 +1,8 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useAuth } from "@/contexts/AuthContext";
+import { useExtensionRelease } from "@/hooks/useExtensionRelease";
+import { detectInstalledExtension, formatExtensionReleaseDate, isNewerExtension, type InstalledExtension } from "@/lib/extension-release";
 import {
   Dialog,
   DialogContent,
@@ -12,10 +16,21 @@ import { Download, Chrome, FolderOpen, Puzzle, Settings, Check } from "lucide-re
 interface InstallExtensionDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  installed?: InstalledExtension | null;
+  checkingInstalled?: boolean;
 }
 
-export default function InstallExtensionDialog({ open, onOpenChange }: InstallExtensionDialogProps) {
+export default function InstallExtensionDialog({ open, onOpenChange, installed: suppliedInstalled, checkingInstalled }: InstallExtensionDialogProps) {
   const [copied, setCopied] = useState(false);
+  const { user } = useAuth();
+  const { data: release, isError: releaseError } = useExtensionRelease();
+  const installedQuery = useQuery({
+    queryKey: ["installed-extension", user?.id], queryFn: detectInstalledExtension,
+    enabled: open, staleTime: 30_000,
+  });
+  const installed = suppliedInstalled === undefined ? installedQuery.data : suppliedInstalled;
+  const checking = checkingInstalled ?? installedQuery.isPending;
+  const outdated = release && installed && isNewerExtension(release.version, installed.version);
   const currentOrigin = window.location.origin;
 
   const handleCopyUrl = async () => {
@@ -38,16 +53,38 @@ export default function InstallExtensionDialog({ open, onOpenChange }: InstallEx
             </div>
             <div>
               <DialogTitle className="text-lg font-bold tracking-tight text-foreground">
-                Install Chrome Extension
+                 Donut Extension & Updates
               </DialogTitle>
               <DialogDescription className="text-xs text-muted-foreground mt-0.5">
-                Setup the Quo CRM Lead Capture Chrome Extension.
+                 Release information and manual Chrome installation.
               </DialogDescription>
             </div>
           </div>
         </DialogHeader>
 
         <div className="space-y-5 py-2">
+          <div className="space-y-2 rounded-2xl border border-border/60 bg-muted/30 p-3 text-xs">
+            <div className="flex items-center justify-between gap-2"><span className="text-muted-foreground">Latest release</span><strong>{release ? `Donut v${release.version}` : releaseError ? "Check unavailable" : "Checking..."}</strong></div>
+            {release && <>
+              <p className="text-muted-foreground">Released {formatExtensionReleaseDate(release.releasedAt)}</p>
+              <p>{release.summary}</p>
+            </>}
+            <div className="flex items-center justify-between gap-2 border-t border-border/50 pt-2"><span className="text-muted-foreground">Installed in this browser</span><strong>{checking ? "Checking..." : installed ? `v${installed.version}` : "Not detected"}</strong></div>
+            {installed?.releasedAt && !Number.isNaN(Date.parse(installed.releasedAt)) && <p className="text-muted-foreground">Installed release: {formatExtensionReleaseDate(installed.releasedAt)}</p>}
+            {!checking && <p className={outdated ? "font-medium text-amber-600 dark:text-amber-400" : "text-muted-foreground"}>
+              {outdated ? `Update required: please install Donut v${release.version}.` : installed && release ? "Your installed version is current or newer." : installed ? "Latest release information is unavailable. Check again when connected." : "Earlier manual ZIP releases cannot report their version. Check Donut in chrome://extensions and update if needed."}
+            </p>}
+          </div>
+          <div className="rounded-2xl border border-primary/20 bg-primary/5 p-3 text-xs leading-5">
+            <strong>Already using Donut? Update manually</strong>
+            <ol className="mt-1 list-decimal space-y-1 pl-4">
+              <li>Download the latest ZIP below and extract it.</li>
+              <li>Replace the contents of the existing <strong>quo-crm-extension</strong> folder Chrome loads. Keep the same folder path.</li>
+              <li>Open <code>chrome://extensions</code>, enable Developer mode, and click <strong>Reload</strong> on Donut.</li>
+              <li>Refresh CRM and Quo tabs, reopen Donut, and confirm the installed version matches the latest release.</li>
+            </ol>
+            <p className="mt-2 text-muted-foreground">Donut is distributed by ZIP, not the Chrome Web Store. Chrome cannot install this update automatically. First-time setup is below.</p>
+          </div>
           {/* Step 1 */}
           <div className="flex gap-3">
             <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">
@@ -59,9 +96,9 @@ export default function InstallExtensionDialog({ open, onOpenChange }: InstallEx
                 Download the prepackaged extension ZIP archive directly to your computer.
               </p>
               <Button asChild className="w-full gap-2 mt-1 h-9 text-xs" size="sm">
-                <a href="/Donut.zip" download="Donut.zip">
+                <a href={release ? `/Donut.zip?v=${release.version}` : "/Donut.zip"} download={release ? `Donut-v${release.version}.zip` : "Donut.zip"}>
                   <Download className="h-3.5 w-3.5" />
-                  Download Extension ZIP
+                  {release ? `Download Donut v${release.version}` : "Download Extension ZIP"}
                 </a>
               </Button>
             </div>
@@ -111,7 +148,7 @@ export default function InstallExtensionDialog({ open, onOpenChange }: InstallEx
             <div className="space-y-2">
               <h4 className="text-sm font-semibold text-foreground">Configure Website URL & Log In</h4>
               <p className="text-xs text-muted-foreground leading-normal">
-                Click the extension icon in Chrome, navigate to **Settings**, and paste your CRM Website URL:
+                Click the extension icon in Chrome, open <strong>Settings</strong>, and paste your CRM Website URL:
               </p>
               <div className="flex items-center gap-1.5 bg-muted/50 p-2 rounded-xl border border-border/40">
                 <code className="text-[11px] font-mono truncate flex-1 text-foreground">{currentOrigin}</code>

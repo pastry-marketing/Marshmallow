@@ -124,7 +124,7 @@ Lead cards provide one **Copy all N photos** action. It copies the selected lead
 photos as one numbered combined image in one click so the user can paste them into
 the intended Quo conversation. Chrome cannot write multiple image clipboard items.
 
-With Donut **1.4.0**, **Send photos to tech** hands all original photos to the
+With Donut **1.4.0 and later**, **Send photos to tech** hands all original photos to the
 assigned technician's exact conversation on the technician communications line.
 It requires the existing Tech Quick Chat permission and technician-detail access.
 Review the attachments in Quo, then click **Send** to deliver them. A handoff is
@@ -133,6 +133,35 @@ input cannot be identified, the batch fails visibly; use combined-image copy.
 Reload the extension and refresh both CRM and Quo tabs after upgrading.
 
 Sending a text message remains a separate, user-composed action.
+
+## Manual ZIP release and update notices
+
+Donut is installed with Chrome's **Load unpacked**, not through the Chrome Web Store.
+The side panel and Settings show the actual installed manifest version and the release
+date/time in the user's local timezone. Both check the configured CRM's
+`/extension-release.json` while open and show a ZIP update notice for newer versions.
+The CRM header's **Donut** button shows the latest release, installed version (when
+detectable), release date/time, download, and manual-update instructions. CRM users
+receive an automatic in-app notice once per release per user/browser. Older releases
+that lack the version handshake are shown as **Not detected**, never as up to date.
+
+To update, extract the new ZIP and replace the contents of the existing unpacked
+`quo-crm-extension` folder, keeping the same path. Open `chrome://extensions`, enable
+Developer mode, click **Reload** on Donut, and refresh CRM and Quo tabs. If you use a
+new folder instead, use **Load unpacked** and remove the old duplicate extension.
+
+For every extension change, from the repository root run:
+
+```sh
+npm run extension:release -- 1.6.0 "Describe this release"
+```
+
+Use a version higher than the last release. This automatically updates the manifest,
+UTC release timestamp, bundled metadata, public release metadata and `public/Donut.zip`.
+Commit those generated files with the extension changes. Publishing the CRM makes
+the release discoverable and automatically triggers notices; generating a ZIP locally
+does not notify production users. `npm run extension:check` (also run before builds)
+rejects stale source/metadata/ZIP combinations. It does not auto-install ZIP updates.
 
 ## Example API test with cURL
 

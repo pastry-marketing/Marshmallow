@@ -10,6 +10,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="options.css" />
+    <link rel="stylesheet" href="release-status.css" />
   </head>
   <body>
     <main class="settings">
@@ -53,6 +54,8 @@
         </header>
 
         <section id="settings-feedback" class="feedback" hidden></section>
+        <p id="donut-release-status" class="donut-release-status" aria-label="Installed Donut version and release date"></p>
+        <section id="donut-update-notice" class="donut-update-notice" role="status" hidden></section>
 
         <form id="settings-form" class="settings-form">
           <div class="form-group">
@@ -76,5 +79,6 @@
     </main>
 
     <script src="options.js"></script>
+    <script src="release-status.js"></script>
   </body>
 </html>
