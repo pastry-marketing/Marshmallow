@@ -696,6 +696,9 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
     } else if (message?.type === "OPEN_ASSIGN_FIELD_MENU") {
       const response = openAssignFieldMenu(message.field);
       sendResponse(response);
+    } else if (message?.type === "PREPARE_PHOTOS") {
+      handlePreparePhotos(message.chatUrl, message.photoUrls).then(sendResponse);
+      return true;
     } else if (message?.type === "NAVIGATE_AND_SEND_MESSAGE") {
       handleNavigateAndSendMessage(message.chatUrl, message.message, message.scheduleTime, message.navigationPrepared).then(result => {
         sendResponse(result || { success: true });
@@ -1309,6 +1312,42 @@ function spaNavigate(chatUrl) {
 // button. Direct DOM writes / execCommand put text in the DOM but Slate ignores
 // them, so Send stays disabled. Whether it truly worked is judged by the caller
 // watching the Send button, not by DOM text.
+async function handlePreparePhotos(chatUrl, photoUrls) {
+  try {
+    const onTarget = () => window.top === window && new URL(window.location.href).pathname === new URL(chatUrl).pathname;
+    if (!onTarget()) return { success: false, retryable: true, error: "The technician conversation is still loading." };
+    const editor = await waitForAny(COMPOSER_SELECTORS, 3000);
+    if (!editor) return { success: false, retryable: true, error: "The technician composer is still loading." };
+    // Fetch the full batch before touching the composer. Never replace its text draft.
+    const transfer = new DataTransfer();
+    let totalBytes = 0;
+    const signal = AbortSignal.timeout(30000);
+    for (let i = 0; i < photoUrls.length; i++) {
+      const response = await fetch(photoUrls[i], { signal });
+      if (!response.ok) throw new Error(`Photo ${i + 1} download failed (${response.status}).`);
+      const blob = await response.blob();
+      if (!blob.type.startsWith("image/")) throw new Error(`Photo ${i + 1} is not an image.`);
+      totalBytes += blob.size;
+      if (totalBytes > 30 * 1024 * 1024) throw new Error("Photos exceed 30 MB. Use Copy all photos to send a combined image instead.");
+      const extension = blob.type === "image/jpeg" ? "jpg" : blob.type.split("/")[1].replace(/[^a-z0-9]/gi, "");
+      transfer.items.add(new File([blob], `lead-photo-${i + 1}.${extension}`, { type: blob.type }));
+    }
+    if (!onTarget() || editor !== findComposer()) throw new Error("The chat changed while photos were downloading. Nothing was attached.");
+    const inputs = Array.from(document.querySelectorAll('input[type="file"]')).filter(input =>
+      !input.disabled && (input.multiple || photoUrls.length === 1) &&
+      (!input.accept || /image|\.png|\.jpg|\.jpeg/i.test(input.accept)));
+    if (inputs.length !== 1) throw new Error("Could not identify Quo's photo attachment input. Use Copy all photos and paste into this chat.");
+    const input = inputs[0];
+    if (input.files?.length) throw new Error("Quo already has selected attachments. Send or clear them before adding this batch.");
+    input.files = transfer.files;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    // This is a handoff, not delivery: Quo owns upload limits and its Send button.
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message || "Could not prepare photos in Quo." };
+  }
+}
+
 function composerText(editor) {
   return (editor?.value || editor?.textContent || "")
     .replace(/[\u200B-\u200D\uFEFF]/g, "")

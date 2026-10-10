@@ -121,10 +121,18 @@ Important behavior:
 ## Bulk photo copy (CRM clipboard)
 
 Lead cards provide one **Copy all N photos** action. It copies the selected lead's
-photos to the clipboard in one click so the user can paste them into the intended
-Quo conversation. The CRM does not send photo attachments to Quo, and this
-extension no longer accepts photo-send requests from the CRM bridge. Sending a
-text message remains a separate, user-composed action.
+photos as one numbered combined image in one click so the user can paste them into
+the intended Quo conversation. Chrome cannot write multiple image clipboard items.
+
+With Donut **1.4.0**, **Send photos to tech** hands all original photos to the
+assigned technician's exact conversation on the technician communications line.
+It requires the existing Tech Quick Chat permission and technician-detail access.
+Review the attachments in Quo, then click **Send** to deliver them. A handoff is
+not a delivery confirmation. Existing text drafts are preserved. If Quo's file
+input cannot be identified, the batch fails visibly; use combined-image copy.
+Reload the extension and refresh both CRM and Quo tabs after upgrading.
+
+Sending a text message remains a separate, user-composed action.
 
 ## Example API test with cURL
 

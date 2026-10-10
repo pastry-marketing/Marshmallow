@@ -314,6 +314,14 @@ ingest path.
 **Outbound** — sending is delegated to the Quo Chrome extension, which queues into
 `quo_outbound_messages`.
 
+**Lead photos** — lead cards (including OPR cards) and lead details offer **Copy all
+N photos**, producing one numbered combined image for a single paste. **Send photos
+to tech** uses Donut 1.4.0 to hand the original images to the saved technician's exact
+Quo conversation on the technician line. It follows Tech Quick Chat and technician
+visibility permissions. Review the attachment batch in Quo and click **Send** there.
+The downloadable extension is `public/Donut.zip`; reload the extension and refresh
+CRM/Quo tabs after upgrading.
+
 **Realtime** — conversation changes invalidate the dashboard query directly; new chats
 appear without a manual refresh.
 

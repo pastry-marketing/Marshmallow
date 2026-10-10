@@ -150,6 +150,8 @@ async function handleMessage(message, sender) {
       };
     case "QUO_SEND_MESSAGE":
       return handleQuoSendMessage(message);
+    case "QUO_PREPARE_PHOTOS":
+      return handleQuoPreparePhotos(message);
     case "QUO_PREPARE_CHAT":
       return handleQuoPrepareChat(message);
     default:
@@ -1233,10 +1235,34 @@ function formatPhoneNumber(value) {
   return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6, 10)} ext. ${digits.slice(10)}`;
 }
 
+let preparingPhotos = false;
+async function handleQuoPreparePhotos(message) {
+  if (preparingPhotos) return { success: false, error: "Another photo request is still being prepared." };
+  try {
+    const chat = new URL(message.chatUrl);
+    if (chat.origin !== "https://my.quo.com" || !/^\/inbox\/[^/]+\/c\/[^/]+\/?$/.test(chat.pathname)) {
+      throw new Error("An exact technician conversation is required.");
+    }
+    if (!Array.isArray(message.photoUrls) || !message.photoUrls.length) throw new Error("No photos supplied.");
+    for (const value of message.photoUrls) {
+      const url = new URL(value);
+      if (url.origin !== "https://kxiqholnmhkwhdkhtopp.supabase.co" || !url.pathname.startsWith("/storage/v1/object/sign/lead-photos/")) {
+        throw new Error("Only signed CRM lead photos can be attached.");
+      }
+    }
+    preparingPhotos = true;
+    return await handleQuoSendMessage(message);
+  } catch (error) {
+    return { success: false, error: error.message };
+  } finally {
+    preparingPhotos = false;
+  }
+}
+
 async function handleQuoSendMessage(message) {
-  const { chatUrl, message: chatMessage, scheduleTime } = message;
+  const { chatUrl, message: chatMessage, scheduleTime, photoUrls } = message;
   
-  if (!chatUrl || !chatMessage) {
+  if (!chatUrl || (!chatMessage && !photoUrls?.length)) {
     return { success: false, error: "Missing chatUrl or message." };
   }
 
@@ -1268,12 +1294,14 @@ async function handleQuoSendMessage(message) {
     await waitForTabComplete(tab.id, 25000);
   }
   const result = await sendMessageWithRetry(tab.id, {
-    type: "NAVIGATE_AND_SEND_MESSAGE",
+    type: photoUrls ? "PREPARE_PHOTOS" : "NAVIGATE_AND_SEND_MESSAGE",
     chatUrl,
     message: chatMessage,
     scheduleTime,
+    photoUrls,
     navigationPrepared: true
   }, hasExactConversation ? 40 : 15);
+  if (photoUrls && result?.success) await chrome.tabs.update(tab.id, { active: true });
   return { ...result, newTab };
 }
 
