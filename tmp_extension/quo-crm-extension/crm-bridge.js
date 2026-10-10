@@ -6,6 +6,15 @@ window.addEventListener("message", (event) => {
   if (event.source !== window || event.origin !== window.location.origin) return;
 
   const data = event.data;
+  if (data?.action === "DONUT_VERSION_REQUEST" && typeof data.requestId === "string") {
+    chrome.runtime.sendMessage({ type: "GET_EXTENSION_RELEASE" }).then(release => {
+      window.postMessage({ action: "DONUT_VERSION_RESPONSE", requestId: data.requestId,
+        version: release.version, releasedAt: release.releasedAt }, window.location.origin);
+    }).catch(() => {
+      // An invalidated bridge must not claim the previous version is current.
+    });
+    return;
+  }
   if (data?.action === "QUO_PREPARE_PHOTOS" && typeof data.requestId === "string") {
     chrome.runtime.sendMessage({
       type: "QUO_PREPARE_PHOTOS", chatUrl: data.chatUrl, photoUrls: data.photoUrls

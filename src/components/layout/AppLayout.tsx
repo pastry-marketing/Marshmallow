@@ -1,6 +1,7 @@
 import { SidebarProvider, SidebarTrigger, SidebarInset } from "@/components/ui/sidebar";
 import AppSidebar from "@/components/layout/AppSidebar";
 import NotificationBell from "@/components/notifications/NotificationBell";
+import ExtensionUpdateStatus from "@/components/notifications/ExtensionUpdateStatus";
 import UrgentLeadPopup from "@/components/notifications/UrgentLeadPopup";
 import IncompleteDetailsPopup from "@/components/notifications/IncompleteDetailsPopup";
 import { NotificationPopupProvider } from "@/components/notifications/popup-slot";
@@ -119,6 +120,7 @@ export default function AppLayout() {
                   </AnimatePresence>
                 </div>
                 <div className="flex items-center gap-2">
+                  <ExtensionUpdateStatus />
                   <HeaderNotepadTrigger />
                   <ThemeToggle />
                   {!isQuoMonitor && <NotificationBell />}

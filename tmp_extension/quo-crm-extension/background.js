@@ -91,6 +91,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 async function handleMessage(message, sender) {
   switch (message?.type) {
+    case "GET_EXTENSION_RELEASE": {
+      const release = await (await fetch(chrome.runtime.getURL("release.json"))).json();
+      return { version: chrome.runtime.getManifest().version, releasedAt: release.releasedAt };
+    }
     case "PAGE_CONTEXT_READY":
       return handlePageContextReady(message, sender);
     case "QUO_CHAT_CHANGED":

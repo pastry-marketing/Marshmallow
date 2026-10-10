@@ -316,11 +316,20 @@ ingest path.
 
 **Lead photos** — lead cards (including OPR cards) and lead details offer **Copy all
 N photos**, producing one numbered combined image for a single paste. **Send photos
-to tech** uses Donut 1.4.0 to hand the original images to the saved technician's exact
+to tech** uses Donut 1.4.0 and later to hand the original images to the saved technician's exact
 Quo conversation on the technician line. It follows Tech Quick Chat and technician
 visibility permissions. Review the attachment batch in Quo and click **Send** there.
 The downloadable extension is `public/Donut.zip`; reload the extension and refresh
 CRM/Quo tabs after upgrading.
+
+**Extension releases** — Donut's panel/settings show the installed version and release
+date/time. The CRM header shows the latest version and detects the installed version;
+new releases automatically show an in-app ZIP update notice. Donut is manually installed
+via Chrome's **Load unpacked**, so notices link to instructions rather than claiming an
+automatic installation. Prepare every extension release with
+`npm run extension:release -- <new-version> "Release notes"`. This updates the manifest,
+timestamps, release metadata and ZIP together. Builds run `extension:check` to reject
+unpackaged source changes. Publish the CRM to make the release and notices available.
 
 **Realtime** — conversation changes invalidate the dashboard query directly; new chats
 appear without a manual refresh.
