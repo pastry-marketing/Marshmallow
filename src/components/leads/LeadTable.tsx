@@ -9,6 +9,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { formatUSPhone } from "@/lib/phone";
 import { openLeadFromClick } from "@/lib/lead-navigation";
 import { useNavigate } from "react-router-dom";
+import CompleteLeadCopyButton from "./CompleteLeadCopyButton";
 
 interface LeadTableProps {
   leads: Lead[];
@@ -64,9 +65,12 @@ export default function LeadTable({ leads }: LeadTableProps) {
                   {format(new Date(lead.created_at), "MMM d, yyyy")}
                 </TableCell>
                 <TableCell className="text-right">
-                  <Button variant="ghost" size="sm" className="opacity-0 group-hover:opacity-100 transition-opacity">
-                    View <ChevronRight className="ml-1 h-4 w-4" />
-                  </Button>
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    <CompleteLeadCopyButton lead={lead} />
+                    <Button variant="ghost" size="sm">
+                      View <ChevronRight className="ml-1 h-4 w-4" />
+                    </Button>
+                  </div>
                 </TableCell>
               </TableRow>
             ))}

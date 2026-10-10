@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildCompleteLeadCopyText, copyImagesToClipboard } from "@/lib/lead-copy";
+import { buildCompleteLeadCopyText, copyImagesToClipboard, copyTextToClipboard } from "@/lib/lead-copy";
 import type { Lead } from "@/types";
 import { toast } from "sonner";
 
@@ -53,6 +53,35 @@ describe("bulk photo clipboard", () => {
 });
 
 describe("buildCompleteLeadCopyText", () => {
+  it("matches the requested four-line format exactly without expanding the address", () => {
+    expect(buildCompleteLeadCopyText({
+      service_details: "Need to assemble a bed with attached storage, shelves, and a pull out trundle. Picture available.",
+      address: "10235 Huffmeister Rd Houston, TX 77065, USA",
+      customer_schedule_requirements: "October 2, 2026",
+      quote: "$150 labor only",
+    } as Lead)).toBe(
+      "Service Details: Need to assemble a bed with attached storage, shelves, and a pull out trundle. Picture available.\n" +
+      "Address: 10235 Huffmeister Rd Houston, TX 77065, USA\n" +
+      "Schedule Requirement: October 2, 2026\n" +
+      "Quote: $150 labor only",
+    );
+  });
+
+  it("keeps missing fields blank instead of using other fields or schedule placeholders", () => {
+    expect(buildCompleteLeadCopyText({
+      service_details: "   ", service_type: "Assembly", address: null,
+      city: "Houston", state: "TX", zip_code: "77065",
+      scheduled_date: "2026-10-02", quote: null,
+    } as Lead)).toBe("Service Details: \nAddress: \nSchedule Requirement: \nQuote: ");
+  });
+
+  it("preserves full multiline details and blanks a restricted quote", () => {
+    const result = buildCompleteLeadCopyText({
+      service_details: " Assemble bed\nInclude the trundle. ", quote: "$150 labor only",
+    } as Lead, false);
+    expect(result).toBe("Service Details: Assemble bed\nInclude the trundle.\nAddress: \nSchedule Requirement: \nQuote: ");
+  });
+
   it("copies the lead text fields without picture links", () => {
     const lead = {
       service_details: "Repair the kitchen sink",
@@ -72,5 +101,21 @@ describe("buildCompleteLeadCopyText", () => {
     );
     expect(result).not.toContain("Pictures");
     expect(result).not.toContain("private/payment.png");
+  });
+});
+
+describe("text clipboard", () => {
+  it("uses writeText when rich clipboard items are unavailable", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    await copyTextToClipboard("Service Details: \nAddress: \nSchedule Requirement: \nQuote: ");
+    expect(writeText).toHaveBeenCalledWith("Service Details: \nAddress: \nSchedule Requirement: \nQuote: ");
+  });
+
+  it("rejects a failed legacy copy and removes the temporary textarea", async () => {
+    vi.stubGlobal("navigator", {});
+    Object.defineProperty(document, "execCommand", { configurable: true, value: vi.fn(() => false) });
+    await expect(copyTextToClipboard("Details")).rejects.toThrow("Clipboard copy failed");
+    expect(document.querySelector("textarea")).toBeNull();
   });
 });
