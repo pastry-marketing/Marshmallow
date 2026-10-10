@@ -16,8 +16,43 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { Loader2, Send, MessageSquare, User, Phone, CheckCheck, Clock, ChevronDown } from "lucide-react";
+import { Loader2, Send, MessageSquare, User, Phone, CheckCheck, Clock, ChevronDown, Sparkles, X, ShieldAlert, ListChecks, BadgeCheck } from "lucide-react";
 import { toast } from "sonner";
+import { useAuth } from "@/contexts/AuthContext";
+import {
+  fetchReplySuggestions,
+  canUseReplySuggestions,
+  type ReplySuggestion,
+} from "@/lib/ai/reply-suggestions";
+import {
+  fetchConversationTriage,
+  canUseTriage,
+  TRIAGE_INTENT_LABELS,
+  TRIAGE_URGENCY_LABELS,
+  TRIAGE_URGENCY_CLASS,
+  type ConversationTriage,
+} from "@/lib/ai/conversation-triage";
+import {
+  fetchSpamCheck,
+  canUseSpamDetection,
+  SPAM_VERDICT_LABEL,
+  SPAM_VERDICT_CLASS,
+  type SpamCheck,
+} from "@/lib/ai/spam-detection";
+import {
+  fetchCallActionItems,
+  canUseCallActionItems,
+  ACTION_PRIORITY_CLASS,
+  type CallActionItems,
+} from "@/lib/ai/call-action-items";
+import {
+  fetchQualityCheck,
+  canUseQualityCheck,
+  QUALITY_VERDICT_LABEL,
+  QUALITY_VERDICT_CLASS,
+  QUALITY_CATEGORY_LABEL,
+  type QualityCheckResult,
+} from "@/lib/ai/quality-check";
 import {
   formatEasternTime,
   formatLocalRelativeTime,
@@ -74,9 +109,47 @@ export default function QuoChatDialog({
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
+  // AI reply suggestions (roadmap feature 01). Advisory: a draft loads into the
+  // composer for the agent to edit and send — this never sends on its own.
+  const { role } = useAuth();
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestions, setSuggestions] = useState<ReplySuggestion[]>([]);
+  const [suggestNote, setSuggestNote] = useState("");
+  const showSuggestButton = canUseReplySuggestions(role);
+
+  // AI conversation triage (roadmap feature 02). Advisory: the suggestion is
+  // shown; the agent decides whether to act on it.
+  const [triaging, setTriaging] = useState(false);
+  const [triage, setTriage] = useState<ConversationTriage | null>(null);
+  const showTriageButton = canUseTriage(role);
+
+  // AI spam/scam detection (roadmap feature 08). Advisory flag for staff review.
+  const [spamChecking, setSpamChecking] = useState(false);
+  const [spamCheck, setSpamCheck] = useState<SpamCheck | null>(null);
+  const showSpamButton = canUseSpamDetection(role);
+
+  // AI call action items (roadmap feature 09). Advisory follow-up checklist.
+  const [actionsLoading, setActionsLoading] = useState(false);
+  const [actionItems, setActionItems] = useState<CallActionItems | null>(null);
+  const showActionsButton = canUseCallActionItems(role);
+
+  // AI quality check (roadmap feature 10). Reviews the agent's DRAFT reply
+  // before sending. Advisory — it suggests; it never blocks or sends.
+  const [qualityChecking, setQualityChecking] = useState(false);
+  const [qualityCheck, setQualityCheck] = useState<QualityCheckResult | null>(null);
+  const showQualityButton = canUseQualityCheck(role);
+
   // Fetch messages when conversation changes or opens
   useEffect(() => {
     if (!open || !conversation?.id) return;
+
+    // A different chat is open now — clear any AI output from the previous one.
+    setSuggestions([]);
+    setSuggestNote("");
+    setTriage(null);
+    setSpamCheck(null);
+    setActionItems(null);
+    setQualityCheck(null);
 
     let isCancelled = false;
 
@@ -248,6 +321,89 @@ export default function QuoChatDialog({
     }
   };
 
+  const handleSuggestReply = async () => {
+    if (!conversation?.id || suggesting) return;
+    setSuggesting(true);
+    setSuggestNote("");
+    try {
+      const result = await fetchReplySuggestions(conversation.id);
+      setSuggestions(result.suggestions);
+      setSuggestNote(result.note);
+      if (result.suggestions.length === 0 && !result.note) {
+        toast.message("No reply suggestions for this chat.");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not draft a reply.");
+    } finally {
+      setSuggesting(false);
+    }
+  };
+
+  const applySuggestion = (text: string) => {
+    setNewMessage(text);
+    setSuggestions([]);
+    setSuggestNote("");
+  };
+
+  const handleTriage = async () => {
+    if (!conversation?.id || triaging) return;
+    setTriaging(true);
+    try {
+      setTriage(await fetchConversationTriage(conversation.id));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not triage this chat.");
+    } finally {
+      setTriaging(false);
+    }
+  };
+
+  const handleSpamCheck = async () => {
+    if (!conversation?.id || spamChecking) return;
+    setSpamChecking(true);
+    try {
+      setSpamCheck(await fetchSpamCheck(conversation.id));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not run the spam check.");
+    } finally {
+      setSpamChecking(false);
+    }
+  };
+
+  const handleActionItems = async () => {
+    if (!conversation?.id || actionsLoading) return;
+    setActionsLoading(true);
+    try {
+      const res = await fetchCallActionItems(conversation.id);
+      setActionItems(res);
+      if (res.items.length === 0) toast.message(res.summary || "No follow-ups found.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not extract action items.");
+    } finally {
+      setActionsLoading(false);
+    }
+  };
+
+  const handleQualityCheck = async () => {
+    if (!conversation?.id || qualityChecking || !newMessage.trim()) return;
+    setQualityChecking(true);
+    try {
+      const res = await fetchQualityCheck(conversation.id, newMessage.trim());
+      setQualityCheck(res);
+      if (res.verdict === "good" && res.issues.length === 0) {
+        toast.success("Looks good to send.");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not check the reply.");
+    } finally {
+      setQualityChecking(false);
+    }
+  };
+
+  const applyImproved = () => {
+    if (qualityCheck?.improved) setNewMessage(qualityCheck.improved);
+    setQualityCheck(null);
+  };
+
   if (!conversation) return null;
 
   const currentStatusKey = normalizeQuoLeadStatus(conversation.status);
@@ -399,6 +555,293 @@ export default function QuoChatDialog({
             })
           )}
         </div>
+
+        {/* AI assist (advisory). Reply suggestions load a draft into the
+            composer; triage suggests how to sort the chat. Both are shown to
+            the agent, who decides — nothing is sent or saved automatically. */}
+        {(showSuggestButton || showTriageButton || showSpamButton || showActionsButton || showQualityButton) && (
+          <div className="px-3 pt-2 border-t border-border/40 bg-background/60 shrink-0 max-h-[40vh] overflow-y-auto">
+            {qualityCheck && (
+              <div className="mb-2 rounded-lg border border-border/60 bg-muted/30 p-2">
+                <div className="mb-1 flex items-center justify-between">
+                  <span className="flex items-center gap-1 text-[11px] font-semibold text-muted-foreground">
+                    <BadgeCheck className="h-3 w-3 text-primary" /> Reply check
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setQualityCheck(null)}
+                    className="text-muted-foreground hover:text-foreground"
+                    aria-label="Dismiss reply check"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                <Badge variant="outline" className={`text-[10px] font-semibold ${QUALITY_VERDICT_CLASS[qualityCheck.verdict]}`}>
+                  {QUALITY_VERDICT_LABEL[qualityCheck.verdict]}
+                </Badge>
+                {qualityCheck.issues.length > 0 && (
+                  <ul className="mt-1.5 space-y-0.5">
+                    {qualityCheck.issues.map((it, i) => (
+                      <li key={i} className="text-[11px] text-muted-foreground">
+                        <span className="font-semibold text-foreground">
+                          {QUALITY_CATEGORY_LABEL[it.category]}:
+                        </span>{" "}
+                        {it.note}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {qualityCheck.improved && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={applyImproved}
+                    className="mt-2 h-7 gap-1.5 text-[11px]"
+                  >
+                    <Sparkles className="h-3 w-3 text-primary" />
+                    Use improved reply
+                  </Button>
+                )}
+              </div>
+            )}
+            {actionItems && actionItems.items.length > 0 && (
+              <div className="mb-2 rounded-lg border border-border/60 bg-muted/30 p-2">
+                <div className="mb-1 flex items-center justify-between">
+                  <span className="flex items-center gap-1 text-[11px] font-semibold text-muted-foreground">
+                    <ListChecks className="h-3 w-3 text-primary" /> Suggested follow-ups
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setActionItems(null)}
+                    className="text-muted-foreground hover:text-foreground"
+                    aria-label="Dismiss action items"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                <ul className="space-y-1">
+                  {actionItems.items.map((it, i) => (
+                    <li key={i} className="flex items-start gap-1.5 text-[11px]">
+                      <Badge variant="outline" className={`mt-0.5 shrink-0 text-[9px] font-semibold ${ACTION_PRIORITY_CLASS[it.priority]}`}>
+                        {it.priority}
+                      </Badge>
+                      <span className="text-foreground">
+                        {it.action}
+                        {it.owner === "customer" && (
+                          <span className="text-muted-foreground"> · waiting on customer</span>
+                        )}
+                        {it.timing && <span className="text-muted-foreground"> · {it.timing}</span>}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {spamCheck && (
+              <div className="mb-2 rounded-lg border border-border/60 bg-muted/30 p-2">
+                <div className="mb-1 flex items-center justify-between">
+                  <span className="flex items-center gap-1 text-[11px] font-semibold text-muted-foreground">
+                    <ShieldAlert className="h-3 w-3 text-primary" /> Spam / scam check
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setSpamCheck(null)}
+                    className="text-muted-foreground hover:text-foreground"
+                    aria-label="Dismiss spam check"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Badge variant="outline" className={`text-[10px] font-semibold ${SPAM_VERDICT_CLASS[spamCheck.verdict]}`}>
+                    {SPAM_VERDICT_LABEL[spamCheck.verdict]}
+                  </Badge>
+                  <span className="text-[10px] font-medium text-muted-foreground">risk {spamCheck.risk}/100</span>
+                </div>
+                {spamCheck.signals.length > 0 && (
+                  <ul className="mt-1 flex flex-wrap gap-1">
+                    {spamCheck.signals.map((s, i) => (
+                      <li key={i} className="rounded bg-background/70 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                        {s}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {spamCheck.reason && (
+                  <p className="mt-1 text-[11px] leading-snug text-muted-foreground">{spamCheck.reason}</p>
+                )}
+              </div>
+            )}
+            {triage && (
+              <div className="mb-2 rounded-lg border border-primary/20 bg-primary/[0.04] p-2">
+                <div className="mb-1 flex items-center justify-between">
+                  <span className="flex items-center gap-1 text-[11px] font-semibold text-muted-foreground">
+                    <Sparkles className="h-3 w-3 text-primary" /> Triage suggestion
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setTriage(null)}
+                    className="text-muted-foreground hover:text-foreground"
+                    aria-label="Dismiss triage"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Badge
+                    variant="outline"
+                    className={`text-[10px] font-semibold ${QUO_LEAD_STATUS_CONFIG[normalizeQuoLeadStatus(triage.status)].badgeClass}`}
+                  >
+                    {QUO_LEAD_STATUS_CONFIG[normalizeQuoLeadStatus(triage.status)].label}
+                  </Badge>
+                  <Badge variant="secondary" className="text-[10px] font-medium">
+                    {TRIAGE_INTENT_LABELS[triage.intent] ?? triage.intent}
+                  </Badge>
+                  <Badge variant="outline" className={`text-[10px] font-medium ${TRIAGE_URGENCY_CLASS[triage.urgency]}`}>
+                    {TRIAGE_URGENCY_LABELS[triage.urgency]}
+                  </Badge>
+                  {triage.serviceType && (
+                    <Badge variant="outline" className="text-[10px] font-medium border-border/70">
+                      {triage.serviceType}
+                    </Badge>
+                  )}
+                </div>
+                {triage.reason && (
+                  <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">{triage.reason}</p>
+                )}
+              </div>
+            )}
+            {suggestions.length > 0 && (
+              <div className="mb-2 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold text-muted-foreground flex items-center gap-1">
+                    <Sparkles className="h-3 w-3 text-primary" /> Suggested replies · pick one to edit
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSuggestions([]);
+                      setSuggestNote("");
+                    }}
+                    className="text-muted-foreground hover:text-foreground"
+                    aria-label="Dismiss suggestions"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                {suggestions.map((s, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => applySuggestion(s.text)}
+                    className="w-full text-left rounded-lg border border-border/60 bg-muted/40 px-2.5 py-1.5 transition-colors hover:border-primary/30 hover:bg-primary/10"
+                  >
+                    <span className="block text-[10px] font-semibold uppercase tracking-wide text-primary/80">
+                      {s.tone}
+                    </span>
+                    <span className="block whitespace-pre-wrap text-xs text-foreground">{s.text}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {suggestNote && suggestions.length === 0 && (
+              <p className="mb-2 text-[11px] italic text-muted-foreground">{suggestNote}</p>
+            )}
+            <div className="flex flex-wrap items-center gap-1">
+              {showSuggestButton && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleSuggestReply}
+                  disabled={suggesting || sending}
+                  className="h-7 gap-1.5 text-xs text-primary hover:bg-primary/10"
+                  title="Draft on-brand reply options you can edit before sending"
+                >
+                  {suggesting ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-3.5 w-3.5" />
+                  )}
+                  {suggesting ? "Drafting…" : suggestions.length > 0 ? "Suggest again" : "Suggest reply"}
+                </Button>
+              )}
+              {showTriageButton && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleTriage}
+                  disabled={triaging}
+                  className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                  title="Suggest a status, intent, service and urgency for this chat"
+                >
+                  {triaging ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-3.5 w-3.5" />
+                  )}
+                  {triaging ? "Triaging…" : triage ? "Re-triage" : "Triage"}
+                </Button>
+              )}
+              {showSpamButton && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleSpamCheck}
+                  disabled={spamChecking}
+                  className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                  title="Check this chat for spam or scam patterns"
+                >
+                  {spamChecking ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <ShieldAlert className="h-3.5 w-3.5" />
+                  )}
+                  {spamChecking ? "Checking…" : "Spam check"}
+                </Button>
+              )}
+              {showActionsButton && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleActionItems}
+                  disabled={actionsLoading}
+                  className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                  title="Extract follow-up actions from this conversation and its calls"
+                >
+                  {actionsLoading ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <ListChecks className="h-3.5 w-3.5" />
+                  )}
+                  {actionsLoading ? "Reviewing…" : "Action items"}
+                </Button>
+              )}
+              {showQualityButton && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleQualityCheck}
+                  disabled={qualityChecking || !newMessage.trim()}
+                  className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                  title="Review your draft reply for tone, missing info, and accuracy before sending"
+                >
+                  {qualityChecking ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <BadgeCheck className="h-3.5 w-3.5" />
+                  )}
+                  {qualityChecking ? "Checking…" : "Check reply"}
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Chat Input Footer */}
         <form
