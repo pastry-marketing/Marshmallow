@@ -37,18 +37,13 @@ export default function CompleteLeadCopyButton({ lead, className }: CompleteLead
       type="button"
       variant="outline"
       size="sm"
+      title="Copy complete lead details"
+      aria-label="Copy complete lead details"
       className={cn("h-auto min-h-10 min-w-0 max-w-full gap-2 whitespace-normal rounded-xl px-3 py-2 text-[12px] font-semibold", className)}
       onClick={handleCopy}
     >
       {copied ? <Check className="h-3.5 w-3.5 shrink-0" /> : <Copy className="h-3.5 w-3.5 shrink-0" />}
-      {copied ? (
-        <span>Copied</span>
-      ) : (
-        <>
-          <span className="md:hidden">Copy Details</span>
-          <span className="hidden md:inline">Copy Complete Details</span>
-        </>
-      )}
+      <span>{copied ? "Copied" : "Copy Details"}</span>
     </Button>
   );
 }
