@@ -10,5 +10,14 @@ Checklist for Role/Feature changes:
 
 Never declare a change "done" until you have verified the entire chain from the UI click to the database storage.
 
+# Rule: CRM and Extension Must Stay Synchronized
+Every CRM feature change must include an audit of its Donut counterpart. If the
+feature exists in both, update both clients in the same task and use the same
+authenticated Edge Function/RPC. Verify the parity matrix in
+`docs/CRM_EXTENSION_PARITY.md`, run behavior tests, prepare a higher Donut version
+with `npm run extension:release`, and commit its metadata and ZIP. Report backend
+deployment, CRM publication, and manual extension installation separately. Never
+claim "all tasks completed" based only on a successful build or an HTTP 200.
+
 # Rule: Supabase Migrations Notification
 Whenever you create or modify a database migration (SQL query) and push it to GitHub, you MUST always explicitly notify the user that they need to manually run the SQL query in their Supabase dashboard or via the Supabase CLI.

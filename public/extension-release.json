@@ -1,8 +1,8 @@
 {
   "name": "Donut",
-  "version": "1.5.0",
-  "releasedAt": "2026-10-10T04:33:30.883Z",
-  "summary": "Installed version and release date display, automatic update notices, and manual ZIP upgrade instructions.",
-  "sourceSha256": "5f445ba0dbba301c1aed02dea2d722c55c6efd31d8608835da769877c3b50cef",
-  "packageSha256": "c06981dde99f9fa49351ba6f807764cf216e7555e435832fe51f233d51181380"
+  "version": "1.7.0",
+  "releasedAt": "2026-10-10T07:16:33.639Z",
+  "summary": "Census-only free-map coordinates, strict provider validation, and protected nearby-area coordinate updates.",
+  "sourceSha256": "3967f942d22a3f29a9407618ea1ce68a93f8dc3d79615dadbc702d70f0da143f",
+  "packageSha256": "ac60ea6d7284d59c9697d84745fdd6b06f221a9b0b71bdf2caf2eaf13f506e22"
 }

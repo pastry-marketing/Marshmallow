@@ -47,6 +47,8 @@ describe("google address verification", () => {
   });
 
   it("keeps a customer unit that Google dropped", () => {
+    expect(preserveAddressUnit("755 Vienna St, San Francisco, CA 94112", "755 Vienna St #4B")).toContain("#4B");
+    expect(preserveAddressUnit("755 Vienna St, San Francisco, CA 94112", "755 Vienna St apartment 4B")).toContain("Apartment 4B");
     expect(preserveAddressUnit("755 Vienna St, San Francisco, CA 94112, USA", "755 vienna st apt 4b"))
       .toContain("Apt 4b");
     // Already present: do not duplicate it.

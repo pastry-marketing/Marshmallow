@@ -138,6 +138,18 @@
 
       <!-- Main Authenticated Container -->
       <div id="lead-capture-container" class="main-app" hidden>
+        <details id="technician-intelligence" class="donut-update-notice" hidden>
+          <summary><strong>Technician Intelligence</strong> · Admin / Processor</summary>
+          <p>Capture the technician's phone from their Quo chat. Review evidence here, or use the CRM map for up to 8 technicians and relationship actions.</p>
+          <button id="technician-find" type="button" class="btn">Find captured technician</button>
+          <select id="technician-picker" aria-label="Matched technician"></select>
+          <button id="technician-review" type="button" class="btn" disabled>Review technician</button>
+          <p id="technician-feedback" role="status" aria-live="polite"></p>
+          <div id="technician-report"></div>
+          <button id="technician-save-labels" type="button" class="btn" hidden>Save reviewed labels</button>
+          <a id="technician-open-workflow" target="_blank" rel="noopener noreferrer">Open full Processing Workflow</a>
+          <a id="technician-coverage-analytics" target="_blank" rel="noopener noreferrer" hidden>Open Lead Coverage Analytics</a>
+        </details>
         <!-- Tab Navigation Switcher -->
         <nav class="app-nav">
           <button type="button" id="tab-btn-capture" class="nav-tab active">
@@ -498,5 +510,6 @@
     <script src="supabase.js"></script>
     <script src="sidepanel.js"></script>
     <script src="release-status.js"></script>
+    <script src="technician-workflow.js"></script>
   </body>
 </html>

@@ -1,6 +1,7 @@
 // Non-AI: geocode customer address, then look up top-5 populated places within
 // 50 miles via public.get_top_nearby_populated_areas.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { lookupCensusAddress, type CensusAddress } from "../_shared/census-address.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -218,6 +219,11 @@ Deno.serve(async (req) => {
     const rawCity = (body.customerCity !== undefined ? body.customerCity : lead.city) || "";
     const rawState = (body.customerState !== undefined ? body.customerState : lead.state) || "";
     const rawZip = (body.customerZip !== undefined ? body.customerZip : lead.zip_code) || "";
+    const savedLocation = ([
+      ["customerAddress", lead.address ?? lead.half_address], ["customerCity", lead.city],
+      ["customerState", lead.state], ["customerZip", lead.zip_code],
+    ] as const).every(([key, value]) => body[key] === undefined ||
+      String(body[key] ?? "").trim().toLowerCase() === String(value ?? "").trim().toLowerCase());
 
     const { placeName, addr } = separateBusinessName(rawAddress.trim());
     const inferred = inferInlineAddressParts(addr);
@@ -251,6 +257,7 @@ Deno.serve(async (req) => {
 
     let matched = "";
     let accuracy: "coordinates" | "address" | "street_zip" | "city_state" | "zip_centroid" | "unknown" = "unknown";
+    let censusPoint: CensusAddress | null = null;
 
     // Always re-geocode from the current address to avoid stale stored coords.
     // Only fall back to stored coords if every geocoding attempt fails.
@@ -262,6 +269,14 @@ Deno.serve(async (req) => {
     const controller = new AbortController();
     const t = setTimeout(() => controller.abort(), 20000);
     try {
+      if (normalizedAddress) {
+        try {
+          censusPoint = await lookupCensusAddress(parts, { signal: controller.signal });
+          if (censusPoint) { lat = censusPoint.latitude; lng = censusPoint.longitude; matched = censusPoint.matchedAddress; accuracy = "address"; }
+        } catch (error) {
+          log("census_lookup_unavailable", { message: error instanceof Error ? error.message : String(error) });
+        }
+      }
       const expectedStateCode = state.toUpperCase();
       const expectedFullState = Object.keys(STATE_ABBR).find(k => STATE_ABBR[k] === expectedStateCode) || "";
       
@@ -288,7 +303,7 @@ Deno.serve(async (req) => {
       };
 
       // 1. Try structured city/state/zip first to prevent drifting
-      if ((city || zip) && state) {
+      if (lat === null && (city || zip) && state) {
         const r = await nominatimStructured({ city, state, postalcode: zip || undefined }, controller.signal);
         if (r && isValidMatch(r.matched)) { lat = r.lat; lng = r.lng; matched = r.matched; accuracy = "city_state"; }
       }
@@ -326,7 +341,7 @@ Deno.serve(async (req) => {
     }
 
     // Fall back to stored coordinates only if geocoding produced nothing.
-    if (lat === null && storedLat !== null && storedLng !== null) {
+    if (lat === null && savedLocation && storedLat !== null && storedLng !== null) {
       lat = storedLat;
       lng = storedLng;
       accuracy = "coordinates";
@@ -342,10 +357,19 @@ Deno.serve(async (req) => {
       );
     }
     log("coords_resolved", { accuracy });
+    const guardedLocationUpdate = (values: Record<string, unknown>) => {
+      let update = admin.from("leads").update(values).eq("id", leadId);
+      for (const column of ["address", "half_address", "city", "state", "zip_code"] as const) {
+        update = lead[column] === null ? update.is(column, null) : update.eq(column, lead[column]);
+      }
+      return update;
+    };
 
-    // Always update stored coords so they stay in sync with the current address.
-    if (lat !== storedLat || lng !== storedLng) {
-      await admin.from("leads").update({ latitude: lat, longitude: lng }).eq("id", leadId);
+    // Only a Census match of the saved location may update the free map.
+    // Unsaved previews and city/ZIP fallback coordinates must not replace it.
+    if (censusPoint && savedLocation && (lat !== storedLat || lng !== storedLng)) {
+      const { error: coordinateError } = await guardedLocationUpdate({ latitude: lat, longitude: lng });
+      if (coordinateError) log("census_coordinate_save_failed", { message: coordinateError.message });
     }
 
     // Dataset health check — before RPC, so we can distinguish outage from empty result.
@@ -413,6 +437,7 @@ Deno.serve(async (req) => {
         latitude: lat,
         longitude: lng,
         geocoding_accuracy: accuracy,
+        coordinate_provider: censusPoint ? "census" : accuracy === "coordinates" ? "stored" : "free-preview",
         place_name: placeName ?? null,
       },
       radius_miles: 50,
@@ -423,9 +448,8 @@ Deno.serve(async (req) => {
     };
 
     // Only persist when we have valid results; empty results are not saved.
-    if (areas.length > 0) {
-      const { error: updErr } = await admin
-        .from("leads").update({ nearby_areas: payload }).eq("id", leadId);
+    if (areas.length > 0 && savedLocation) {
+      const { error: updErr } = await guardedLocationUpdate({ nearby_areas: payload });
       if (updErr) {
         log("save_failed", { code: updErr.code, message: updErr.message });
         return json({ code: "SAVE_FAILED", message: "Failed to save nearby areas." }, 500);

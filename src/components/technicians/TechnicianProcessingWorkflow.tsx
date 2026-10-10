@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Loader2,
@@ -48,7 +48,7 @@ const LABELS = [
   ["good_tech", "Good Tech"],
 ] as const;
 type Label = (typeof LABELS)[number][0];
-type Evidence = { label?: string; quote?: string; source?: string };
+type Evidence = { label?: string; quote?: string; source?: string; message_id?: string; message_time?: string; conversation_id?: string };
 type Assessment = {
   technician_id: string;
   labels: Label[];
@@ -72,6 +72,7 @@ type AiResult = {
   incomingMessages?: number;
   outgoingMessages?: number;
   historyLimited?: boolean;
+  historyNotice?: string | null;
   reviewedFrom?: string | null;
   reviewedTo?: string | null;
   jobCounts: { completed: number | null; paid: number | null; error: string | null };
@@ -113,6 +114,24 @@ export function TechnicianProcessingWorkflow({
   const [reports, setReports] = useState<Record<string, Report>>({});
   const [aiResults, setAiResults] = useState<Record<string, AiResult>>({});
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [health, setHealth] = useState<{ aiConfigured: boolean; directQuoConfigured: boolean } | null>(null);
+  const [reviewProgress, setReviewProgress] = useState({ completed: 0, total: 0 });
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  useEffect(() => {
+    let active = true;
+    const refresh = () => {
+      if (document.visibilityState === "hidden") return;
+      void supabase.functions.invoke("technician-chat-assessment", { body: { action: "health" } })
+        .then(({ data, error }) => { if (active && !error && typeof data?.aiConfigured === "boolean") setHealth(data); }).catch(() => undefined);
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 60000);
+    window.addEventListener("focus", refresh);
+    return () => { active = false; window.clearInterval(timer); window.removeEventListener("focus", refresh); };
+  }, []);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [messageDrafts, setMessageDrafts] = useState<Record<string, string>>({});
@@ -181,13 +200,12 @@ export function TechnicianProcessingWorkflow({
   }, [search, pickerPageSize]);
 
   useEffect(() => {
-    setAiResults({});
-    setProposedLabels({});
-    setAssessments({});
-    setReports({});
+    setLoadError(null);
     if (!selectedIds.length) {
+      setLoading(false);
       return;
     }
+    setLoading(true);
     let active = true;
     void supabase.functions.invoke("technician-chat-assessment", { body: { action: "load", technicianIds: selectedIds } })
       .then(({ data, error }) => {
@@ -197,12 +215,12 @@ export function TechnicianProcessingWorkflow({
         for (const row of (data?.assessments ?? []) as Assessment[]) nextAssessments[row.technician_id] = row;
         const nextReports: Record<string, Report> = {};
         for (const report of (data?.reports ?? []) as Report[]) nextReports[report.technicianId] = report;
-        setAssessments(nextAssessments);
-        setReports(nextReports);
+        setAssessments((current) => ({ ...current, ...nextAssessments }));
+        setReports((current) => ({ ...current, ...nextReports }));
       })
       .catch((error) => {
-        if (active) toast.error(error instanceof Error ? error.message : "Couldn't load technician reports.");
-      });
+        if (active) setLoadError(error instanceof Error ? error.message : "Couldn't load saved technician reports. Run a fresh review or retry selection.");
+      }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [selectedIds]);
 
@@ -219,16 +237,46 @@ export function TechnicianProcessingWorkflow({
   };
 
   const runAssessment = async (ids = selectedIds) => {
-    if (!ids.length || busy) return;
+    if (!ids.length || busy || loading) return;
     setBusy(true);
     setStartedAt(Date.now());
     setElapsedSeconds(0);
+    setReviewProgress({ completed: 0, total: ids.length });
     const toastId = toast.loading(`Reviewing Quo conversations for ${ids.length} technician${ids.length === 1 ? "" : "s"}… This may take up to 3 minutes.`);
     try {
-      const { data, error } = await supabase.functions.invoke("technician-chat-assessment", { body: { action: "assess", technicianIds: ids } });
-      if (error) throw error;
-      const results = (data?.results ?? []) as AiResult[];
-      if (results.length !== ids.length || new Set(results.map((result) => result.technicianId)).size !== ids.length || results.some((result) => !ids.includes(result.technicianId))) throw new Error("The report was incomplete. Please retry.");
+      const results: AiResult[] = [];
+      let next = 0;
+      // Independent bounded requests publish each report immediately. One failed
+      // technician cannot discard seven completed reports or manual label choices.
+      await Promise.all(Array.from({ length: Math.min(4, ids.length) }, async () => {
+        while (next < ids.length && mounted.current) {
+          const id = ids[next++];
+          let result: AiResult;
+          try {
+            const { data, error } = await supabase.functions.invoke("technician-chat-assessment", {
+              body: { action: "assess", technicianIds: [id] }, signal: AbortSignal.timeout(125000),
+            });
+            if (error) {
+              const detail = await error.context?.clone?.().json?.().catch(() => null);
+              throw new Error(detail?.error || error.message);
+            }
+            if (data?.error || data?.results?.length !== 1 || data.results[0].technicianId !== id) throw new Error(data?.error || "The technician report was incomplete. Retry this technician.");
+            result = data.results[0];
+          } catch (error) {
+            result = { technicianId: id, labels: [], recommendations: [], summary: "This review could not be completed. Previous saved labels are preserved.", evidence: [],
+              conversationsReviewed: 0, messagesReviewed: 0, jobCounts: { completed: reports[id]?.jobsCompleted ?? null, paid: reports[id]?.jobsPaid ?? null, error: reports[id]?.error ?? null },
+              error: error instanceof Error ? error.message : "Review timed out or the connection failed. Retry this technician." };
+          }
+          results.push(result);
+          if (!mounted.current) return;
+          setAiResults((current) => ({ ...current, [id]: result }));
+          setReports((current) => ({ ...current, [id]: { technicianId: id, jobsCompleted: result.jobCounts.completed,
+            jobsPaid: result.jobCounts.paid, error: result.jobCounts.error, countBasis: COUNT_BASIS } }));
+          if (!result.error) setProposedLabels((current) => ({ [id]: assessments[id]?.labels ?? result.labels, ...current }));
+          setReviewProgress({ completed: results.length, total: ids.length });
+        }
+      }));
+      if (!mounted.current) return;
       const indexed = Object.fromEntries(results.map((result) => [result.technicianId, result]));
       setAiResults((current) => ({ ...current, ...indexed }));
       // A retry refreshes AI advice without overwriting a user's manual choices.
@@ -271,10 +319,10 @@ export function TechnicianProcessingWorkflow({
   const saveLabels = async (techId: string) => {
     setSavingId(techId);
     try {
-      const { error } = await supabase.functions.invoke("technician-chat-assessment", {
+      const { data, error } = await supabase.functions.invoke("technician-chat-assessment", {
         body: { action: "save_labels", technicianId: techId, labels: proposedLabels[techId] ?? [] },
       });
-      if (error) throw error;
+      if (error || data?.error || data?.success !== true) throw error || new Error(data?.error || "The backend did not confirm label saving.");
       const labels = proposedLabels[techId] ?? [];
       setAssessments((current) => ({ ...current, [techId]: { ...current[techId], technician_id: techId, labels } as Assessment }));
       if (user?.id) {
@@ -330,17 +378,23 @@ export function TechnicianProcessingWorkflow({
             <h2 className="text-xl font-semibold">Processing Workflow</h2>
             <p className="mt-1 max-w-3xl text-sm text-muted-foreground">Select nearby technicians, review their relationship history, then choose your next action. Up to 8 technicians per batch · target review time 2–3 minutes.</p>
           </div>
-          <Button onClick={() => void runAssessment()} disabled={!selectedIds.length || busy} className="gap-2">
+          <Button onClick={() => void runAssessment()} disabled={!selectedIds.length || busy || loading || health?.aiConfigured === false} className="gap-2">
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
             {busy ? "Reviewing conversations…" : `Quick Report (${selectedIds.length})`}
           </Button>
         </div>
+        {health && (!health.aiConfigured || !health.directQuoConfigured) && <div role="status" className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm">
+          {!health.aiConfigured && <p>AI reviews require the OPENAI_API_KEY secret. Ask an Admin to configure it in Supabase.</p>}
+          {!health.directQuoConfigured && <p>Direct Quo history is not configured (QUO_API_KEY). Mirrored chats still work; missing chats need the key or history sync before review.</p>}
+        </div>}
+        {loadError && <p role="alert" className="mt-3 text-sm text-destructive">Saved-report loading failed: {loadError}</p>}
+        {loading && <p role="status" className="mt-3 text-sm text-muted-foreground">Loading saved reviews and job history…</p>}
         <div className="mt-4 grid gap-2 text-xs sm:grid-cols-3">
           <div className="rounded-lg border bg-background/50 p-3"><span className="font-medium">1. Select</span><p className="mt-1 text-muted-foreground">{selectedIds.length}/8 selected · <Link to="/map-view" className="inline-flex items-center gap-1 text-primary underline"><MapPin className="h-3 w-3" />Choose on map</Link></p></div>
           <div className="rounded-lg border bg-background/50 p-3"><span className="font-medium">2. Review evidence</span><p className="mt-1 text-muted-foreground">Latest 250 messages per technician. Missing history is flagged, never treated as misconduct.</p></div>
           <div className="rounded-lg border bg-background/50 p-3"><span className="font-medium">3. Take action</span><p className="mt-1 text-muted-foreground">Save reviewed labels, request inactivity, or compose a message.</p></div>
         </div>
-        {busy && <div role="status" aria-live="polite" className="mt-4 flex items-center gap-3 rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm"><Loader2 className="h-4 w-4 animate-spin text-primary" /><div><p className="font-medium">Reading chats and checking evidence</p><p className="text-xs text-muted-foreground"><Clock3 className="mr-1 inline h-3 w-3" />{Math.floor(elapsedSeconds / 60)}:{String(elapsedSeconds % 60).padStart(2, "0")} elapsed · {elapsedSeconds >= 150 ? "Taking longer than expected. Keep this page open; your saved labels are preserved." : "Reports appear when this batch completes. Keep this page open."}</p></div></div>}
+         {busy && <div role="status" aria-live="polite" className="mt-4 flex items-center gap-3 rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm"><Loader2 className="h-4 w-4 animate-spin text-primary" /><div><p className="font-medium">Reading chats and checking evidence · {reviewProgress.completed}/{reviewProgress.total} reports ready</p><p className="text-xs text-muted-foreground"><Clock3 className="mr-1 inline h-3 w-3" />{Math.floor(elapsedSeconds / 60)}:{String(elapsedSeconds % 60).padStart(2, "0")} elapsed · {elapsedSeconds >= 150 ? "Taking longer than expected. Keep this page open; your saved labels are preserved." : "Each report appears as it completes. Failed reviews can be retried individually."}</p></div></div>}
         <div className="mt-4 flex items-center gap-2">
           <Search className="h-4 w-4 text-muted-foreground" />
           <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Find technician by name, phone, area, or service" className="h-9" />
@@ -445,7 +499,7 @@ export function TechnicianProcessingWorkflow({
               <div className="flex flex-wrap gap-2 text-xs">
                 <Badge variant="outline">{report?.jobsCompleted ?? "—"} jobs completed</Badge>
                 <Badge variant="outline">{report?.jobsPaid ?? "—"} jobs paid</Badge>
-                {assessment?.last_assessed_at && <span className="text-muted-foreground">Reviewed {new Date(assessment.last_assessed_at).toLocaleString()}</span>}
+                 {assessment?.last_assessed_at && <span className="text-muted-foreground">Saved snapshot {new Date(assessment.last_assessed_at).toLocaleString()}</span>}
               </div>
             </div>
             {report?.error && <p className="text-xs text-destructive">{report.error}</p>}
@@ -475,13 +529,14 @@ export function TechnicianProcessingWorkflow({
                 <p className="text-sm leading-relaxed">{result?.summary ?? assessment?.ai_summary}</p>
                 <p className="text-[11px] text-muted-foreground">Reviewed {result?.conversationsReviewed ?? assessment?.conversations_reviewed ?? 0} conversations · {result?.messagesReviewed ?? assessment?.messages_reviewed ?? 0} messages{result?.chatSource ? ` · ${result.chatSource}` : ""}{result?.error ? ` · Error: ${result.error}` : ""}</p>
                 {result?.incomingMessages !== undefined && <p className="text-xs text-muted-foreground">{result.incomingMessages} incoming · {result.outgoingMessages ?? 0} outgoing{result.reviewedFrom && result.reviewedTo ? ` · ${new Date(result.reviewedFrom).toLocaleDateString()} – ${new Date(result.reviewedTo).toLocaleDateString()}` : ""}</p>}
-                {result?.historyLimited && <p className="text-xs text-amber-700 dark:text-amber-300">Recent-history sample: older messages may change this assessment. Review the full chat before making a relationship decision.</p>}
+                 {result?.historyLimited && <p className="text-xs text-amber-700 dark:text-amber-300">Recent-history sample: older messages may change this assessment. Review the full chat before making a relationship decision.</p>}
+                 {result?.historyNotice && <p className="text-xs text-amber-700 dark:text-amber-300">{result.historyNotice}</p>}
                 {(result?.conversationsReviewed ?? assessment?.conversations_reviewed) === 0 && tech.chat_link && (
                   <p className="text-xs text-amber-600 dark:text-amber-400">
                     {result?.error ? "A Quo chat link is saved, but it was not reviewed. Configure the QUO_API_KEY Edge Function secret or sync the conversation to the CRM mirror." : "A Quo chat link is saved, but no messages were found in the CRM mirror or linked conversation."} {tech.chat_link.startsWith("https://my.quo.com/") && <a href={tech.chat_link} target="_blank" rel="noopener noreferrer" className="underline">Open Quo chat</a>}
                   </p>
                 )}
-                {(result?.evidence ?? assessment?.ai_evidence ?? []).map((item, index) => item.quote ? <blockquote key={index} className="border-l-2 border-primary/50 pl-2 text-xs italic text-muted-foreground">{item.source ? `${item.source}: ` : ""}{item.quote}</blockquote> : null)}
+               {(result?.evidence ?? assessment?.ai_evidence ?? []).map((item, index) => item.quote ? <blockquote key={index} className="border-l-2 border-primary/50 pl-2 text-xs italic text-muted-foreground">{item.source ? `${item.source}: ` : ""}{item.quote}{item.message_time && <span className="mt-1 block not-italic">{new Date(item.message_time).toLocaleString()}</span>}</blockquote> : null)}
               </div>
             )}
 
@@ -501,7 +556,7 @@ export function TechnicianProcessingWorkflow({
             )}
 
             <div className="flex flex-wrap gap-2 border-t pt-3">
-              <Button variant="outline" size="sm" disabled={busy} onClick={() => void runAssessment([tech.id])}><RotateCcw className="mr-1.5 h-3.5 w-3.5" />{result || assessment?.last_assessed_at ? "Retry review" : "Review technician"}</Button>
+               <Button variant="outline" size="sm" disabled={busy || loading || health?.aiConfigured === false} onClick={() => void runAssessment([tech.id])}><RotateCcw className="mr-1.5 h-3.5 w-3.5" />{result || assessment?.last_assessed_at ? "Retry review" : "Review technician"}</Button>
               {(recommendsInactive || labels.some((label) => ["tech_dont_respond", "tech_is_scammer", "never_responded"].includes(label))) && tech.is_active !== false && !flagActions[`${tech.id}:set_active`] && (
                 <Button variant="outline" size="sm" disabled={busy || actionBusyId === tech.id} onClick={() => void requestFlag(tech, "set_active", false)}><UserX className="mr-1.5 h-3.5 w-3.5" />{role === "admin" ? "Mark inactive" : "Request inactive"}</Button>
               )}

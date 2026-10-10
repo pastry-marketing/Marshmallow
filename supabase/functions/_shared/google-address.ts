@@ -67,10 +67,10 @@ export function addressComparisonKey(value: string): string {
 }
 
 export function preserveAddressUnit(formatted: string, customerAddress: string): string {
-  const unit = customerAddress.match(/\b(apt\.?|apartment|suite|ste\.?|unit|#)\s*([a-z0-9-]+)/i);
+  const unit = customerAddress.match(/(?:\b(apartment|apt\.?|suite|ste\.?|unit)(?=\s|[0-9])|(#))\s*([a-z0-9-]+)/i);
   if (!unit) return formatted;
-  const label = unit[1].toLowerCase().replace(/\.$/, "");
-  const rendered = label === "#" ? `#${unit[2]}` : `${label[0].toUpperCase()}${label.slice(1)} ${unit[2]}`;
+  const label = (unit[1] || unit[2]).toLowerCase().replace(/\.$/, "");
+  const rendered = label === "#" ? `#${unit[3]}` : `${label[0].toUpperCase()}${label.slice(1)} ${unit[3]}`;
   if (addressComparisonKey(formatted).includes(addressComparisonKey(rendered))) return formatted;
   // Google often omits secondary units; do not silently discard them.
   const commaIndex = formatted.indexOf(",");

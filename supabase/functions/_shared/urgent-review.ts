@@ -68,7 +68,7 @@ export function validateReviewFix(value: unknown, record: Record<string, unknown
     // so a number the customer never stated can never be written onto a lead.
     if (field === "quote") {
       const quoted = evidence.map((item) => item.quote.replace(/[^0-9.]/g, ""));
-      const amounts = suggested.match(/\d[\d,]*(?:\.\d{1,2})?/g) ?? [];
+      const amounts: string[] = suggested.match(/\d[\d,]*(?:\.\d{1,2})?/g) ?? [];
       const grounded = amounts.every((amount) => quoted.some((text) => text.includes(amount.replace(/,/g, ""))));
       if (!amounts.length || !grounded) return null;
     }

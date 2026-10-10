@@ -9,7 +9,7 @@ export type JsonObject = Record<string, unknown>;
 
 export type NormalizedQuoMessage = {
   id: string;
-  conversationId: string;
+  conversationId: string | null;
   phoneNumberId: string | null;
   direction: "inbound" | "outbound";
   sender: "customer" | "agent";
@@ -22,7 +22,7 @@ export type NormalizedQuoMessage = {
 };
 
 export type NormalizedQuoConversation = {
-  id: string;
+  id: string | null;
   customerName: string | null;
   customerNumber: string | null;
   phoneNumberId: string | null;
@@ -116,8 +116,9 @@ function extractTranscript(value: unknown): string | null {
   if (!value) return null;
   if (typeof value === "string") return value;
   if (Array.isArray(value)) {
-    return value.map((v: any) => {
-      if (typeof v === "object" && v !== null && typeof v.content === "string") {
+    return value.map((item: unknown) => {
+      const v = typeof item === "object" && item !== null ? item as JsonObject : null;
+      if (v && typeof v.content === "string") {
         const speaker = v.userId ? "Agent" : "Customer";
         return `${speaker}: ${v.content}`;
       }

@@ -95,6 +95,15 @@ async function handleMessage(message, sender) {
       const release = await (await fetch(chrome.runtime.getURL("release.json"))).json();
       return { version: chrome.runtime.getManifest().version, releasedAt: release.releasedAt };
     }
+    case "TECHNICIAN_WORKFLOW": {
+      const { data, error } = await supabaseClient.functions.invoke("technician-chat-assessment", { body: message.payload, signal: AbortSignal.timeout(125000) });
+      if (error) {
+        const detail = await error.context?.clone?.().json?.().catch(() => null);
+        throw new Error(detail?.error || error.message);
+      }
+      if (data?.error) throw new Error(data.error);
+      return { success: true, ...data };
+    }
     case "PAGE_CONTEXT_READY":
       return handlePageContextReady(message, sender);
     case "QUO_CHAT_CHANGED":
@@ -212,24 +221,26 @@ async function previewLeadCoverage(address) {
 // retry after an unknown outcome cannot produce a second lead.
 const LEAD_INSERT_TIMEOUT_MS = 45000;
 const PENDING_JOB_KEY = "pendingLeadJobId";
+const PENDING_DRAFT_KEY = "pendingLeadDraftIdentity";
 
-async function reserveJobId(jobId) {
-  await chrome.storage.local.set({ [PENDING_JOB_KEY]: jobId });
+async function reserveJobId(jobId, identity) {
+  await chrome.storage.local.set({ [PENDING_JOB_KEY]: jobId, [PENDING_DRAFT_KEY]: identity });
   return jobId;
 }
 
 async function releaseJobId(jobId) {
   const stored = await chrome.storage.local.get(PENDING_JOB_KEY);
   if (stored[PENDING_JOB_KEY] === jobId) {
-    await chrome.storage.local.remove(PENDING_JOB_KEY);
+    await chrome.storage.local.remove([PENDING_JOB_KEY, PENDING_DRAFT_KEY]);
   }
 }
 
-async function findLeadByJobId(jobId) {
+async function findLeadByJobId(jobId, creatorId) {
   const { data, error } = await supabaseClient
     .from("leads")
     .select("id, job_id, customer_name, customer_phone, status, created_at")
     .eq("job_id", jobId)
+    .eq("created_by", creatorId)
     .maybeSingle();
   if (error) return null;
   return data || null;
@@ -241,15 +252,18 @@ async function geocodeCensusAddress(address) {
   const cacheKey = normalizedAddress.toLowerCase().replace(/\s+/g, " ");
   if (CENSUS_GEOCODE_CACHE.has(cacheKey)) return CENSUS_GEOCODE_CACHE.get(cacheKey);
 
-  const url = `${CENSUS_GEOCODER_URL}?address=${encodeURIComponent(normalizedAddress)}&benchmark=${encodeURIComponent(CENSUS_BENCHMARK)}&format=json`;
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`Census geocoder returned ${response.status}`);
-  const payload = await response.json();
-  const match = payload?.result?.addressMatches?.[0];
-  const latitude = Number(match?.coordinates?.y);
-  const longitude = Number(match?.coordinates?.x);
+  // Same authenticated Census-only coordinate provider as the CRM/free map.
+  const { data, error } = await supabaseClient.functions.invoke("geocode-lead-address", {
+    body: { address: normalizedAddress }, signal: AbortSignal.timeout(20000)
+  });
+  if (error || data?.error) throw new Error(data?.error || error?.message || "Address lookup failed");
+  const match = data?.match;
+  if (!match) return null;
+  if (match.provider !== "census") throw new Error("Map coordinates must come from Census. Reload Donut and retry after the address service is updated.");
+  const latitude = match.latitude;
+  const longitude = match.longitude;
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)
-      || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+      || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180 || (latitude === 0 && longitude === 0)) {
     CENSUS_GEOCODE_CACHE.set(cacheKey, null);
     return null;
   }
@@ -257,9 +271,10 @@ async function geocodeCensusAddress(address) {
     latitude,
     longitude,
     matchedAddress: typeof match?.matchedAddress === "string" ? match.matchedAddress.trim() : null,
-    city: typeof match?.addressComponents?.city === "string" ? match.addressComponents.city.trim() : null,
-    state: typeof match?.addressComponents?.state === "string" ? match.addressComponents.state.trim().toUpperCase() : null,
-    zip: typeof match?.addressComponents?.zip === "string" ? match.addressComponents.zip.trim() : null
+    city: match.city ?? null,
+    state: match.state ?? null,
+    zip: match.zip ?? null,
+    provider: "census"
   };
   if (CENSUS_GEOCODE_CACHE.size >= 100) {
     CENSUS_GEOCODE_CACHE.delete(CENSUS_GEOCODE_CACHE.keys().next().value);
@@ -324,6 +339,7 @@ async function clearDraft() {
   await chrome.storage.local.set({
     [DRAFT_STORAGE_KEY]: fresh
   });
+  await chrome.storage.local.remove([PENDING_JOB_KEY, PENDING_DRAFT_KEY]);
   return fresh;
 }
 
@@ -456,26 +472,13 @@ async function searchCensusAddress(address) {
     };
   }
 
-  const url = `${CENSUS_GEOCODER_URL}?address=${encodeURIComponent(normalizedAddress)}&benchmark=${encodeURIComponent(CENSUS_BENCHMARK)}&format=json`;
-
   try {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`Census request failed with status ${response.status}.`);
-    }
-
-    const payload = await response.json();
-    const matches = Array.isArray(payload?.result?.addressMatches)
-      ? payload.result.addressMatches
-          .map((match) => ({
-            matchedAddress: typeof match?.matchedAddress === "string" ? match.matchedAddress.trim() : ""
-          }))
-          .filter((match) => match.matchedAddress)
-      : [];
+    const match = await geocodeCensusAddress(normalizedAddress);
+    const matches = match?.matchedAddress ? [{ matchedAddress: match.matchedAddress }] : [];
 
     return {
       ok: true,
-      matches
+      matches, provider: match?.provider ?? "census"
     };
   } catch (error) {
     return {
@@ -621,7 +624,14 @@ function generateJobId() {
 }
 
 // Create Lead in Supabase
+let leadCreationInFlight = false;
 async function createLead() {
+  if (leadCreationInFlight) throw new Error("This lead is already being saved. Wait for the current submission.");
+  leadCreationInFlight = true;
+  try { return await saveLeadDraft(); } finally { leadCreationInFlight = false; }
+}
+
+async function saveLeadDraft() {
   const draft = await getDraft();
   const { data: { user } } = await supabaseClient.auth.getUser();
 
@@ -635,9 +645,13 @@ async function createLead() {
 
   // Reuse a reserved job id across retries. leads.job_id is unique, so a repeat
   // attempt can only ever re-find this lead, never create a second one.
-  const stored = await chrome.storage.local.get(PENDING_JOB_KEY);
+  const identity = JSON.stringify([draft.customerName.trim(), draft.customerNumber.trim(), draft.customerAddress.trim(), draft.serviceName.trim(), draft.serviceDetails.trim(), draft.scheduleRequirement.trim(), draft.quote.trim(), draft.terms, draft.leadStatus, draft.sourceUrl.trim(), draft.photos]);
+  const stored = await chrome.storage.local.get([PENDING_JOB_KEY, PENDING_DRAFT_KEY]);
+  if (stored[PENDING_JOB_KEY] && stored[PENDING_DRAFT_KEY] && stored[PENDING_DRAFT_KEY] !== identity) {
+    throw new Error("A different draft still has a pending submission. Check the saved lead and clear this form before creating another.");
+  }
   const jobId = stored[PENDING_JOB_KEY] || generateJobId();
-  await reserveJobId(jobId);
+  await reserveJobId(jobId, identity);
 
   const insertData = {
     job_id: jobId,
@@ -747,10 +761,13 @@ async function createLead() {
     // Either the row landed and the response was lost, or it did not. Ask the
     // database before telling the user anything, because "failed" invites a
     // duplicate and "saved" must not be a guess.
-    const existing = await findLeadByJobId(jobId);
+    const existing = await findLeadByJobId(jobId, user.id);
     if (existing) {
+      const sameCustomer = draft.customerNumber.trim()
+        ? comparePhones(existing.customer_phone, draft.customerNumber)
+        : existing.customer_name?.trim() === draft.customerName.trim();
+      if (!sameCustomer) throw new Error("The reserved job ID belongs to another customer. Check Leads and clear the form before starting a new submission.");
       data = existing;
-      await releaseJobId(jobId);
     } else if (code === "23505" || timedOut || aborted) {
       if (code !== "23505") {
         // Keep the reservation: the next attempt reuses this job id, so the
@@ -759,14 +776,13 @@ async function createLead() {
           "The save did not finish, and we could not confirm whether this lead was created. Do not create it again — check Leads for this customer, then press Create Lead once more to finish the same lead."
         );
       }
-      await releaseJobId(jobId);
-      throw new Error(message);
+      throw new Error("The reserved job ID already exists but its saved lead could not be read. Check Leads before retrying this same draft.");
+    } else if (!code || /network|fetch|connection/i.test(message)) {
+      throw new Error("The save outcome is unknown. Check Leads, then retry this same draft; its job ID is reserved to prevent duplicates.");
     } else {
       await releaseJobId(jobId);
       throw new Error(message);
     }
-  } else {
-    await releaseJobId(jobId);
   }
 
   // Same RPC the CRM calls. The lead already exists and is parked safely in
@@ -787,15 +803,20 @@ async function createLead() {
   }
 
   // Upload picked photos to Supabase storage and link in lead_photos table
+  let photoUploadFailures = 0;
   if (draft.photos && draft.photos.length > 0) {
-    for (const photoUrl of draft.photos) {
+    for (const [photoIndex, photoUrl] of draft.photos.entries()) {
       try {
+        const { data: existingPhoto, error: existingPhotoError } = await supabaseClient.from("lead_photos")
+          .select("id").eq("lead_id", data.id).like("photo_url", `leads/${data.id}/capture-photo-${photoIndex}.%`).maybeSingle();
+        if (existingPhotoError) throw existingPhotoError;
+        if (existingPhoto) continue;
         const res = await fetch(photoUrl);
-        if (!res.ok) continue;
+        if (!res.ok) { photoUploadFailures++; continue; }
         const blob = await res.blob();
         
         let ext = "jpg";
-        const contentType = res.headers.get("content-type");
+        const contentType = res.headers.get("content-type")?.split(";")[0].trim();
         if (contentType) {
           ext = contentType.split("/").pop();
           // Map binary jpeg subtype
@@ -805,24 +826,26 @@ async function createLead() {
           if (match) ext = match[1];
         }
         
-        const path = `leads/${data.id}_${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
-        
+        const path = `leads/${data.id}/capture-photo-${photoIndex}.${ext.replace(/[^a-z0-9]/gi, "")}`;
         const { error: uploadError } = await supabaseClient.storage
           .from("lead-photos")
           .upload(path, blob, {
             contentType: contentType || "image/jpeg"
           });
           
-        if (!uploadError) {
-          await supabaseClient.from("lead_photos").insert({
+        if (!uploadError || String(uploadError.statusCode) === "409") {
+          const { error: linkError } = await supabaseClient.from("lead_photos").insert({
             lead_id: data.id,
             photo_url: path,
             uploaded_by: user.id
           });
+          if (linkError) { photoUploadFailures++; await supabaseClient.storage.from("lead-photos").remove([path]); }
         } else {
+          photoUploadFailures++;
           console.error("Storage upload failed:", uploadError);
         }
       } catch (err) {
+        photoUploadFailures++;
         console.error("Failed to upload chat picture:", err);
       }
     }
@@ -848,6 +871,7 @@ async function createLead() {
     payload: insertData,
     quoteApprovalRequested,
     quoteApprovalError,
+    photoUploadFailures,
     // Urgent was asked for and withheld at insert. Saying so beats reporting a
     // plain success for a request that did not happen.
     urgentCheckRequired: urgentCheckApplies,
