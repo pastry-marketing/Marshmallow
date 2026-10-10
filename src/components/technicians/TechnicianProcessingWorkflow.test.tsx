@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { TechnicianRecord } from "./TechnicianDialog";
 import { TechnicianProcessingWorkflow } from "./TechnicianProcessingWorkflow";
 
@@ -24,11 +24,26 @@ const result = (id: string, labels: string[] = []) => ({
 
 describe("workflow review recovery", () => {
   beforeEach(() => {
+    vi.stubGlobal("AbortSignal", { timeout: () => new AbortController().signal });
     invoke.mockReset();
     invoke.mockImplementation((_name, { body }) => Promise.resolve({ data: body.action === "load"
       ? { assessments: [], reports: [] }
+      : body.action === "health" ? { aiConfigured: true, directQuoConfigured: true }
       : body.action === "save_labels" ? { success: true }
       : { results: body.technicianIds.map((id: string) => result(id)) }, error: null }));
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("publishes a successful review while another technician fails", async () => {
+    invoke.mockImplementation((_name, { body }) => Promise.resolve({ data: body.action === "load" ? { assessments: [], reports: [] }
+      : body.action === "health" ? { aiConfigured: true, directQuoConfigured: false }
+      : { results: [body.technicianIds[0] === "t1" ? result("t1") : { ...result("t2"), error: "Quo denied access" }] }, error: null }));
+    render(<MemoryRouter><TechnicianProcessingWorkflow technicians={technicians} initialTechnicianIds={["t1", "t2"]} /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Quick Report (2)" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Quick Report (2)" }));
+    await waitFor(() => expect(screen.getByText(/Error: Quo denied access/)).toBeInTheDocument());
+    expect(within(screen.getByRole("heading", { name: "Adam" }).closest("article")!).getByText("Reviewed chat.")).toBeInTheDocument();
+    expect(screen.getByText(/Direct Quo history is not configured/)).toBeInTheDocument();
   });
 
   it("retries one technician without discarding another report or manual label choices", async () => {
@@ -43,7 +58,7 @@ describe("workflow review recovery", () => {
       : { results: [result("t1", ["good_tech"])] }, error: null }));
     fireEvent.click(adam.getByRole("button", { name: "Retry review" }));
     await waitFor(() => expect(adam.getByText("Evidence-backed suggestions")).toBeInTheDocument());
-    expect(invoke).toHaveBeenLastCalledWith("technician-chat-assessment", { body: { action: "assess", technicianIds: ["t1"] } });
+    expect(invoke).toHaveBeenLastCalledWith("technician-chat-assessment", expect.objectContaining({ body: { action: "assess", technicianIds: ["t1"] } }));
     expect(adam.getByRole("button", { name: "Late payment" })).toHaveAttribute("aria-pressed", "true");
     expect(adam.getByRole("button", { name: /^Good Tech$/ })).toHaveAttribute("aria-pressed", "false");
     const brandon = within(screen.getByRole("heading", { name: "Brandon" }).closest("article")!);

@@ -919,16 +919,25 @@ async function handleCreateLead(event) {
     }
 
     // Auto-clear the draft on successful creation
-    const clearResponse = await chrome.runtime.sendMessage({ type: "CLEAR_DRAFT" });
-    currentDraft = clearResponse.draft;
-    suppressAddressLookup = false;
-    renderDraft(currentDraft);
-    resetTransientFormState();
+    try {
+      const clearResponse = await chrome.runtime.sendMessage({ type: "CLEAR_DRAFT" });
+      if (!clearResponse?.success) throw new Error(clearResponse?.error || "Draft cleanup failed");
+      currentDraft = clearResponse.draft;
+      suppressAddressLookup = false;
+      renderDraft(currentDraft);
+      resetTransientFormState();
+    } catch {
+      // Saving and clearing are separate outcomes. Never invite a duplicate
+      // submission just because Chrome's draft storage could not be cleared.
+      showFeedback(`Lead saved. Draft cleanup failed; open the saved lead and clear this form before starting another.${response.response?.leadUrl ? ` <a href="${escapeHtml(response.response.leadUrl)}" target="_blank" rel="noreferrer">Open Lead</a>` : ""}`, "info", true);
+      return;
+    }
 
     const leadUrl = response.response?.leadUrl;
-    const openLink = leadUrl
+    const photoNotice = response.photoUploadFailures ? ` ${Number(response.photoUploadFailures)} photo(s) could not be uploaded. Add the missing photos from the saved lead.` : "";
+    const openLink = (leadUrl
       ? ` <a href="${escapeHtml(leadUrl)}" target="_blank" rel="noreferrer">Open Lead</a>`
-      : "";
+      : "") + photoNotice;
 
     if (response.quoteApprovalError) {
       // The lead was created, but it is sitting in Waiting Complete Details
@@ -942,9 +951,9 @@ async function handleCreateLead(event) {
       const reviewUrl = response.response?.urgentReviewUrl || leadUrl;
       // Opens the review itself rather than just the lead, so the status change
       // is not a step the CS member has to find and redo by hand.
-      const reviewLink = reviewUrl
+      const reviewLink = (reviewUrl
         ? ` <a href="${escapeHtml(reviewUrl)}" target="_blank" rel="noreferrer">Open the review</a>`
-        : "";
+        : "") + photoNotice;
       const check = response.urgentCheck;
 
       if (check && check.state === "clean") {
@@ -956,7 +965,7 @@ async function handleCreateLead(event) {
       } else if (check && check.state === "issues") {
         const total = typeof check.total === "number" ? check.total : check.issues.length;
         showFeedback(
-          `Lead created, but it was not marked urgent. The latest-agreement review found ${total} item${total === 1 ? "" : "s"} to confirm:${renderUrgentIssues(check.issues)}${reviewLink}`,
+          `Lead created, but it was not marked urgent. The latest-agreement review found ${total} item${total === 1 ? "" : "s"} to confirm:${renderUrgentIssues([...(check.issues || []), ...(check.fixes || []).map(fix => ({ field: fix.field, problem: `${fix.reason || "Correction suggested"}: ${fix.suggested || ""}` })), ...(check.flags || []).map(flag => ({ field: flag.field, problem: flag.problem || flag.reason || flag.message || "Review this missing detail" }))])}${reviewLink}`,
           "info",
           true
         );
@@ -1306,7 +1315,7 @@ async function fetchAddressSuggestions(query) {
       return;
     }
 
-    renderAddressSuggestions(normalizedResults);
+    renderAddressSuggestions(normalizedResults, response.provider);
   } catch (error) {
     console.error("Address suggestion lookup failed:", error);
     if ((error?.message || "").includes("Extension context invalidated")) {
@@ -1317,14 +1326,14 @@ async function fetchAddressSuggestions(query) {
   }
 }
 
-function renderAddressSuggestions(results) {
+function renderAddressSuggestions(results, provider) {
   if (!addressSuggestions || !addressSuggestionsStatus || !addressSuggestionsList) {
     return;
   }
 
   addressSuggestions.hidden = false;
   delete addressSuggestions.dataset.state;
-  addressSuggestionsStatus.textContent = `Suggestions from ${ADDRESS_PROVIDER_NAME}`;
+  addressSuggestionsStatus.textContent = `Suggestions from ${provider === "google" ? "Google Geocoding" : ADDRESS_PROVIDER_NAME}`;
   addressSuggestionsList.innerHTML = "";
 
   results.forEach((result) => {

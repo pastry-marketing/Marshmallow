@@ -1,5 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { lookupGoogleAddress } from "../_shared/google-address.ts";
+import { lookupGoogleAddress, preserveAddressUnit } from "../_shared/google-address.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -82,7 +82,7 @@ Deno.serve(async (req) => {
         latitude,
         longitude,
         matchedAddress: typeof match?.matchedAddress === "string"
-          ? match.matchedAddress.trim()
+          ? preserveAddressUnit(match.matchedAddress.trim(), address)
           : null,
         city: typeof match?.addressComponents?.city === "string"
           ? match.addressComponents.city.trim()

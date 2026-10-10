@@ -312,8 +312,8 @@ export default function TechniciansPage() {
   const nameCounts = useMemo(() => buildTechnicianNameCounts(nameCountsQuery.data ?? []), [nameCountsQuery.data]);
 
   useEffect(() => {
-    if (workflowTechnicianIds.length && canWorkflow) setActiveView("workflow");
-  }, [canWorkflow, workflowTechnicianIds]);
+    if (canWorkflow && (workflowTechnicianIds.length || searchParams.get("view") === "workflow")) setActiveView("workflow");
+  }, [canWorkflow, workflowTechnicianIds, searchParams]);
 
   // Scope of technicians this user may see (opr → own, opr_admin → coded).
   const visibility = useMemo<TechnicianVisibility>(

@@ -134,6 +134,25 @@ Reload the extension and refresh both CRM and Quo tabs after upgrading.
 
 Sending a text message remains a separate, user-composed action.
 
+## Technician Intelligence and shared lead review
+
+Admin and Processor users have a native **Technician Intelligence** panel: find
+the technician matching the captured phone, confirm the exact record, review chat
+evidence and job history, and save reviewed labels. It calls the same authenticated
+`technician-chat-assessment` Edge Function as the CRM. **Open full Processing
+Workflow** provides map selection, batches up to 8, flag approval and next actions.
+CS/OPR roles cannot call this API. AI advice never automatically changes flags.
+
+Find Address, coverage preview and intake coordinates now use the CRM's
+`geocode-lead-address` endpoint, including its free Census fallback and unit
+preservation. Urgent intake displays corrections and missing-detail flags as well
+as contradictions. The saved-lead review remains the authority for applying fixes
+and approval. If a lead saved but draft cleanup failed, the panel says so explicitly.
+Unknown save outcomes retain the job ID until the draft is cleared.
+
+See `docs/CRM_EXTENSION_PARITY.md` in the CRM repository for API-key setup and the
+mandatory parity verification/release checklist.
+
 ## Manual ZIP release and update notices
 
 Donut is installed with Chrome's **Load unpacked**, not through the Chrome Web Store.

@@ -547,6 +547,12 @@ Known gaps, recorded so they are not rediscovered:
 
 ## House rules
 
+**Mandatory CRM / Donut parity:** see [`AGENTS.md`](./AGENTS.md) and the
+[feature parity / API setup matrix](./docs/CRM_EXTENSION_PARITY.md). Every shared
+flow must be fixed and verified in both clients, with the same authenticated
+backend and a freshly packaged higher extension version. Backend deployment,
+CRM Publish and manual ZIP installation are separate release steps.
+
 Contributing conventions are documented in [`GEMINI.md`](./GEMINI.md):
 
 1. **Verify all five layers** for any role or feature change — UI, frontend permissions,

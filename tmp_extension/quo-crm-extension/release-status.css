@@ -3,3 +3,9 @@
 .donut-update-notice[hidden] { display: none; }
 .donut-update-notice p { margin: 6px 0; }
 .donut-update-notice a { color: #2563eb; font-weight: 600; }
+#technician-intelligence [hidden] { display: none !important; }
+#technician-intelligence select { width: 100%; padding: 8px; margin: 8px 0; border: 1px solid var(--border, #94a3b8); border-radius: 8px; color: inherit; background: var(--bg-panel, transparent); }
+#technician-intelligence a { display: block; margin-top: 8px; }
+#technician-report { margin: 10px 0; overflow-wrap: anywhere; }
+#technician-report label { display: inline-flex; gap: 5px; align-items: center; padding: 6px; }
+#technician-report blockquote { border-left: 2px solid #64748b; padding-left: 8px; margin: 8px 0; }
