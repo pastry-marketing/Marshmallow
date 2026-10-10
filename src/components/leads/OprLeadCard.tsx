@@ -8,6 +8,7 @@ import StatusBadge from "./StatusBadge";
 import LeadCoverageBadge from "./LeadCoverageBadge";
 import ImageLightbox from "./ImageLightbox";
 import LeadPhotoActions from "./LeadPhotoActions";
+import CompleteLeadCopyButton from "./CompleteLeadCopyButton";
 import NoteThread from "./NoteThread";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
@@ -153,6 +154,10 @@ export default function OprLeadCard({ lead, initialPhotoPaths, initialHasOprNote
               wrap
             />
           )}
+        </div>
+
+        <div className="px-4 pb-3">
+          <CompleteLeadCopyButton lead={lead} className="w-full" />
         </div>
 
         {photos.length > 0 && (

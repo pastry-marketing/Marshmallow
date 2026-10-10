@@ -69,6 +69,7 @@ import QuoPhoneTrigger from "./QuoPhoneTrigger";
 import { adminApi } from "@/lib/admin-api";
 import { logActivity } from "@/lib/activity";
 import LeadPhotoActions from "./LeadPhotoActions";
+import CompleteLeadCopyButton from "./CompleteLeadCopyButton";
 import {
   canCreateCancellationRequest,
   createCancellationRequest,
@@ -1711,6 +1712,10 @@ function LeadCard({
               </div>
             ))}
           </div>
+        </div>
+
+        <div className="border-t border-border/55 px-4 py-3">
+          <CompleteLeadCopyButton lead={lead} className="w-full" />
         </div>
 
         {(lead.payment_screenshot_url || photoPaths.length > 0) && (

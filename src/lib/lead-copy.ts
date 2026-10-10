@@ -1,6 +1,5 @@
 import type { Lead } from "@/types";
 import { toast } from "sonner";
-import { expandStateAbbreviation } from "./utils";
 
 export const copyTextToClipboard = async (text: string, htmlText?: string) => {
   if (navigator?.clipboard?.write) {
@@ -19,15 +18,29 @@ export const copyTextToClipboard = async (text: string, htmlText?: string) => {
     }
   }
 
+  if (navigator?.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch (err) {
+      console.error("Clipboard text write failed, trying fallback:", err);
+    }
+  }
+
   const textArea = document.createElement("textarea");
   textArea.value = text;
   textArea.style.position = "fixed";
   textArea.style.left = "-9999px";
   document.body.appendChild(textArea);
-  textArea.focus();
-  textArea.select();
-  document.execCommand("copy");
-  document.body.removeChild(textArea);
+  const previousFocus = document.activeElement;
+  try {
+    textArea.focus();
+    textArea.select();
+    if (!document.execCommand("copy")) throw new Error("Clipboard copy failed");
+  } finally {
+    textArea.remove();
+    if (previousFocus instanceof HTMLElement) previousFocus.focus();
+  }
 };
 
 const formatTime = (time?: string | null) => {
@@ -53,17 +66,16 @@ export const formatLeadSchedule = (lead: Pick<Lead, "scheduled_date" | "schedule
   return dateText;
 };
 
-export const buildCompleteLeadCopyText = (lead: Lead) => {
+export const buildCompleteLeadCopyText = (lead: Lead, includeQuote = true) => {
   const lines = [
-    ["Service Details", lead.service_details || lead.service_type || ""],
-    ["Address", expandStateAbbreviation(lead.address) || [lead.city, lead.state, lead.zip_code].filter(Boolean).join(", ")],
-    ["Schedule Requirement", lead.customer_schedule_requirements || formatLeadSchedule(lead)],
-    ["Quote", lead.quote || ""],
+    ["Service Details", lead.service_details],
+    ["Address", lead.address],
+    ["Schedule Requirement", lead.customer_schedule_requirements],
+    ["Quote", includeQuote ? lead.quote : ""],
   ];
 
   return lines
-    .filter(([, value]) => String(value || "").trim())
-    .map(([label, value]) => `${label}: ${value}`)
+    .map(([label, value]) => `${label}: ${value?.trim() || ""}`)
     .join("\n");
 };
 
