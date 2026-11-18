@@ -8,8 +8,9 @@ import { useAuth } from "@/contexts/AuthContext";
 import AppLayout from "@/components/layout/AppLayout";
 import Login from "@/pages/Login";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { useCrossTabQuerySync } from "@/hooks/useCrossTab";
 import LeadsPage from "@/pages/LeadsPage";
-import LeadDetailPage from "@/pages/LeadDetailPage";
+import LeadRoute from "@/pages/LeadRoute";
 import SchedulePage from "@/pages/SchedulePage";
 import Analytics from "@/pages/Analytics";
 import AreasPage from "@/pages/AreasPage";
@@ -32,6 +33,7 @@ import TechniciansPage from "@/pages/TechniciansPage";
 import OptimizationPage from "@/pages/OptimizationPage";
 
 const ProcessorBoardPage = lazy(() => import("@/pages/ProcessorBoardPage"));
+const NotificationsPage = lazy(() => import("@/pages/NotificationsPage"));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -97,14 +99,15 @@ function LoginRoute() {
   return <Login />;
 }
 
-function PageRoute({ navItem, children }: { navItem: string; children: ReactNode }) {
+function PageRoute({ navItem, children }: { navItem: string | string[]; children: ReactNode }) {
   const { canAccess, profileLoaded } = useAuth();
 
   if (!profileLoaded) {
     return <PageFallback />;
   }
 
-  if (!canAccess(navItem)) {
+  // Any one of several grants opens a page (Analytics or its CS Team Performance section).
+  if (!(Array.isArray(navItem) ? navItem.some(canAccess) : canAccess(navItem))) {
     return <Navigate to="/leads" replace />;
   }
 
@@ -115,8 +118,15 @@ function PageRoute({ navItem, children }: { navItem: string; children: ReactNode
   );
 }
 
+/** Results polled by another tab of this browser land in this tab's cache. */
+function CrossTabQuerySync() {
+  useCrossTabQuerySync();
+  return null;
+}
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
+    <CrossTabQuerySync />
     <TooltipProvider>
       <Toaster />
       <Sonner />
@@ -126,10 +136,10 @@ const App = () => (
             <Route path="/" element={<ProtectedRoutes />}>
               <Route index element={<Navigate to="/leads" replace />} />
               <Route path="leads" element={<PageRoute navItem="leads"><LeadsPage /></PageRoute>} />
-              <Route path="leads/:id" element={<PageRoute navItem="leads"><LeadDetailPage /></PageRoute>} />
+              <Route path="leads/:id" element={<PageRoute navItem="leads"><LeadRoute /></PageRoute>} />
               <Route path="schedule" element={<PageRoute navItem="schedule"><SchedulePage /></PageRoute>} />
               <Route path="processor-board" element={<PageRoute navItem="processor_board"><Suspense fallback={<PageFallback />}><ProcessorBoardPage /></Suspense></PageRoute>} />
-              <Route path="analytics" element={<PageRoute navItem="analytics"><Analytics /></PageRoute>} />
+              <Route path="analytics" element={<PageRoute navItem={["analytics", "cs_team_performance"]}><Analytics /></PageRoute>} />
               <Route path="areas" element={<PageRoute navItem="areas"><AreasPage /></PageRoute>} />
               <Route path="map-view" element={<PageRoute navItem="map_view"><MapViewPage /></PageRoute>} />
               <Route path="technicians" element={<PageRoute navItem="technicians"><TechniciansPage /></PageRoute>} />
@@ -147,6 +157,7 @@ const App = () => (
       <Route path="urgent-review-requests" element={<PageRoute navItem="urgent_review_requests"><UrgentReviewRequests /></PageRoute>} />
               <Route path="get-cx-update" element={<PageRoute navItem="cx_updates"><CxUpdatesPage /></PageRoute>} />
               <Route path="get-tech-update" element={<PageRoute navItem="cx_updates"><TechUpdatesPage /></PageRoute>} />
+              <Route path="notifications" element={<PageRoute navItem="notifications"><Suspense fallback={<PageFallback />}><NotificationsPage /></Suspense></PageRoute>} />
               <Route path="crm-updates" element={<PageRoute navItem="crm_updates"><CrmUpdates /></PageRoute>} />
               <Route path="settings" element={<PageRoute navItem="settings"><Settings /></PageRoute>} />
             </Route>

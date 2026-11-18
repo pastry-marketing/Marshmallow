@@ -1,7 +1,7 @@
 {
   "name": "Donut",
-  "version": "1.7.0",
-  "releasedAt": "2026-10-10T07:16:33.639Z",
-  "summary": "Census-only free-map coordinates, strict provider validation, and protected nearby-area coordinate updates.",
-  "sourceSha256": "3967f942d22a3f29a9407618ea1ce68a93f8dc3d79615dadbc702d70f0da143f"
+  "version": "1.7.6",
+  "releasedAt": "2026-11-16T10:02:54.196Z",
+  "summary": "Diagnostic/Service Call fee is now saved as the lead's Diagnostic Fee (its own field), not as labor.",
+  "sourceSha256": "ad73aaf9c122862508979d475027b6045c0a1ec5be1ca70b5c632175d6aac67d"
 }

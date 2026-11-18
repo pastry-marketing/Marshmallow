@@ -76,6 +76,8 @@ export interface Profile {
   can_view_tech_report?: boolean | null;
   /** CS-only grant that unlocks the manual "New Lead" button in the CRM. */
   can_add_manual_leads?: boolean | null;
+  /** Processor-only grant to edit other users' notes in the Processor Notes thread. */
+  can_edit_processor_notes?: boolean | null;
 }
 
 export interface UserRole {
@@ -129,14 +131,26 @@ export interface Lead {
   // Processor fields
   tech_name: string | null;
   tech_number: string | null;
-  terms: 'free_estimate' | 'quoted' | null;
+  terms: 'free_estimate' | 'quoted' | 'diagnostic_service_call' | null;
   direction: 'incoming' | 'outgoing' | null;
   cs_tag?: CsTag | null;
+  /** 'ai' when the current tag was set by the schedule confirmation AI. */
+  cs_tag_source?: 'ai' | null;
   booked_at?: string | null;
   half_address?: string | null;
+  /** Server-computed "City, ST ZIP" (selected for Operators only; never street text). */
+  location_label?: string | null;
   labor_amount: number | null;
   material_amount: number | null;
   for_you_amount: number | null;
+  /** Diagnostic Fee, beside For You / For Us on every term (20261222000000). */
+  diagnostic_fee_amount?: number | null;
+  /** For You / For Us share of labor in percent, 0-100 (20261224000000). */
+  for_you_labor_percent?: number | null;
+  for_us_labor_percent?: number | null;
+  /** For You / For Us share of the Diagnostic Fee in dollars (20261225000000). */
+  for_you_diagnostic_amount?: number | null;
+  for_us_diagnostic_amount?: number | null;
   for_us_amount: number | null;
   cancellation_reason?: string | null;
   source_url?: string | null;
@@ -150,6 +164,8 @@ export interface Lead {
   creator_name?: string;
   editor_name?: string;
   show_quote_to_opr?: boolean | null;
+  /** Plain Operators only: half the labor, from get_operator_safe_leads(); their labor_amount is null. */
+  operator_labor_amount?: number | null;
 }
 
 

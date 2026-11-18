@@ -5,23 +5,78 @@ and include behavior tests. `AGENTS.md` and `GEMINI.md` make this mandatory.
 
 | Flow | CRM | Donut | Shared authority / verification |
 | --- | --- | --- | --- |
+| Labor / optional Parts-Materials quote | One customer-facing quote section on add/detail/drawer. Every editing role — Admin, Processor, CS Admin and CS — can add and edit Terms, Labor and Parts/Materials on new and existing leads (2026-11-13; CS/CS Admin were previously read-only on saved leads). The internal For You/For Us technician split stays hidden from and unchangeable by CS/CS Admin. Cards/copy show the same customer summary; OPR sees only the separate half-labor summary. No clears the structured materials charge; no-charge standard technician messages omit materials. | Native intake has matching Labor and optional Parts/Materials fields and validation, saved to the same lead columns through the existing authenticated client; quote approval, urgent review, reserved job ID and photo retry behavior remain. Donut v1.7.3 artifacts prepared locally. | No new quote schema/Edge Function. No legacy quote-note-to-labor backfill or guessed pricing. CRM Publish and manual Donut ZIP installation remain separate. See `docs/OPERATOR_TODO_AUDIT.md` for verification. Donut only creates leads (no saved-lead quote editing), so the 2026-11-13 CS/CS Admin editing change has no Donut counterpart; its intake already shows these fields to every role. |
+| Operator Donut control / hold acknowledgement | Both OPR roles have no header Donut button, release polling, installed detection, update toast or install dialog. Hold popups and bell provide one-click Acknowledge All plus individual Acknowledge; Mark all read includes the hold batch. | This hides CRM controls only: extension login/access is intentionally unchanged. Donut has no native hold inbox. | Existing recipient/RLS- and revision-checked `acknowledge_operator_hold_alert` RPC; a loaded inbox needs one batch call, over-100 inboxes read only paged IDs/revisions on demand before the batch. No new polling, job, notification channel or database schema for acknowledgement. |
+| Partial Paid approval | Cards, full details and legacy lead drawer open the same amount/evidence dialog for Paid or Partial Paid. Processor requests either; Admin approves/rejects in the shared payment queue or records either directly. CS cannot select Partial Paid. | No native payment recording or approval flow in Donut (source audit); extension source and v1.7.1 artifacts unchanged. | Migration `20261214000000_partial_paid_requests.sql` adds the request outcome and restricts entering Partial Paid like Paid, without making Partial Paid terminal. Existing request-table RLS, notifications, queue, indexes, storage and realtime are reused; no new polls, jobs or Edge Function. Isolated behavioral harness `178_partial_paid_requests.sql` via `scripts/test-partial-paid-requests-db.mjs`; application and CRM publication are separate. See `docs/PARTIAL_PAID_REQUESTS.md`. |
+| Lead-card metadata request deduplication (2026-11-12, local only) | Leads grid waits for the existing visible-page metadata batch before mounting cards, avoiding per-card notes/photo-count/cancellation reads racing that batch. Required-read failures still enable individual fallback; a denied optional quote-approval read does not block cards. Table view still renders without waiting for card metadata | No native saved-lead card grid or equivalent metadata batch/fallback in Donut; extension source and release artifacts unchanged | UI/rendering and API request work only; same columns, exact counts, caller/RLS scope, cache, polling/realtime, background jobs and storage behavior. No database/index/function/type change. Regression tests: `src/pages/LeadsPage.test.tsx` (delays, role variants, denial/network failure, pagination/stale results and table view) and mocked-browser `Lead metadata batching` cases in `tests/operator-workflow/workflow.spec.ts`. CRM publication and signed-in production verification remain separate. |
 | Technician intelligence | Technicians → Processing Workflow; map selection up to 8 | Native Technician Intelligence panel for the captured phone, reviewed-label saving, full-workflow link for batch selection/flag approvals/chat actions | `technician-chat-assessment`: Admin/Processor only; identical AI prompt, evidence checks, counts and labels. Missing history is unavailable, not misconduct. |
-| Processor Board | `/processor-board`: scheduled-job queue with technician identity, four advisory action labels, explicit timezone, job-specific evidence and on-demand current-history checks | No native scheduled-job board/job-specific assessment action; existing technician-wide intelligence is not this flow. Donut sources and v1.7.0 artifacts unchanged | Authenticated `processor-board` function, caller-token lead/status scope, per-job leases/revision-checked advisory save and atomic audit. No lead status changes, approvals or outbound messages. Database installed and function v1 deployed through approved MCP on 2026-10-15; generated types refreshed, 18 read-only production checks passed and six-role baseline unchanged. Initial v1 source matched all six reviewed files; five live auth/runtime smoke checks passed. The subsequent reliability/CPU optimization is local and awaiting approved Edge deployment and CRM publication; signed-in/provider QA remains separate. See `docs/PROCESSOR_BOARD_ROLLOUT.md`. |
+| Processor Board | `/processor-board` v3: assigned, unfinished leads, newest first, every job in one list; server-side status filter/counts incl. Send Dose (3 days unpaid) and Wrong Tech Number; inline Review (evidence loaded on open), Tech Quick Chat, Open lead | No native board/job-specific assessment action; existing technician-wide intelligence is separate. Donut v1.7.0 sources/artifacts unchanged | `processor-board` + `processor-board-daily` (policy 10, **awaiting redeploy**), migration `20261124000000` (**awaiting manual application**). Server-only checks with retry backoff; caller JWT/RLS scope, leases, audit kept. See `docs/PROCESSOR_BOARD_ROLLOUT.md`. |
 | Technician flags | Admin applies; Processor requests review | Opens full workflow for the same reviewed actions | Existing `request_technician_change` approval RPC and technician flag trigger; never write flags directly in Donut. |
 | Urgent lead review | Latest customer agreement, corrections and missing details | Same check; displays issues, corrections and flags; opens saved-lead review for confirmed corrections/approval | `check-urgent-lead`, urgent verification/review RPCs and database status gate. No duplicate prompt or approval bypass. |
 | Address lookup / map coordinates | Authenticated Census-only lookup and preserved units | Same function for Find Address, coverage preview and submission coordinates | `geocode-lead-address`: only Census coordinates may be cached/persisted for the free map. Google or unlabelled points are rejected by both clients. Preserve Apt/Suite/Unit/#. |
 | Lead submission | Saves stored record before AI follow-up; mutation errors distinguished from follow-up errors | In-flight guard, reserved job ID through acknowledgement, uncertain retries reuse ID; draft cleanup does not redefine a saved lead as failed | Existing unique lead job ID and RLS. Selected photo-upload failures are reported explicitly. |
 | Coverage | Admin coverage/source analytics; map and lead coverage badges | Intake coverage preview; Admin link to the full coverage analytics report | Existing coverage RPC/lead columns/trigger. Technician phone and status counts use actual stored data. |
 | Photos | Explicit View N photos beside combined-image copy on saved cards/details, with the existing image viewer and original-file technician handoff | Intake thumbnails already open the native previous/next/close photo preview; original-file attachment handoff to exact technician chat | Authenticated signed storage URLs for saved CRM photos; view never copies or sends. Donut's existing native preview is unchanged (no ZIP release needed). User's Quo Send action completes delivery. |
-| Complete lead details copy | Lead cards, OPR cards, tables and both detail views; Admin configures role defaults and Inherit/Allow/Deny user overrides in Feature Access; both Operator roles enabled by default | No equivalent clipboard action in native intake panel; no extension source change required | `get_lead_copy_access` resolves the authenticated caller; settings writes use admin-only `set_lead_copy_permission` and database RLS. Copies only loaded, visible details in Service Details / Address / Schedule Requirement / Quote order. Hidden OPR quotes stay blank. Copy does not write the lead or grant visibility. |
-| Feature Access settings usability | Desktop comparison table shows four features per page with Previous/Next arrows, persistent user identity, sticky headings, user/role filters and feature search; Copy All Details is searchable by that name, Copy Complete Details or Copy Details and shows saved Inherit/Allow/Deny overrides plus effective access; the separate role/default panel shares the same query and mutation; narrow screens use labelled stacked controls | No native admin permission editor in Donut; no extension source change required | Existing navigation/profile writes and copy permission RPCs remain the authority. Copy overrides use `set_lead_copy_permission`, never navigation grants, and retain role inheritance. Fixed role/flag gates are labelled rather than offered as ineffective switches. Failed copy/navigation saves do not show save success. Browser tests intercept all external requests and use synthetic users. |
-| Marshmallow Copilot | Header mascot and Ctrl+K entry; desktop read-only panel, accessible feature catalogue, lead/technician searches with saved-record deep links, scoped reports and Admin measured health. Feature Access includes role defaults, Inherit/Allow/Deny overrides, global disable, separate AI enablement and allowance. | No native Copilot or Admin permission editor in Donut; extension source and v1.7.0 artifacts unchanged. Existing technician intelligence and urgent review remain distinct. | Authenticated `marshmallow-copilot` endpoint, caller-token SECURITY INVOKER reads with existing RLS plus status/field restrictions; service client only for private budget reservations. No record writes, messages, status changes or approvals. SQL fixture and network-isolated browser tests cover permitted/excluded roles and failures. Backend installed via approved MCP deployment on 2026-10-13; 29 read-only production checks passed and six-role baseline unchanged. CRM publication/pilot checks remain pending; see `docs/COPILOT_ROLLOUT.md`. |
+| Complete lead details copy | Lead cards, OPR cards, tables and both detail views; one Admin-managed per-user Copy Details switch after Manual Lead in Feature Access, with no duplicate role/default panel or override dropdown. Original default-enabled behavior (including both Operator roles) and all saved role/user grants are preserved until that user is toggled | No equivalent clipboard action or Admin permission editor in native intake panel; no extension source change required | `get_lead_copy_access` resolves the authenticated caller; each switch calls admin-only `set_lead_copy_permission(NULL,user_id,boolean)`, never navigation/profile writes. Existing RLS, audit and Admin-always-allowed rules remain unchanged. Copies only loaded, visible details; hidden OPR quotes stay blank. No migration or backend deployment is required. |
+| Feature Access settings usability | Full desktop per-user table with contained scrolling, sticky user identity/headings and user/role/feature filters; Copy Details is the last switch immediately after Manual Lead and is searchable by Copy All Details or Copy Complete Details. Narrow screens use the same labelled switch; Copilot controls stay removed | No native admin permission editor in Donut; no extension source change required | Existing navigation/profile writes and copy permission RPCs remain the authority. Fixed gates and failure/retry handling remain; permission-read failures disable the copy switch rather than advertise an unverified default. Duplicate-save guard and existing query-key invalidations synchronize both layouts. No bulk grants, data repair or new subscriptions. |
+| Marshmallow Copilot | Paused pending testing: header, command-menu, provider and Feature Access mounts removed locally; full per-user feature table restored | No native Copilot or Admin permission editor in Donut; extension source and v1.7.0 artifacts unchanged. Existing technician intelligence and urgent review remain distinct | Database pause installed via approved MCP as `20261019113029 / pause_marshmallow_copilot`; nine production-safe checks pass and six-role lead visibility plus existing grants/budgets are unchanged. The constraint prevents stale Admin re-enablement. Local function release gate (`503 copilot_paused` before CRM/budget/provider work) is **awaiting approved deployment**; CRM Publish remains separate. See the current section in `docs/COPILOT_ROLLOUT.md`. |
 | Operator hold alerts | All OPR/OPR Admin users receive a Marshmallow-themed, expandable read-only card and persistent bell history when an urgent job becomes Ready to Schedule, Waiting for CX for schedule confirmation, Scheduled or Cancelled. Newer hold cards stack above older cards instead of overlapping; pending urgent cancellations are remembered until final cancellation | No native Operator notification inbox or map filter controls in Donut; no extension source change required | One database trigger handles saved transitions from any client; recipient-only `lead_hold_alerts` RLS, server-owned field-whitelisted snapshots with hidden quotes redacted, revision-checked acknowledgement RPC. Existing lead/status approval gates remain unchanged. See `docs/OPERATOR_WORKFLOW_ROLLOUT.md`. |
 | CX / Tech Updates | Processor/Admin request CX updates; assigned CS (creator only when unassigned) and CS Admin see every pending CX request. CS/CS Admin request Tech updates; Admin/Processor see the queue and Processor records the reply. Both update queues stay visible to all four participating roles, with role-scoped unresolved counts, so CS/CS Admin can review returned Tech answers just as Processor/Admin review returned CX answers. Returned answers support Acknowledge or Question More with preserved thread history. Buttons are aligned on saved cards, full details and the lead drawer. | No native saved-lead request/completion queue in Donut; intake/status submission is not a counterpart. Extension source and v1.7.0 ZIP remain unchanged. | Authenticated `cx-update-requests` function proxies caller-JWT `update_requests`; request-table RLS, fixed role gates, whitelisted projections, per-kind pending uniqueness, stable retry IDs, atomic audit/notifications. No lead status, schedule, full-lead RLS or approval changes. Apply `20261121001000_fix_update_request_notification_uuid.sql` after the Tech Update migration to repair reported SQLSTATE 42804; shared-project application remains a separate approved operation. |
 | Map service/state filters | Responsive paired filters, non-shrinking grid widths, clipped long labels, collision-aware menus; Leaflet stays in its own stacking context | No equivalent map toolbar in native intake panel | UI-only layout change. No coordinate-provider, coverage, permission or storage changes. |
+| Documentation | Settings > Documentation section 22 describes Donut for Admins | Donut v1.7.1 (2026-11-02): bundled `README.md` rewritten to match current behavior (CRM sign-in with 2FA/access code, CRM Website URL only, Census-only Find Address, quote-approval and urgent-check gates, Technician Intelligence, photo handoff, updates and release steps); removed the obsolete API-token / `/api/extension/leads` instructions and a personal Windows install path. No code or behavior change | Same release tooling: `npm run extension:release` and `extension:check`; manifest, bundled `release.json`, `public/extension-release.json` and `public/Donut.zip` regenerated together. |
 | Release updates | Latest/installed version, date/time, automatic notice and ZIP instructions | Installed version/date, update notice in panel/settings | `extension-release.json`, bundled `release.json`, manifest and version-correlated bridge. |
 | Notification refresh efficiency | Bell and eligible urgent, job-in-progress, incomplete-details and quote-updated popups share one recipient-filtered channel through `realtimeBus`; same-turn refreshes coalesce and in-flight changes get a trailing read | No native notification bell or these popup consumers in Donut; no extension source change required | Existing notification RLS, recipient filters, OPR assignment scope, exact bell counts, per-popup 100-row limits, quote cutoff, sounds, priority, acknowledgement writes and 15/20/25-second polling are preserved. Late retired subscriptions/results cannot affect a replacement scope. No new RPC or production configuration. |
+| Cross-tab polling (2026-11-09) | Tabs of one signed-in browser elect one owner per data source (Web Locks) and share results over a same-origin BroadcastChannel (`src/lib/cross-tab.ts`, `src/hooks/useCrossTab.ts`). Only the owner runs the bell, urgent / job-in-progress / incomplete-details / quote-updated pop-up, workflow-alert, operator-sync, sidebar-badge, CX/Tech update and notification-inbox timers; other tabs ask the owner (one shared read) and render its results. The visible tab takes ownership; closing it hands ownership to the next tab. Cadences, hidden-tab alert polling, realtime triggers, exact counts, row limits, dismissals, sounds and scope keys (user/role/filters, quote cutoff) are unchanged. Browsers without Web Locks keep per-tab polling | No counterpart: Donut has no bell, pop-ups, sidebar badges or inbox; its 60-second release check and local heartbeat are unaffected. Extension source and v1.7.1 artifacts unchanged | No database, RLS, function or type change. Results are only shared between same-origin tabs of the same user, kept in memory, never persisted; non-owners fall back to their own read if the owner does not acknowledge within 1.5 s or answer within 30 s, and an owner read failure is reported to all tabs without a duplicate read. Behavior tests: `src/lib/cross-tab.test.ts`, `src/hooks/useCrossTab.test.tsx`, two-tab cases in `notification-requests.test.tsx`. |
+| Realtime-first loading (2026-11-10) | Leads page reads every lead once, then only leads whose `updated_at` moved past a cursor (`src/lib/leads-sync.ts`; 2-minute overlap; complete reload when 1,000+ change at once, at least every 30 minutes, and when realtime reconnects). Return visits paint from the IndexedDB cache and read only changes; card saves read only changes instead of reloading every lead. One shared `leads` realtime channel per tab (`subscribeToLeadChanges`) for Leads, Map, Schedule, Areas, Quote Pending, Processor Board and nearby-urgent. Realtime-backed safety-net polls (bell, four pop-ups, workflow alerts, inbox, CX/Tech updates, cancellation/payment/quote-approval badges, note threads, Quote Pending and Quote Approval pages) run every 2 minutes while realtime is healthy, at their previous 15-30 s interval the moment a channel errors, and read once when realtime recovers (`src/lib/realtime-health.ts`). Supersedes the unpublished notification pause | No counterpart: Donut does not poll the database or open realtime channels; it reads on demand. Extension source and artifacts unchanged | No database, RLS, function or type change; uses the existing `leads_set_updated_at` trigger. Realtime still delivers changes immediately; deletes arrive by realtime DELETE. Measured 2026-11-10 (read-only EXPLAIN as an admin): delta read ~2 ms vs ~15-190 ms per 1,000-row page of the full read. Tests: `src/lib/leads-sync.test.ts`, `src/pages/LeadsPage.test.tsx`, `src/lib/realtime.test.ts`, `src/lib/realtime-health.test.ts`, `src/hooks/useCrossTab.test.tsx`, `notification-requests.test.tsx`. |
+| Overload backoff (2026-11-10) | `src/lib/overload-guard.ts`, installed in `src/main.tsx`, watches Supabase API responses (rest, functions, auth). Four overload responses within 20 s (503/504/520-525/544, or a 500 carrying `57014` statement timeout or `PGRST003` pool timeout) pause BACKGROUND polling in that tab for 30 s, doubling to 5 minutes while the overload keeps returning, plus a 0-5 s per-tab spread on resume. Paused: every TanStack `refetchInterval` (via focusManager), `useSharedQuery` polls, `useVisiblePoll`, realtime-aware safety nets, Leads delta timer, workflow alerts and the hand-written timers (operator sync, CRM updates, status history, quick chat, technician workflow health). Never blocked or delayed: any request itself, saves and other mutations, mount loads, opening a lead, returning to a tab, Refresh, realtime delivery. Realtime reconnect catch-ups wait for the pause and are spread 0-5 s per tab | No counterpart: Donut does not poll the database; its on-demand reads are user actions. Extension source and artifacts unchanged | No database, RLS, function or type change; the generated Supabase client is not edited (supabase-js resolves the global fetch per request). Only status codes and error codes are read from responses. Tests: `src/lib/overload-guard.test.ts`, overload cases in `notification-requests.test.tsx`, `src/pages/LeadsPage.test.tsx`, `src/hooks/useCrossTab.test.tsx`, `src/lib/realtime-health.test.ts`. |
+| Batched AI status checked stamps (2026-11-10, **deployed: refresh-urgent-statuses v11, 2026-11-10 ~07:55 UTC**) | `refresh-urgent-statuses` no longer sends one UPDATE per urgent lead whose chat is unchanged; it collects them and stamps `checked_at` with one UPDATE per 150 leads (`supabase/functions/_shared/urgent-status-checks.ts`). Labels, the AI/rule decisions, manual refresh and the "AI statuses last checked" time are unchanged; a failed chunk is logged and reported as `stamp_failed` in the run summary instead of being silently ignored | No counterpart: Donut does not call this function. Extension source and artifacts unchanged | Edge Function change only; no database, RLS or type change. Same rows are written, so row writes and realtime/WAL volume are unchanged; the saving is requests and round trips. Deployed as version 11 on 2026-11-10. Tests: `src/lib/urgent-status-checks.test.ts`. |
+| Leads RLS: one role lookup per query (2026-11-10, **applied to production 2026-11-10 ~07:52 UTC**; harness 40 matrix identical before/after; CS Leads read 950 ms -> 9 ms) | `supabase/migrations/20261210000000_leads_rls_single_role_lookup.sql` recreates "Lead visibility by role" so the caller's role (`marshmallow_private.caller_role()`) and user id are read once per statement instead of `has_role()` up to ten times per row. Same visibility: 0 mismatches for all 17 users x every role x 5,450 leads (741,200 pairs, read-only), 0 differences through real RLS in the isolated harness. A CS Leads read measured 950 ms before; the same filter with one lookup ~81 ms | No Donut change: Donut reads leads through the same RLS and gets the same speed-up once applied | Policy-only change; INSERT/UPDATE/DELETE policies, grants, statuses and the paid gate untouched. Harnesses: `supabase/tests/40_leads_rls_baseline.sql` (before matrix recorded 2026-11-10; re-run after applying, must match), `supabase/tests/171_leads_rls_and_load_governor_isolated.sql` (throwaway DB). Rollback restores the previous policy verbatim. |
+| CX/Tech updates via direct RPC (2026-11-10) | `src/lib/cx-update-requests.ts` calls `workflow_requests` directly instead of the `cx-update-requests` Edge Function: same `p_input` for every action (parity test against the Edge handler), same field checks, permission/validation/conflict messages from the database, one retry when the API is briefly unavailable. Removes an Edge hop and second login check per call (~17-21k calls/day) | No counterpart in Donut | No database or function change: `public.workflow_requests` was already executable by `authenticated` and enforces caller, role, scope, lengths and revisions in `marshmallow_private.workflow_requests`. The Edge Function stays deployed for tabs that have not refreshed. |
+| Load governor (2026-11-10, **applied to production 2026-11-10 ~07:53 UTC**; harness 170 all PASS; wrapped jobs running successfully) | `supabase/migrations/20261210010000_load_governor.sql`: every minute the database samples its busy time (pg_stat_statements) and connections, decides normal / elevated / critical with hysteresis (thresholds in `marshmallow_private.load_policy`), keeps 7 days of samples, makes deferrable cron jobs skip their turn while raised (Sheets sync every 5th minute when elevated, AI status refresh / processor-board daily / Sheets watchdog skipped, schedule monitor skipped only when critical) and broadcasts the level on `global-app-events`. Tabs (`setServerLoadLevel` in `src/lib/overload-guard.ts`): critical pauses background polling before any timeouts; elevated keeps safety nets slow and postpones the Leads 30-minute reload (max 2 h); stepping down is spread 0-5 s per tab; a level not re-announced expires after 3 minutes | No counterpart: Donut does not poll | Never blocks user actions, page loads or realtime. Original job functions unchanged (guarded wrappers). `UPDATE marshmallow_private.load_policy SET shedding_enabled = false` turns shedding off. Harnesses: `supabase/tests/170_load_governor.sql` (read-only, production after apply), `supabase/tests/171_...` (isolated, 58 checks). |
+| Leads page urgent refresh cadence (2026-11-09) | The urgent-leads table and its hidden "needs CX reply" check (`quo_conversations` for urgent phones) poll every 15 s instead of 5 s while the page is visible, still refresh at once on mount, on urgent-list changes and on return to the tab (skipped if read within the last 5 s). New urgent leads still arrive instantly through the existing leads realtime channel; Quick Chat (its own filtered realtime thread, 5 s fallback, 60 s unread poll) is unchanged | No counterpart: Donut has no urgent table or reply flag; extension source and v1.7.1 artifacts unchanged | No database, RLS, function or type change; same columns, filters, CS ownership scope and 1000-row limit. Worst-case delay for a lead leaving urgent, an AI status label or a reply flag rises from 5 s to 15 s. Behavior tests: `src/hooks/useVisiblePoll.test.tsx`. |
+| Realtime publication scope (2026-11-10) | `lead_ai_statuses` leaves the `supabase_realtime` publication: nothing ever subscribed to it, yet Realtime decoded its ~2,600 updates. The urgent table still reads AI status as a join on its 15 s visible poll, so labels appear exactly as before | No counterpart: Donut has no postgres_changes listener and does not read AI status; extension source and v1.7.1 artifacts unchanged | Migration `20261210060000_realtime_drop_lead_ai_statuses.sql` (manual apply; publication only, no RLS/grant/data change). Read-only check `supabase/tests/173_realtime_publication_scope.sql` also asserts every table with a live listener stays published. To add a live listener for `lead_ai_statuses` later, re-publish it first (rollback section). Pre-existing gap, not changed: `activity_logs` and `message_templates` have listeners but are not published. |
+| Realtime publication trim (2026-11-11) | Eight more published tables with no `postgres_changes` listener anywhere leave `supabase_realtime`: `crm_updates`, `lead_operator_assignments`, `lead_photos`, `lead_urgent_review_requests`, `quo_number_preferences`, `quo_outbound_messages`, `quo_pinned_conversations`, `technician_change_requests`. Every screen that showed their data polls or refetches it already (urgent reviews and technician change approvals poll every 30 s), so nothing users see changes | No counterpart: Donut has no postgres_changes listener (audited `tmp_extension/` 2026-11-11); extension source and artifacts unchanged | Migration `20261210080000_realtime_trim_unsubscribed_tables.sql` (**awaiting manual application**; publication only, no RLS/grant/data change; rollback re-adds all eight). Read-only harness `supabase/tests/174_realtime_publication_trim.sql` asserts the dropped set, the still-published listened set, and flags any unaudited addition. Realtime WAL decoding was the top CPU consumer in pg_stat_statements on 2026-11-11. |
+| RLS initplan wrap (2026-11-11) | The 23 policies the Supabase advisor flagged (auth_rls_initplan) stop re-evaluating `auth.uid()`/`has_role()` per row: role checks become one InitPlan per statement; expressions otherwise verbatim. Tables: sheets sync surfaces, cancellation/urgent-review/technician-change request gates, leads INSERT/DELETE, optimized_areas, profiles admin update, user_access_codes. The advisor's multiple-permissive-policy pairs are deliberately left: permissive quals are OR-ed into one plan expression, so merging removes no per-row work and the leads SELECT split is the paid-lead feature boundary | No counterpart: RLS is server-side and applies identically to Donut's authenticated reads; extension source and artifacts unchanged | Migration `20261210070000_rls_initplan_wrap_auth_uid.sql` (**awaiting manual application**; ALTER POLICY only, same names/commands/roles; full rollback block). Read-only harness `supabase/tests/175_rls_initplan_wrap.sql` (no bare auth.uid() left; policy inventory unchanged); run `40_leads_rls_baseline.sql` before/after — the visibility matrix must be identical. |
+| Duplicate technicians index (2026-11-11) | `idx_technicians_opr_code` (a stray re-creation from `20261021000000`) is dropped; identical `technicians_opr_code_idx` stays, so every technician write maintains one index instead of two. The advisor's 11 unindexed-FK findings were reviewed against the code and deliberately NOT indexed: none is a query filter and 59 indexes on this database are already unused | No counterpart: index-only change; extension unchanged | Migration `20261210090000_drop_duplicate_technicians_index.sql` (**awaiting manual application**; rollback recreates it). Verify: only `technicians_opr_code_idx` remains on `(opr_code)`. |
+| Request-page lead projections (2026-11-11) | Paid Approval and Cancellation Requests pages join leads with narrow projections (`src/lib/request-page-leads.ts`) instead of every column, on load and in their realtime INSERT handlers; `reviewPaymentRequest`/`reviewCancellationRequest` arg types narrowed to the fields they read. Quote Approval / Quote Pending keep full rows on purpose: they render `LeadCard`, which is the documented full-card consumer | No counterpart needed: Donut's own lead reads already use narrow column lists (`background.js`); extension source and artifacts unchanged | No database, RLS, function or type change. Projection contract pinned by `src/lib/request-page-leads.test.ts` (same style as `leads-index-columns.test.ts`). |
+| All Leads shared safety poll (2026-11-11) | The All Leads 60 s whole-table safety poll keeps its cadence but now runs through `useSharedQuery`: one tab per browser polls (others receive the result), the poll skips its turn while the overload guard or load governor pauses background work, and the page joins the shared `leads` realtime channel (`subscribeToLeadChanges`) instead of opening its own duplicate | No counterpart: Donut does not poll; extension unchanged | No database, RLS, function or type change. Realtime changes still apply instantly; manual refresh and mutations unaffected. Behavior tests: `src/pages/AllLeads.test.tsx` (projection, overload pause/resume, shared-channel update without a read). |
+| Hidden-tab Quick Chat unread reads (2026-11-10) | Quick Chat unread badges skip their 60 s `quo_conversations` read while the tab is hidden and do one catch-up read on return only if a tick was skipped; while visible they keep the 60 s poll and still skip turns while the overload guard pauses background polls | No counterpart: Donut has no unread badges; its 60 s release check and 4 s local heartbeat make no database reads. Extension source and v1.7.1 artifacts unchanged | No database, RLS, function or type change. Alerts, sounds, popups and realtime are unchanged. Worst case: a badge in a hidden tab updates on return instead of within 60 s. Behavior tests: `src/components/leads/QuoPhoneTrigger.test.tsx`. |
+| Quick Chat last message time (2026-11-09) | The CX Quick Chat and Tech Quick Chat buttons (lead card, lead drawer, lead detail page) show the time of the last message in that chat, whoever sent it, in the same local format as the chat window ("Today, 2:34 PM"). Each button uses only a conversation on its own line (CX vs Tech); no time is shown when that line has no conversation. Plain phone-number links are unchanged | No counterpart: Donut has no Quick Chat buttons; extension source and v1.7.1 artifacts unchanged | No new request: the time comes from the existing batched `quo_conversations` read the buttons already share (60 s refresh), and from the open thread when it is newer. No database, RLS or function change. Behavior tests: `src/lib/quick-chat-status.test.ts`, `QuoPhoneTrigger.test.tsx`. |
+| Paid lead access by paid date (2026-11-09) | Settings → Status visibility → Paid custom ranges now mean "leads that became paid in this range", whatever their created date. The lead list filter uses the database's in-range ids (`my_paid_lead_ids`); a ranged grant shows no paid leads if that read fails. Dialog text updated | No counterpart: Donut has no status visibility settings or paid lists; extension source and v1.7.1 artifacts unchanged | Migration `20261205000000_paid_lead_access_by_paid_date.sql` (applied manually 2026-11-09; RLS baseline after-run identical): server-owned `lead_paid_dates` + trigger + backfill from payment history (396/452 paid leads dated on 2026-11-09; 56 undated stay All-time only), policy "Granted paid leads" by paid date, `my_paid_lead_ids()`. Harness `170` 37/37 PASS on isolated PGlite; run `40_leads_rls_baseline.sql` before/after on production. See `docs/PAID_LEAD_ACCESS.md`. |
+| Themed date pickers (2026-11-09) | Every CRM date field (18: lead schedule/expected completion in Add Lead, drawer and detail page, paid-access range, Notifications, Analytics, Schedule, Quo Monitor, AI Assistance, Copilot) uses `src/components/ui/date-input.tsx`: our Input styling plus the app Calendar in a popover (Clear / Today, min/max where the field already had them), instead of the browser's native picker. Values stay `YYYY-MM-DD`. Time fields (lead drawer start/end time, exact time in the schedule picker, booking time) use `src/components/ui/time-input.tsx`: hour / every minute 00-59 / AM-PM columns, values stay `HH:mm`, saved `HH:mm:ss` read without rounding | **Not yet changed:** the Donut side panel report has two native date inputs (`report-date-from`, `report-date-to`); updating them needs an extension release and manual ZIP install, awaiting the user's decision | UI only; no database, function or permission change. Tests: `date-input.test.tsx`, `time-input.test.tsx`, `PaidLeadAccessDialog.test.tsx`. |
+| Notification redesign phase 1 (2026-11-09) | Bell, unread badge, urgent / job-in-progress / incomplete-details / quote-updated pop-ups and workflow toasts show the last 3 days; history shows 30 days; nothing from before the user's account (incl. CRM announcements). Lead notifications are hidden while the recipient cannot open the lead | No counterpart: Donut has no notification bell, pop-ups, inbox or announcements; extension source and v1.7.1 artifacts unchanged | Migration `20261206000000_notification_access_on_read.sql` (applied 2026-11-09 after a rolled-back first version): notifications SELECT policy also requires that the recipient can load the lead under lead RLS. No data changed. Harness `152` + existing `150/151/160`: 136 PASS isolated; `151` 24/24 PASS on production. See `docs/NOTIFICATIONS.md`. |
+| Notification redesign phases 2–4 (2026-11-09) | The CRM no longer sends notifications; pop-ups read one batched query by alert type; the inbox and toasts call `workflow_notifications` directly | No counterpart; Donut creates leads and urgent statuses through the same `leads` table, so its urgent leads now alert the same people as CRM ones (server trigger). Extension source and v1.7.1 artifacts unchanged | Migrations `20261207000000_notification_server_sender.sql` and `20261208000000_notification_lifecycle_retention.sql` applied 2026-11-09 (server-side triggers, no browser INSERT, read-only column grant, alerts resolve themselves, one Sheets alert, daily 30-day retention after a backup of 13,241 rows). Harnesses `153`/`154`: 39 PASS isolated. See `docs/NOTIFICATIONS.md`. |
+| Operators: no Quote Updated / cancellation alerts (2026-11-09) | Operators and OPR Admins no longer receive these two alert types | No counterpart in Donut | Migration `20261209000000_operators_no_quote_cancellation_alerts.sql` applied; enforced in `marshmallow_private.notify_lead`. Harness `153` 42/42 isolated. No CRM code change. |
+| Operators never open the full lead page (2026-11-09) | `/leads/:id` sends Operators (`opr`, `opr_admin`) to their Leads view filtered to that job instead of the full lead (customer contact, notes, amounts, payment, history); other roles unchanged | Donut's "open in CRM" links go to the same CRM route, so they are covered; no extension change | UI route only (`src/pages/LeadRoute.tsx`); lead RLS still lets Operators read lead rows via the API (known, documented in `20261203000000_opr_location_only.sql`). Tests: `LeadRoute.test.tsx`. |
+| AI schedule confirmation (2026-11-04) | Any trusted event in the matched chat (customer or team text, call, call transcript, summary) on a lead tagged Waiting for CX for schedule confirmation triggers the AI; the customer's words in a text or on a call (speaker-attributed transcript) are the only proof, read in context so indirect replies count (2026-11-05: a bare "ok"/spoken "yeah" after our proposal, picking an offered time, visit logistics; the AI cites customer items by id and the worker copies their exact words; 2026-11-06: Ready to schedule only when the customer clearly accepts the exact day/time window our team sent; when the customer names, asks for or suggests their own/a different day or time, narrows our window, or turned our time down (even if they later accepted a new time), by text or on a call, the AI moves the tag to Customer Require New Schedule (`confirmation_sent`, AI badge, `schedule_new_needed` pop-up to the same people) and a person sets the new schedule); a confirmed reply moves the tag to Ready to schedule with an AI badge on the card and lead page, and a persistent pop-up (job ID, customer, service, location, schedule, customer's words) goes to the lead's CS, CS Admins, Admins and Processors. Admin Off / Shadow / On control under Notifications | No counterpart: Donut does not show or set lead tags and has no notification pop-ups; extension source and v1.7.1 artifacts unchanged | `schedule-confirmation-monitor` (service-role worker, live with one-minute cron since 2026-11-05; 2026-11-05 indirect-confirmation change deployed as v9; 2026-11-06 "our schedule only" change deployed as v10; "Customer Require New Schedule" change: migration `20261202000000_ai_schedule_new_schedule_tag.sql` applied 2026-11-06 (harness 151: 22/22 PASS on production), worker deployed as v11; compatibility migration `20261202010000_schedule_new_alert_compat.sql` applied the same day so CRM builds published before this change still load notifications (new-schedule alerts are reported as `schedule_ready` with `event_kind`); CRM UI (calendar icon, AI badge on the new tag, monitor labels) awaiting CRM Publish) + migrations `20261130000000_ai_schedule_confirmation.sql` and `20261201000000_ai_schedule_confirmation_calls.sql` (both applied in production) SQL enforces trusted ingestion, automatic chat matching (link, else unique phone), eligibility, freshness, a single waiting job per customer, the customer's own quote, and the single tag transition; the `cs_tag_source` marker is trigger-owned. Harness `160` (51 checks) and `151` (17 read-only checks) pass on isolated PGlite. |
+| Request resolution / notification center / schedule monitor (2026-10-20; not installed) | Requester-owned Mark Resolved, audited Admin reassignment, revision-safe follow-ups/history; recipient notification history, sound controls and five-second notices. Off-by-default, shadow-first schedule monitor with Admin-verified bindings and trusted service-ingestion snapshots | No native saved-request queue, notification center or monitor. Extension source/manifest/ZIP unchanged; shared server ingestion and lead triggers cover both clients | Caller-authenticated request authority, server-owned event metadata and current-access notification RLS; separate cron-secret worker with SQL evidence/authorization guards. Both migrations are held at the user's coordinated-release decision: applying the revision-required legacy wrapper alone breaks old clients. Generated types, three function deployments, secrets/cron setup, CRM Publish, signed-in/provider QA and automatic activation remain pending. See `docs/WORKFLOW_INBOX_ROLLOUT.md`. |
+| Copy Technician Message by terms (restored 2026-11-10) | Lead drawer and lead page: Quoted and Free Estimate leads get their original wording again (removed by the June 2026 template change `aba6890`). Quoted: `Customer is agreed to pay ($labor) total labor / ($materials) FOR MATERIALS / For you: $… labor including material / For us: $… from total labor`, before the schedule. Free Estimate: `FREE ESTIMATE VISIT` heading and `FREE ESTIMATE VISIT Scheduled for:`. Both use the original schedule format (`Today MONDAY 9th November between 9:00am-11:00am`). Same message for every role, as before June; leads with no terms are unchanged | No counterpart: Donut has no technician message copy; extension source and artifacts unchanged | Client-side text only (`src/lib/message-templates.ts`, `CopyLeadButton.tsx`). No database or function change. Tests: `message-templates.test.ts`, `CopyLeadButton.test.tsx`. |
+| Overload early-warning alert (2026-11-10) | Admins get a corner card (amber warning, red critical, green back to normal) with what is high, who has the most live connections, and what to do; same text by email (Resend) when the secrets are set | No counterpart: Donut has no notification pop-ups; extension source and artifacts unchanged | `system-health-watch` Edge Function (cron secret, Metrics API) + `public.record_system_health()` (service_role only) in migration `20261210040000_system_health_alerts.sql`; recipients are Admins from `user_roles`. Tests: `system-health.test.ts`, `SystemHealthPopup.test.tsx`, harness `172` (32 checks). Runbook: `docs/runbooks/overload-alert.md`. |
+| Leads list: leads that leave a user's view (2026-11-10) | Delta sync could keep a lead the user can no longer see (e.g. marked Paid for a CS Admin, reassigned from a CS user) until the 30-minute full reload. Every 3 minutes, while the tab is visible and server load is normal, an id-only read (no customer data; about 6 ms a 1,000-id page as Admin) removes leads the user can no longer see; leads created during the read are kept and a failed read removes nothing | No counterpart: Donut has no leads list; extension source and artifacts unchanged | Same `leads` RLS as every other read; client-only change in `src/lib/leads-sync.ts` and `src/pages/LeadsPage.tsx`. Tests: `leads-sync.test.ts`, `LeadsPage.test.tsx`. |
+| Built-in technician and reminder messages (2026-11-10) | Copy Technician Message and Reminder Message use the built-in texts only; the Settings > Templates tab is removed. The `message_templates` table it read and saved to was never created in production, so every open of either dialog and of Settings returned 404 and the editor could not save | No counterpart: Donut has no message copy dialogs; extension source and artifacts unchanged | No database read at all now (68 404s since Nov 9 22:00 UTC removed). No migration; the unapplied June migration `20260616152000_message_templates_and_cancellation_images.sql` is left as is. Tests: `CopyLeadButton.test.tsx` (no database read), `message-templates.test.ts`. |
+| Settings > Templates and Check Template (2026-11-12) | Admins edit the Copy Technician Message texts (no terms / Quoted / Free Estimate) and the new Check Template in Settings > Templates (save, or reset to built-in; audited in activity logs). New **Check Template** button beside Copy Technician Message (lead drawer and lead page) copies "Hi {tech_name}, How are you? I have a new customer looking for {service}…" with Service Details, Area (City State), Schedule Requirement and QUOTE, technician name editable in the popup. Same text for every role; Reminder Message stays built-in | No counterpart: Donut has no technician message or check copy; extension source and artifacts unchanged | Migration `20261212000000_message_templates_settings.sql` (manual apply): table `message_templates`, all signed-in users read, admin-only insert/update/delete by RLS, `updated_by` stamped from `auth.uid()`, anon none, not in realtime. Until it is applied the dialogs use the built-in texts (one failed read per minute at most, only while a dialog is open) and Settings > Templates shows the load error with editing disabled. Isolated harness `supabase/tests/176_message_templates.sql` via `scripts/test-message-templates-db.mjs`. Applied to production 2026-11-12; generated types regenerated. Tests: `message-templates.test.ts`, `CopyLeadButton.test.tsx`, `CheckTemplateButton.test.tsx`, `MessageTemplatesTab.test.tsx`. |
+| Lead / note RLS role checks once per query (2026-11-16, **applied to production**) | Lead and note reads evaluate the caller's role once per query instead of once per row. Same visibility for every role. Measured in one frozen-snapshot transaction (Leads page read, 1,000 rows): admin 15.9 -> 3.0 ms, CS Admin 101.8 -> 3.0 ms, Customer Service 854 -> 159 ms, processor 24.5 -> 1.6 ms | Donut reads leads through the same RLS, so it gets the same speed-up with no extension change | Migration `supabase/migrations/20261227000000_leads_rls_initplan_role_checks.sql`: ALTER POLICY USING only on "Lead visibility by role", "Regular OPR cannot read leads directly" and "Regular OPR cannot read CS notes"; rollback has the exact previous expressions. Proof: in-transaction before/after md5 of every visible lead and note id per role identical (admin, cs_admin, customer_service, processor, opr, no role); after apply, `40_leads_rls_baseline.sql` and new `supabase/tests/93_leads_rls_initplan_fingerprint.sql` match the baseline exactly once the 2 leads / 1 note created meanwhile are excluded. opr_admin has no live account to test. Other advisor-flagged admin-only policies left as they are. |
+| Technician Area cache refresh job (2026-11-16, **applied to production**) | Coverage previews (Add/edit lead address) and lead coverage refreshes no longer re-look-up ~150 unresolved/uncached technician Areas live on every call. Measured: `calculate_lead_technician_coverage()` 1,989 ms -> 47.6 ms; the two preview RPCs were ~13.5% of all database time (pg_stat_statements 2026-11-09..16). Coverage results unchanged: all 632 cached points equal a live lookup | Donut uses the same authenticated preview RPCs, so it gets the same speed-up with no extension change | Migration `supabase/migrations/20261226000000_technician_area_cache_refresh_job.sql`: `refresh_stale_technician_area_cache()` (missing/unresolved Areas only), load-governor-guarded wrapper, pg_cron `technician-area-cache-refresh` every 6 hours (3.5 s per run). Not callable by app users. No RLS, leads, or result change. Read-only harness `supabase/tests/92_technician_area_cache_refresh.sql`: 5/5 PASS. Production database time saved should be confirmed over a comparable period in pg_stat_statements. |
+| Diagnostic Fee For You / For Us split (2026-11-16, local only) | "For You ($ from diagnostic)" and "For Us ($ from diagnostic)" sit beside the Diagnostic Fee on every term, separate from the labor split. Quoted / no terms: $ from labor + diagnostic split; Free Estimate: % of labor + diagnostic split; Diagnostic/Service Call: diagnostic split + % of labor (it no longer shows the $ labor fields). Messages: Diagnostic reads "$X from Diagnostic" from the new fields; Quoted and Free Estimate append " + $X from Diagnostic" to the For You / For Us line only when a diagnostic share is recorded, otherwise their lines are unchanged. Same CS/CS Admin gate; hidden from Operators; in export and activity labels | No counterpart: Donut has no Internal Technician Share or technician message | Migration `supabase/migrations/20261225000000_lead_diagnostic_split.sql` **applied to production 2026-11-16** (two nullable non-negative columns). Types regenerated. Tests: `message-templates.test.ts`, `quote-breakdown.test.ts`, `LeadDetailPage.quote.test.tsx`. |
+| Technician message formats by terms; For You / For Us % of labor (2026-11-16, local only) | Copy Technician Message follows the owner's formats. Quoted: "Customer is agreed to pay $X total labor + $Y for Parts or Material." then For You / For Us "$ from Labor". Free Estimate: For You / For Us "N% from Labor". Diagnostic/Service Call: fee line, then "For You / For Us: $X from Diagnostic + N% from Labor". All three have "You Agreed on the Terms:". Internal Technician Share fields by terms (`TechnicianShareFields`): Quoted and no terms: $ For You / For Us; Free Estimate: % of labor; Diagnostic: both; Diagnostic Fee on every term. Hidden fields keep their saved values. Same CS/CS Admin gate; hidden from Operators | No counterpart: Donut has no Internal Technician Share or technician message | Migration `supabase/migrations/20261224000000_lead_labor_percent_split.sql` **applied to production 2026-11-16** (two nullable 0..100 columns). Types regenerated. No admin-saved Quoted / Free Estimate / Diagnostic template exists (read-only check), so the new built-in wording is what users copy. Tests: `message-templates.test.ts`, `CopyLeadButton.test.tsx`, `quote-breakdown.test.ts`, `LeadDetailPage.quote.test.tsx`. |
+| Diagnostic Fee column; "You Agreed on the Terms:" line (2026-11-16, local only) | A Diagnostic Fee ($) box sits beside For You / For Us in the Internal Technician Share on every term (Add Lead, lead page, drawer), saved in `leads.diagnostic_fee_amount`, so a Quoted job can carry labor and a diagnostic fee. Same role gate as For You / For Us (CS/CS Admin keep the saved value). Diagnostic/Service Call no longer uses `labor_amount`; its summary, message and copy read the new column. Hidden from Operators (`operator-privacy.ts`); listed in export and activity labels. All three technician messages with For You / For Us now have "You Agreed on the Terms:" above them | Donut v1.7.6: the Diagnostic/Service Call fee input saves `diagnostic_fee_amount` (no labor, no materials). Donut has no For You / For Us box, so the every-term field has no counterpart | Migration `supabase/migrations/20261222000000_lead_diagnostic_fee_amount.sql` **applied to production 2026-11-16** (additive nullable column + non-negative CHECK; 0 Diagnostic/Service Call leads existed, so nothing to move). Types regenerated. Tests: `quote-breakdown.test.ts`, `message-templates.test.ts`, `CopyLeadButton.test.tsx`, `LeadDetailPage.quote.test.tsx`, `LeadDetailPanel.copy-terms.test.tsx`. |
+| Processor Notes "Edited by" (2026-11-16, local only) | Each note shows "Edited by <name> · <time>" under its text once its text has been changed, so a granted Processor's edit to a colleague's note is attributed | No counterpart: Donut has no note threads | Migration `supabase/migrations/20261223000000_lead_note_edited_by.sql` (**applied to production 2026-11-16**; harness 96: 5/5 PASS, no synthetic rows left): `edited_by`, `edited_by_name`, `edited_at` stamped server-side by `stamp_lead_note_edit()` from auth.uid() only when content changes; client values ignored. Harness `supabase/tests/96_lead_note_edited_by.sql`. Tests: `NoteThread.edit-grant.test.tsx`. |
+| Diagnostic/Service Call terms; For You / For Us on every term (2026-11-16, local only) | Copy Technician Message follows the Quote Terms selected in the form before saving, on the lead page and (now) the drawer. The Free Estimate Copy Technician Message also carries "For you: $X" / "For us: $Y" lines. Quote Terms adds Diagnostic/Service Call (`leads.terms = 'diagnostic_service_call'`) with one Diagnostic/Service Call Fee, saved in `leads.diagnostic_fee_amount` since `20261222000000` (it was first stored in `labor_amount`); `labor_amount` and `material_amount` are saved as null for this term. Customer summary "Diagnostic/Service Call · Fee $X"; lists, export and Processor Board label it. Operators see the term only, never the fee or half of it. New editable Copy Technician Message "Technician Message: Diagnostic/Service Call" (Quoted layout; agreed-amount and For You / For Us lines replaced; literal "xx%" for admins to set). The Internal Technician Share (For You / For Us) now shows for every term, including none, on add, detail page and drawer; CS/CS Admin still cannot change it | Donut v1.7.5: Estimate / Quote has a third option with a single Diagnostic/Service Call Fee input (the form field is still `laborAmount`, but since v1.7.6 it saves `diagnostic_fee_amount`, not `labor_amount`), Parts/Materials and Quote Notes hidden for it; `DonutQuote.fields` and `normalizeLeadTerms` accept the term; same lead columns through the existing authenticated insert. Donut has no For You / For Us fields (intake only), so that part has no counterpart. Release artifacts regenerated | `leads.terms` has no CHECK constraint (verified read-only 2026-11-16), so no lead schema change. Migration `supabase/migrations/20261221000000_message_template_diagnostic_key.sql` **applied to production 2026-11-16** (constraint verified read-only); admins can save the new template. `get_operator_safe_leads()` returns half of `labor_amount` as `operator_labor_amount`; with `labor_amount` null for this term that value is null, and the Operator UI ignores it anyway. Tests: `quote-breakdown.test.ts`, `message-templates.test.ts`, `operator-quote.test.ts`, `extension-quote-ui.test.ts`, `LeadDetailPage.quote.test.tsx`; harness `supabase/tests/176_message_templates.sql` extended. CRM Publish and manual Donut ZIP install remain separate. |
+| Edit Processor Notes grant (2026-11-16, local only) | Settings > Feature Access "Edit Processor Notes" switch (Admin sets it; Processors only). A granted Processor gets the edit control on other users' notes in a lead's Processor Notes thread and can change the note text only; a refused save (RLS returns no rows) shows a permission error instead of closing as saved. Other threads and roles unchanged; no delete right | No counterpart: Donut has no lead note threads (no `lead_notes` reads or writes in the extension). Extension source and artifacts unchanged | Migration `supabase/migrations/20261220000000_processor_notes_edit_grant.sql` (**applied to production 2026-11-16**; harness 95: 16/16 PASS in a rolled-back transaction, no synthetic rows left): `profiles.can_edit_processor_notes`, admin-only via `protect_profile_privilege_flags()`, `can_edit_others_processor_notes()`, UPDATE policy limited to `processor` notes on leads the caller can read, and `protect_lead_note_identity()` keeping author/lead/thread fixed. Harness `supabase/tests/95_processor_notes_edit_grant.sql`. Types regenerated. Tests: `src/lib/access.test.ts`, `src/components/leads/NoteThread.edit-grant.test.tsx`. |
+| Processor note thumbs-up (2026-11-17, merged; harness 97 13/13 PASS on production, rolled back) | Processors and Admins can give one 👍 to another user's note in a lead's Processor Notes thread; press again to remove. Count and names (hover) are visible to everyone who can read that thread; the author sees the count but cannot react to their own note. CS / CS Admin / OPR have no access | No counterpart: Donut has no note threads. Extension source and artifacts unchanged | Migration `supabase/migrations/20261228000000_processor_note_thumbs_up.sql` (**applied to production 2026-11-17**; types regenerated): new `lead_note_reactions` (PK note+user, cascade) with RLS select/insert/delete only (processor/admin, processor-type notes, own rows, not own note). Notes untouched, so no "Edited by" stamp. Read in the same notes request (embedded select, falls back to plain notes if the table is absent). **Not added to the realtime publication** (cost, see `20261210080000`); other viewers see it on the thread's existing refresh. Harness `supabase/tests/97_processor_note_thumbs_up.sql` Follow-up `20261229000000_lead_note_reactions_least_privilege.sql` (applied) revokes the default UPDATE/TRUNCATE/REFERENCES/TRIGGER grants. Tests: `NoteThread.thumbs-up.test.tsx`, `access.test.ts`. |
+| Quo dashboard refresh throttle + 14-day webhook log (2026-11-17; migration applied, CRM awaiting Publish) | The Quo dashboard conversation list refreshes at most once per 3 s while `quo_conversations` changes stream in (a burst used to re-run the paginated exact-count list once per change in every open dashboard); a change after a refresh still gets its own refresh, and the dashboard's own status edits still refresh immediately. Raw Quo webhook events are kept 14 days instead of 30; older processed/ignored events move to the private `archives` bucket nightly. | No counterpart: Donut has no Quo dashboard and never reads `quo_webhook_events`. Extension source and artifacts unchanged. | Migration `20261229000001_quo_webhook_events_retention_14_days.sql` applied 2026-11-17 via MCP as `quo_webhook_events_retention_14_days` (verified: keep_days 14, SECURITY DEFINER, no anon/authenticated EXECUTE, cron 04:07 UTC active) (only changes the nightly job's `keep_days`; the Edge Function is unchanged and still refuses < 7 days and never deletes `processing`/`failed` rows). Tests: `src/lib/coalesced-refresh.test.ts`, `src/pages/quo-monitor/QuoDashboardPage.test.tsx`. |
+| Webhook retention status + stuck-event recovery times (2026-11-17; both Edge Functions deployed) | No UI change. `quo-webhook-events-retention` v8 now records each run in `marshmallow_private.webhook_retention_state` (it called `.catch()` on a supabase-js query builder, which has none: the status call threw before being sent and every run returned 500 although archiving worked). `quo-reprocess-stuck-events` v6 dates recovered call transcripts/summaries at the event's own `createdAt` (else delivery time) instead of the replay time. | No counterpart: Donut never reads webhook events or runs recovery. Extension source and artifacts unchanged. | Verified live: manual retention run returned 200, archived/deleted 10,000, status row `last_ok = true`. Recovery replayed 5,405 Aug–Sep stuck events (0 failed, 0 conversations created or bumped, 0 dated today); the first 300, which were dated the replay time, were corrected to their event time. 4,599 remain `processing` (paused at the user's request; rerun the function in batches of ≤290, at most 2 at a time; 6 at once hit HTTP 546). Tests: `src/lib/webhook-event-retention.test.ts`, `src/lib/quo-event-recovery.test.ts`. |
+| Realtime: one subscription per browser, tables on demand (2026-11-18, local only; awaiting CRM Publish) | Memory probe (`20261230000000`) showed host free memory tracking open Realtime bindings (up to 162 at peak, ~13 per tab). Now: (1) `lead_copy_role_permissions` / `lead_copy_user_permissions` are no longer subscribed; copy access is re-read on focus and every 30 s by one visible tab (`OperatorWorkflowSync`). (2) The global channel subscribes to no table; `lead_notes`, `lead_hold_alerts`, `lead_cx_update_requests` are subscribed only while a screen that uses them is mounted (`relayTableToBus`). (3) Every postgres_changes subscription (notifications, leads, sidebar badges/alerts, approval pages) goes through `src/lib/realtime-relay.ts`: one tab per browser holds the channel (Web Lock, never stolen) and relays changes and status to the user's other tabs; hand-over reports CLOSED→SUBSCRIBED so the existing reconnect catch-up refreshes. Alerts, sounds and toasts still fire in each tab as before. | No counterpart: Donut opens no Realtime subscriptions (verified: no `postgres_changes`/`channel(` outside the bundled library). Extension source and artifacts unchanged. | No database or Edge Function change; the API (PostgREST) pool is not a documented setting for this plan, so it is unchanged. Tests: `src/lib/realtime-relay.test.ts`, `src/lib/realtime.test.ts`, `OperatorWorkflowSync.test.tsx`, `NoteThread.test.tsx`. Before/after: compare `marshmallow_private.memory_probe_report` for the busy window before and after Publish. |
 
+### Lead-card metadata efficiency check (2026-11-12)
+
+- Reproduce with `npx playwright test -c playwright.operator-workflow.config.ts tests/operator-workflow/workflow.spec.ts -g "Lead metadata batching"`. Chromium, local Vite and synthetic Supabase HTTP/WebSocket mocks only; no production traffic.
+- Workload: one saved lead, full-row hydration complete while the photo metadata batch is held pending. With the original rendering condition, the Admin case records **four extra per-card requests** (notes, exact photo count, photo paths, pending cancellation). With the readiness gate, it records **zero**, then renders both photos when the batch completes. The Operator case verifies the same result and existing photo permissions.
+- A separate case exhausts the installed SDK's three 503 retries before checking the exact four-request individual fallback. No retry behavior is disabled. Unit coverage also exercises 20-card batches, optional/required denials, network rejection, pagination and table view.
+- The tradeoff is explicit: first grid cards wait for their metadata response instead of painting incomplete indicators. Existing populated metadata remains usable during refresh; table rendering is not gated on card metadata. Failed batches still release the grid to its previous fallback.
+- Only UI mounting and redundant API reads change. Query projections/authorization, cache scope, realtime delivery, polling intervals, jobs, storage files and Donut are unchanged. Local request reduction is **not** a measured reduction in production CPU, RAM or invoices; those require publication and comparable workload measurements.
+
+Historical pilot notes (superseded locally by the 2026-10-19 pause below):
 Copilot Admin AI controls are CRM-only. Global AI applies to all allowed Copilot
 users; there is no separate per-user AI permission. The 2026-10-13 audit fixed
 unsaved AI/configuration drafts resetting after permission refreshes and verified
@@ -41,6 +96,327 @@ Copilot function v2 were installed via MCP on 2026-10-14; generated types were
 refreshed. CRM publication and real signed-in/provider QA remain separate pending
 steps; see the latest audit in `docs/COPILOT_ROLLOUT.md` before publishing.
 
+## CS Team Performance access (2026-10-27; migration 20261128000000 awaiting manual application)
+
+CRM-only; Donut has no Analytics (no extension change). Feature Access has a new
+**CS Team Performance** toggle. Granted alone, Analytics opens with only that
+section; its team-wide counts come from `cs_team_performance()` (Admin or the
+grant only; aggregates, no lead rows). Analytics users without the grant keep the
+existing report built from the leads they can see.
+
+## Processor Board payment screenshots (2026-10-26; Edge awaiting redeploy)
+
+CRM-only; Donut has no Processor Board (no extension change). A technician picture
+after our share request now counts as the payment screenshot (share sent).
+
+## Processor Board customer's side (2026-10-26; migration 20261127000000 + Edge awaiting approval)
+
+CRM-only; Donut has no Processor Board (no extension change). Checks also read the
+customer's own chat for their point of view on the job (quoted, never our share); a
+new customer message re-checks the job. Review shows **Customer's side**.
+
+## Processor Board timeline rules v2 (2026-10-26; Edge awaiting redeploy)
+
+CRM-only; Donut has no Processor Board (no extension change). Shared Edge rules now
+read more confirm/acceptance wordings and reactions, ignore the update template's
+Zelle details as a share request, and read our screenshot acknowledgement as the
+share sent. Review shows the new step.
+
+## Processor Board v4 job timeline (2026-10-24; migration 20261125000000 + Edge awaiting approval)
+
+CRM-only; Donut has no Processor Board (no extension change). Exact rules read the
+team's standard technician-chat steps (details "*Customer # N*", took job, reminder,
+update request, done, share requested/sent/received) before AI; payment means the
+technician's share; the customer chat is no longer read. Review shows the job
+timeline. Rules were measured offline on an exported chat sample (aggregates only).
+
+## Processor Board v3 rules (2026-10-24; migration 20261124000000 + Edge awaiting approval)
+
+CRM-only; Donut still has no Processor Board (no extension change). Send Dose is now
+"took or completed, unpaid, 3+ days after the scheduled date, not still in progress";
+Payment Overdue and the 60-minute rule are gone; Wrong Tech Number is new. All AI
+checks run on the server (message/lead change, first check, daily for completed
+unpaid jobs); opening the board never runs AI. The list shows every job without
+pagination and loads Review evidence on demand.
+
+## Processor Board v2: lead chat window and six statuses (2026-10-23; migration + Edge awaiting approval)
+
+CRM-only. Source audit of `tmp_extension/quo-crm-extension/` again found no
+Processor Board, job queue or per-job assessment in Donut; its technician-wide
+Intelligence panel uses `technician-chat-assessment` and is unchanged. No extension
+source, manifest, release JSON or ZIP changed, so no extension release was made.
+
+- Board scope: technician name or number saved; not paid, partial paid, cancelled,
+  scammed; newest `created_at` first. `job_done` / `payment_requested` show as
+  Payment Pending.
+- AI input: the tech chat from the first message that mentions the customer (name,
+  first name, job ID, phone or street) on or after the day before the lead was
+  created; if none, from that day. Texts, speaker-verified call transcript segments
+  and answered calls are included. Other recent jobs for the same tech are named so
+  AI ignores them. Over-long windows keep the dispatch and newest messages and report
+  how many were omitted.
+- AI returns facts (enough context, took job, latest update, our unanswered message).
+  Completion/acceptance need verbatim technician quotes; negated/future wording is
+  rejected; the unanswered message must be ours.
+- `processor_board_status` (SQL) is the single status rule. Time-based changes
+  (appointment passed, 60 minutes unanswered, 24 hours unpaid) need no AI. AI reruns
+  only when the lead, its tech conversation or (completed jobs) the customer's
+  conversation changed (`ai_stale`), or facts are missing/older.
+- Completed jobs: Payment Overdue after 24 h; the customer's chat says who is waiting
+  (customer, promise, dispute, says paid, not asked). A daily server check
+  (`processor-board-daily`, migration `20261122001000`, **awaiting approval**) re-reads
+  completed, unpaid jobs once a day even when nobody writes.
+
+## Processor Board simple actions and saved call evidence (2026-10-23; Edge installed, CRM publication pending)
+
+CRM now uses only four advisory action badges plus Needs Review. Upcoming jobs have
+a plain schedule note, not a sixth action; failed checks share the Needs Review
+filter. Short row/check summaries distinguish saved statuses, earlier evidence,
+fresh AI findings and unchanged-history results, retaining context/stale/error
+warnings and full diagnostics in Review. The 706 vs 369 screenshot counts were
+reconciled as 369 current Scheduled plus 337 other unfinished scheduled radar jobs;
+no scope, exact total or record repair changed.
+
+The same authenticated `processor-board` endpoint adds one caller-scoped read of
+saved call/transcript events, verifies the original call/line/participant/time and
+external speaker's exact number, and isolates each call's job context. Only that
+job's verified text/speech candidates reach AI; all attributable candidates are
+included, or the existing context boundary fails explicitly. Audio-only events,
+summaries and unknown speakers are not proof. Missing call data is reported, not
+passed. Answered calls prevent false non-response; call-only acceptance/questions
+do not satisfy Send Dose. Approvals, status writes, caller/RLS scope and audit
+authority are unchanged. No native Donut per-job counterpart or extension release.
+
+No migration or generated database type change. With explicit user approval,
+`processor-board` **v10 ACTIVE / evidence policy 9** is deployed with JWT
+verification retained. All ten deployed source/config files match local content,
+including the new transcript dependency; no-token/invalid-token/preflight probes
+passed **401/401/200**. CRM Publish and signed-in provider QA remain separate.
+See the newest rollout section for bounds, coverage and rollback evidence.
+
+## Processor Board action help and focused chat activity (2026-10-23; Edge installed, CRM publication pending)
+
+Colored action filters explain their rules on hover/keyboard focus without AI calls
+or changing saved lead statuses. A fresh, compatible `no_verified_update` result
+for a scheduled job uses the appointment action (upcoming vs Take Job Update), with
+its missing-outcome warning retained. Attribution/setup/provider/mirror failures
+still require attention; acceptance alone is not proof of progress.
+
+This follow-up extends focused Review: opening alone still does not invoke AI;
+later activity in its exact saved conversation can recheck only that job when
+tracking is enabled, the timezone confirmed and the tab visible. Unrelated page
+jobs remain paused. Existing shared realtime, coalesced/recovery reads, backoff,
+assignment guards and job-specific server evidence checks remain the authority.
+No new subscriptions, database migration/type/RLS/grant change, outbound sending
+or native Donut counterpart. Extension sources/artifacts remain unchanged.
+With explicit user approval, `processor-board` **v9 ACTIVE / evidence policy 8** is
+deployed with JWT verification retained. All nine deployed source/config files
+match local content; no-token/invalid-token/preflight checks passed **401/401/200**.
+No database migration was needed. CRM Publish and real signed-in/provider QA are
+separate. See the newest rollout section for verification and rollback proof.
+
+## Processor Board focused job review (2026-10-23; local frontend update)
+
+Review temporarily pauses new page assessments after the active request. Check
+this job prioritizes only the selected lead, reuses its active check, and shows
+job-specific waiting/busy state. No other job is assessed while Review or its
+pinned read-only Tech Quick Chat remains open. Closing restores the previous
+tracking preference; unstarted focused checks are retired on close, hidden tab,
+scope loss or reassignment. Normal list/realtime recovery reads remain enabled.
+
+Fixed header/action footer and a scrollable review body make Check this job and
+the authorized chat accessible without scrolling past repeated explanations.
+Quotes, source labels, stale/error/setup warnings stay visible; full diagnostics
+and safety detail move to one collapsed disclosure. No backend prompt/history
+rule, migration, permissions/RLS, generated enum, status/approval or outbound-send
+change. No native Donut counterpart exists; no extension release is needed.
+Frontend publication and real signed-in/provider QA remain separate.
+
+## Processor Board honest review / location fallback (2026-10-23; database + Edge installed)
+
+CRM follows the Urgent leads compact panel styling, shows Checking / Queued for
+check on startup rather than an unverified Scheduled AI finding, retains supported
+previous evidence for the unchanged assigned technician with explicit stale labels,
+and shows readable Needs Review reasons. Source/evidence labels distinguish AI,
+schedule rules and saved statuses. Customer location falls back through saved
+city/state, full address and partial `half_address`; no guessed/persisted location
+or per-row geocoding. NSS was a wording error, not a new filter requirement.
+
+Applied with user approval via MCP:
+`supabase/migrations/20261023041010_processor_board_review_visibility.sql` keeps
+incomplete scheduled records visible for repair and includes partial addresses in
+the existing invoker, scoped, 25-row RPC (remote migration **20261023043949**).
+Harness 155 is disposable-only; exact full-schema baseline 40 ran before and after,
+with all six-role matrix cells unchanged. Edge `processor-board` **v8 ACTIVE**,
+policy 7, JWT verification kept; all nine files read back exactly and boundary
+probes 401/401/200. Twelve live non-persistent checks passed; advisor summaries
+remain unchanged (existing warnings are not claimed resolved). CRM Publish and
+signed-in QA are separate. No record
+status, schedule, approval, lead RLS, generated enum or outbound-send change.
+
+Donut has no native board/job-specific action; the separate technician-wide
+intelligence stays unchanged. No extension release or manual ZIP install is needed.
+See the latest `docs/PROCESSOR_BOARD_ROLLOUT.md` section for rollback and efficiency.
+
+## Processor Board compact view, assigned-schedules queue and AI input filter (2026-10-22; migration + Edge v7 APPLIED)
+
+CRM-only round: source audit reconfirmed no Donut Processor Board, job queue or
+job-specific assessment counterpart; the extension, its prompts and v1.7.0
+artifacts are unchanged, so no ZIP release is required.
+
+- The board UI is the compact screenshot-style panel: dedicated Technician
+  identity column, one-line AI status with the "AI · latest job updates +
+  keywords" label when the filtered scope was used, exact last-check time and one
+  refresh action; filters and tracking controls live in a collapsed disclosure.
+- `list_processor_jobs` now returns only jobs with a saved technician name and
+  number plus appointment date/start time; incomplete jobs remain in All Jobs for
+  repair. New migration
+  `supabase/migrations/20261022111039_processor_board_assigned_schedules_only.sql`
+   is idempotent, authorization/RLS-preserving and was applied as recorded below.
+   Its historical behavior is tested before the new 2026-10-23 replacement.
+- The AI provider payload is narrowed to the last 20 job-linked messages plus
+  older update-keyword matches, with attribution before selection and full-history
+  identity/silence checks kept on the server. Edge `processor-board` **v7 is
+  ACTIVE** (deployed 2026-10-22 via MCP with the user's explicit approval; all
+  nine files verified byte-exact, JWT verification retained). The matching
+  migration `processor_board_assigned_schedules_only` is also applied
+  (`20261022113108`). Remaining: CRM Publish and signed-in QA; the board banner
+  clears once the frontend loads a policy-6 backend.
+
+## Processor Board tracking controls (2026-10-22; frontend publication pending)
+
+CRM remembers explicit timezone confirmation and tracking pause for the same caller,
+role and sign-in in the same browser tab. No guessed timezone/default confirmation.
+Manual checks can queue behind the active automatic job, pause the automatic batch,
+and explicitly re-read even fresh history without duplicate concurrent requests.
+Hidden/scope/stop/unmount transitions retire queued work. Completed checks no longer
+wait for a recovery list read to unlock controls; a 120-second client deadline
+reports uncertain completion honestly. Existing authenticated `processor-board`
+v6, leases, scope, permissions, schedules and advisory-only behavior are unchanged.
+No native Donut board/tracking counterpart, Edge source, schema, migration or ZIP
+change. Details and actual tests are in the newest rollout section.
+
+## Processor Board internal CRM chat (2026-10-22; frontend publication pending)
+
+The board now reuses CRM Tech Quick Chat in pinned read-only mode instead of
+launching the external Quo site. It reads only the verified CRM UUID and exact
+technician/line, retains the separate chat grant and existing authenticated RLS,
+and fails visibly rather than choosing a customer/newest chat. No extension
+prepare/send/schedule or outbound write occurs. One viewer mounts on click;
+hidden-trigger unread work is skipped, paginated history is complete up to an
+explicit 10,000-row error boundary, and scope/identity/permission changes retire it.
+General lead Quick Chat sending behavior is unchanged. No Donut board/viewer
+counterpart exists, so no extension source, version or ZIP release is required.
+The user explicitly approved backend deployment; v6 is now ACTIVE with JWT enabled
+and all nine files verified against local source. Local gates passed 998 unit tests,
+29 mocked browser tests, typecheck, lint (0 errors/28 existing warnings) and build.
+See the newest rollout section for remaining CRM Publish/live QA steps.
+
+## Processor Board saved-chat context attribution (2026-10-22; Edge v6 installed)
+
+CRM-only: source audit reconfirmed no Donut Processor Board/job-specific assessment
+counterpart. The separate `technician-chat-assessment` intelligence flow is unchanged;
+no extension source, prompt, manifest, release metadata or ZIP was modified.
+
+The board reads the same verified technician conversation opened by the lead's
+Tech Quick Chat (current Quo text history when configured; the webhook mirror
+otherwise). It does not use the separate CX chat as technician evidence or invent
+a per-lead technician thread: several jobs share one technician's 1:1 conversation.
+
+Directly identified replies remain supported. Unnamed replies are context-attributed
+only after this job's delivered, job-identifying dispatch in the same conversation,
+strictly later than the dispatch and within seven days. A peer/unknown dispatch or
+a technician switching to another identified job ends that context. The drawer
+labels `thread_context` evidence and requires human verification in Quo; call events,
+transcripts, reactions and media are excluded as text evidence even if selected by
+the model. Short replies must be quoted in full inside verified context. Acceptance
+alone is not progress/completion; context-only acceptance cannot enable Send Dose.
+
+Page/batch reply counts use attribution, not the number of extracted outcomes, so
+an acknowledgement is not misleadingly reported as zero replies. Pure dispatches
+still skip AI; changed context invalidates extraction reuse. Existing authorization,
+status/approval gates, schedules, serial requests, realtime, freshness and retries
+remain. No additional reads, feeds, workers or schema changes were introduced;
+more legitimate replies can now qualify for the existing single extraction call.
+No production usage or bill savings are claimed.
+
+The user separately approved backend deployment after committing/pushing the
+attribution follow-up. See the newest rollout section for installed release state.
+CRM merge/Publish, confirmed schedule
+timezone, verified correction of three malformed technician numbers and live
+signed-in/provider accuracy checks are separate. See the newest section of
+`docs/PROCESSOR_BOARD_ROLLOUT.md` for the actual test results and remaining limits.
+Publish the matching frontend before deploying the new Edge source: old frontends
+may reject `thread_context` or mislabel contextual completion as directly verified.
+Do not treat approval to push a branch as approval or proof of CRM publication.
+
+## Processor Board evidence accuracy follow-up (2026-10-22; Edge v5 installed)
+
+CRM-only; no native Donut job board/job-specific assessment counterpart was found.
+No extension source, prompt, metadata or ZIP changed. The new follow-up separates
+successful checks from verified technician updates, surfaces unassigned reply counts
+and opens only the exact verified chat for manual review. Equivalent complete
+street/unit spellings and exact factual spans from the same uniquely identified
+source message are supported; generic replies never inherit a neighboring job's
+identity. Dispatch-only history avoids pointless extraction while all history still
+checks silence timing. Tracking state is explicit; both manual and automatic checks
+require timezone confirmation, and unconfirmed schedule rules remain Needs Review.
+The existing Schedule page has no authoritative saved-job timezone to adopt.
+
+No schema/type/RLS/grant/worker change. The user approved deployment/push; the
+nine-file function bundle is **v5 ACTIVE** (JWT verification preserved, all deployed
+files verified against tested source; prior v4 backed up outside the repo), and the
+branch `fix/processor-board-evidence-accuracy-2026-10-22` is pushed. CRM publication
+and merging are the user's next steps. Three malformed phone numbers and ambiguous
+real replies still need verified human information. See the rollout's newest section
+for the measured read-only diagnostic, synthetic tests, release status and
+efficiency boundaries.
+
+## Processor Board open-board tracking (2026-10-22; Edge v4 installed, CRM pending)
+
+No native Donut board/job-specific assessment was found; its technician-wide
+intelligence is not this flow. No extension source, prompt, manifest, metadata or
+ZIP changed. After explicit timezone confirmation, the CRM automatically reviews
+the loaded page (up to 25 jobs), pauses when hidden/closed and reuses five-minute
+freshness with retry backoff. A missing directory link can use one exact-number
+saved Technician Communications conversation; conflicting identity remains blocked.
+Active approval/customer/reschedule jobs can be checked for advisory evidence, never
+approved or mutated. Labels distinguish AI findings from saved status/schedule rules.
+The backend adds batched readiness metadata and reuses extraction when only another
+job's messages change, while rereading current history for silence timing.
+
+No new migration/type/grant/worker is needed. With explicit user approval, the
+changed function, including new `_shared/processor-chat.ts`, is **v4 ACTIVE** with
+JWT verification preserved; all eight files match and six non-mutating auth/runtime
+checks passed. Local gates passed: 950 unit tests, 21 browser tests, lint (28 existing
+warnings), typechecks and build. CRM publication and live-provider/real-job accuracy checks remain
+separate. Three malformed technician numbers need verified corrections. See the
+rollout's newest section for scope, resource comparisons and remaining checks.
+
+## Processor Board active-radar audit (2026-10-22; database/Edge installed)
+
+Existing CRM interface retained. New migration sorts newest appointments before
+pagination, excludes unassigned jobs before counts and keeps assigned dated
+unfinished statuses on radar; terminal jobs are history-only. Saved-status filters
+are page-local. Exact check date/time/timezone and explicit AI-used versus rule-only
+labels replace ambiguity without new polling/provider work. Missing target-job
+updates cannot regress saved progress/payment states. Approval workflows remain
+read-only; AI remains advisory and on demand. No NSS status/tag was found, so none
+was fabricated. See the newest `docs/PROCESSOR_BOARD_ROLLOUT.md` section for tests,
+efficiency review, diagnostics and rollback.
+
+Donut has no native board/job assessment counterpart; extension sources/release/ZIP
+unchanged. With explicit user approval, MCP installed the exact
+`20261022041621_processor_board_active_radar.sql` on `kxiqholnmhkwhdkhtopp`, recording
+`20261022044310 / processor_board_active_radar`. All 28 read-only production checks
+passed, the installed RPC body matches the file and the six-role lead visibility
+baseline is unchanged. Do not reapply or repair history. With additional explicit
+approval, MCP deployed `processor-board` **v3 ACTIVE** with JWT verification kept
+enabled. All seven source files match and six live non-mutating auth/runtime smoke
+checks passed. No secrets, ingestion settings, customer data or messages changed.
+CRM merge/Publish and signed-in/provider QA remain **separate pending release
+steps**. Existing grants, lead RLS, API signatures and generated types are unchanged.
+
 ## Processor Board reliability follow-up (2026-10-15; local only)
 
 CRM-only: compiled per-review job matching, shared UI/backend readiness checks,
@@ -53,6 +429,43 @@ approvals, schedules and job attribution rules remain intact. The changed
 approved deployment**; CRM publication and live-provider QA are separate steps.
 The installed migration/types are unchanged. See `docs/PROCESSOR_BOARD_ROLLOUT.md`
 for read-only findings, synthetic before/after measurements and verification.
+
+### Compact Processor Board view (2026-10-19; local only)
+
+The CRM board now follows the compact urgent-leads table pattern: one panel with
+inline refresh controls, page-local action-count chips, separate Service/Area
+columns, and technician identity grouped with the customer/job. Last-check time
+appears above each advisory status on desktop, mobile and the evidence drawer;
+stale/invalidated evidence and failed retries say Previous check. The header's
+latest check is explicitly scoped to the loaded page, not the whole queue. Exact
+totals, pagination, saved status, error recovery and the role gates are unchanged.
+
+No native Processor Board exists in Donut (confirmed by source search), so no
+extension source, manifest, metadata or ZIP changed. This is presentation-only:
+no SQL, RPC, function, generated-type or production change is needed. The earlier
+local backend reliability follow-up still requires its separately approved
+deployment; this UI change does not deploy it. See the rollout document for
+verification and efficiency boundaries.
+
+The subsequent Leads-style color/motion polish is also CRM-only: gradient/glass
+header and toolbar, tinted advisory chips, matching row/card accents, a single
+short page entrance and hover feedback. Text labels and selected-state rings are
+retained; reduced-motion mode disables board/drawer motion. Existing data reads,
+AI requests, check freshness, role gates and workflows are unchanged. No native
+Donut board was found; no extension source/release asset or backend schema/function
+changed. The scoped stylesheet, synthetic light/dark/mobile checks and resource
+comparison are recorded in `docs/PROCESSOR_BOARD_ROLLOUT.md`. This follow-up is
+local, not a claim of publication or backend deployment.
+
+The follow-up **Rows in view** selector defaults to five rows (10/15/25 optional),
+with internal desktop/mobile scrolling and sticky desktop headings. It changes
+viewport height only, not the existing 25-job page, exact totals, filtered matches
+or page-level AI scope. Later jobs remain reachable with keyboard scrolling and
+their evidence drawers; refresh preserves scroll while explicit scope changes
+reset it. Mobile height is capped to the screen. This is also CRM-only with no
+native Donut counterpart; no backend, schema, extension source/release asset,
+permission or schedule change is needed. See the rollout document's synthetic
+resource comparison and verification boundaries.
 
 ## Copilot feature/role catalogue audit (2026-10-15)
 
@@ -75,6 +488,13 @@ live v5. CRM publication/signed-in QA remain separate. This does not deploy the
 earlier local Processor Board reliability changes. See `docs/COPILOT_ROLLOUT.md`.
 
 ## Release verification checklist
+
+The 2026-10-17 access/attention patch is also CRM-only: explicit global-disable
+confirmation, unsaved-toggle guidance, visible individual Allow overrides,
+cross-tab invalidation/shorter access polling, and persistent Needs attention for
+authorized Admin/CS Admin callers. Existing RPC/RLS semantics and the newer live
+backend are unchanged. There is no Donut counterpart and no extension release is
+needed. See the latest entry in `docs/COPILOT_ROLLOUT.md` for verification limits.
 
 1. Test each changed flow on both surfaces and an excluded role.
 2. Run Vitest, changed-file lint, app typecheck and the production build.
@@ -258,3 +678,21 @@ Optional Google address confirmation in the urgent-review service is a separate
 flow; its latitude/longitude are not used for this free map. A Google key is not
 required for map coordinates or coverage previews. Review Google's content storage
 and attribution terms before enabling optional Google-derived address content.
+
+## 12-hour AM/PM times (2026-11-14; CRM publish, Copilot deploy and Donut v1.7.4 install pending)
+
+Every displayed or copied time uses a 12-hour clock with AM/PM, including browsers
+whose region defaults to 24-hour time.
+
+- CRM: saved times of day (`scheduled_time_start/end`, "15:00:00") go through
+  `formatClockTime` / `formatClockRange` (`src/lib/time-value.ts`): technician
+  reminder, hold alerts, update requests, activity-log changes and the leads CSV
+  export. Timestamps go through `formatDateTime` / `formatTimeOfDay`
+  (`src/lib/date-time-format.ts`), which keep the viewer's date order and force
+  `hour12: true`. Number formatting (`count.toLocaleString()`) is unchanged.
+- Copilot (`supabase/functions/_shared/copilot-handler.ts`): lead brief "Scheduled"
+  shows the start time as 12-hour. Needs Edge Function deployment.
+- Donut v1.7.4: captured-at time, release date and technician AI evidence times
+  pass `hour12: true`. Donut shows no scheduled times itself.
+- Not changed: the lead report download filename (`…_yyyyMMdd_HHmmss.csv`) stays
+  24-hour so files sort chronologically.

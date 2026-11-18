@@ -1,6 +1,8 @@
+import ScheduleRequirementPrompt from "@/components/leads/ScheduleRequirementPrompt";
 import { SidebarProvider, SidebarTrigger, SidebarInset } from "@/components/ui/sidebar";
 import AppSidebar from "@/components/layout/AppSidebar";
 import NotificationBell from "@/components/notifications/NotificationBell";
+import WorkflowAlerts from "@/components/notifications/WorkflowAlerts";
 import HoldJobPopup from "@/components/notifications/HoldJobPopup";
 import OperatorWorkflowSync from "@/components/notifications/OperatorWorkflowSync";
 import ExtensionUpdateStatus from "@/components/notifications/ExtensionUpdateStatus";
@@ -10,6 +12,7 @@ import { NotificationPopupProvider } from "@/components/notifications/popup-slot
 import JobInProgressPopup from "@/components/notifications/JobInProgressPopup";
 import QuoteUpdatedPopup from "@/components/notifications/QuoteUpdatedPopup";
 import CrmUpdatePopup from "@/components/notifications/CrmUpdatePopup";
+import SystemHealthPopup from "@/components/notifications/SystemHealthPopup";
 import ThemeToggle from "@/components/ThemeToggle";
 import { NotepadProvider, useNotepad } from "@/contexts/NotepadContext";
 import FloatingNotepad from "@/components/notepad/FloatingNotepad";
@@ -19,8 +22,6 @@ import { premiumEase, pageVariants } from "@/lib/motion";
 import { FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { GlobalCommandMenu } from "@/components/layout/GlobalCommandMenu";
-import CopilotProvider from "@/components/copilot/CopilotProvider";
-import CopilotLauncher from "@/components/copilot/CopilotLauncher";
 
 function HeaderNotepadTrigger() {
   const { toggleNotepad, activeUserIds, isPickerOpen } = useNotepad();
@@ -56,6 +57,7 @@ export default function AppLayout() {
     "/quote-pending": { title: "Quotes to send", subtitle: "Prioritize and complete customer quotations." },
     "/get-cx-update": { title: "Get CX Update", subtitle: "Request customer follow-ups and review returned CS updates." },
     "/get-tech-update": { title: "Get Tech Update", subtitle: "Request technician details and review Processor replies." },
+    "/notifications": { title: "Notifications", subtitle: "Your updates, pending actions, and notification history." },
     "/tech-approvals": { title: "Tech Approvals", subtitle: "Review processor requests to change technician Good Tech or active status." },
     "/lead-cancellation-requests": { title: "Cancellation Requests", subtitle: "Review cancellation reasons and approve or decline requests." },
     "/schedule": { title: "Schedule", subtitle: "Review jobs by day, week, and date range." },
@@ -77,7 +79,7 @@ export default function AppLayout() {
   const isQuoMonitor = location.pathname.startsWith("/quo-monitor") || location.pathname.startsWith("/quo-dashboard");
 
   return (
-    <CopilotProvider><NotepadProvider>
+    <NotepadProvider>
       <SidebarProvider>
         <GlobalCommandMenu />
         <OperatorWorkflowSync />
@@ -128,11 +130,10 @@ export default function AppLayout() {
                   </AnimatePresence>
                 </div>
                 <div className="flex items-center gap-2">
-                  <CopilotLauncher />
                   <ExtensionUpdateStatus />
                   <HeaderNotepadTrigger />
                   <ThemeToggle />
-                  {!isQuoMonitor && <NotificationBell />}
+                  <NotificationBell />
                 </div>
               </motion.div>
             </header>
@@ -151,16 +152,19 @@ export default function AppLayout() {
               </AnimatePresence>
             </main>
           <NotificationPopupProvider>
+            <WorkflowAlerts />
+            <ScheduleRequirementPrompt />
             <HoldJobPopup />
             {!isQuoMonitor && <UrgentLeadPopup />}
             {!isQuoMonitor && <JobInProgressPopup />}
             {!isQuoMonitor && <QuoteUpdatedPopup />}
             {!isQuoMonitor && <IncompleteDetailsPopup />}
             <CrmUpdatePopup />
+            <SystemHealthPopup />
           </NotificationPopupProvider>
           <FloatingNotepad />
         </SidebarInset>
       </SidebarProvider>
-    </NotepadProvider></CopilotProvider>
+    </NotepadProvider>
   );
 }

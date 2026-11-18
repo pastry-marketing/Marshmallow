@@ -40,6 +40,7 @@ import { showsUrgentCheck } from "@/lib/urgent-verification";
 import LeadUpdatesSection from "./LeadUpdatesSection";
 import PaymentDialog from "./PaymentDialog";
 import CopyLeadButton from "./CopyLeadButton";
+import CheckTemplateButton from "./CheckTemplateButton";
 import CompleteLeadCopyButton from "./CompleteLeadCopyButton";
 import CxUpdateRequestButton from "./CxUpdateRequestButton";
 import TechUpdateRequestButton from "./TechUpdateRequestButton";
@@ -66,8 +67,14 @@ import {
   reviewCancellationRequest,
 } from "@/lib/cancellation-requests";
 import { updateLeadById } from "@/lib/lead-updates";
-import { dispatchLeadStatusNotification } from "@/lib/lead-notifications";
 import { requestQuoteApproval } from "@/lib/quote-approval-requests";
+import QuoteBreakdownFields from "./QuoteBreakdownFields";
+import { hasMaterialCharge, termsAllowMaterials, termsRecordAmount, validateDiagnosticFee, validateLaborPercent, validateQuoteBreakdown, type QuoteFormValue } from "@/lib/quote-breakdown";
+import TechnicianShareFields from "./TechnicianShareFields";
+import { operatorQuoteFormValue } from "@/lib/operator-quote";
+import { createPaymentRequest, PAYMENT_REQUEST_TYPE_LABELS, type PaymentRequestType } from "@/lib/payment-requests";
+import { DateInput } from "@/components/ui/date-input";
+import { TimeInput } from "@/components/ui/time-input";
 
 interface Props {
   leadId: string;
@@ -75,7 +82,7 @@ interface Props {
   onUpdate: () => void;
 }
 
-type LeadFormState = Partial<Lead>;
+type LeadFormState = Partial<Lead> & { materials_included?: boolean };
 type TrackedLeadField =
   | "customer_name"
   | "customer_email"
@@ -104,6 +111,11 @@ type TrackedLeadField =
   | "material_amount"
   | "for_you_amount"
   | "for_us_amount"
+  | "diagnostic_fee_amount"
+  | "for_you_labor_percent"
+  | "for_us_labor_percent"
+  | "for_you_diagnostic_amount"
+  | "for_us_diagnostic_amount"
   | "amount";
 
 const SectionHeader = ({
@@ -175,6 +187,7 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
   const [saved, setSaved] = useState(false);
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [paymentLoading, setPaymentLoading] = useState(false);
+  const [paymentRequestType, setPaymentRequestType] = useState<PaymentRequestType>("paid");
   const [cancelRequestOpen, setCancelRequestOpen] = useState(false);
   const [cancelRequestLoading, setCancelRequestLoading] = useState(false);
   const [adminCancelOpen, setAdminCancelOpen] = useState(false);
@@ -228,9 +241,30 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
 
   useEffect(() => {
     if (lead) {
-      setForm(lead);
+      setForm({ ...lead, materials_included: hasMaterialCharge(lead.material_amount) });
     }
   }, [lead]);
+
+  // The copy buttons follow the terms and amounts currently selected in the form
+  // (as on the lead page), so switching Quote Terms switches the Copy Technician
+  // Message before saving. Amounts are trimmed the same way the save does.
+  const copyLead = useMemo(() => {
+    if (!lead || form.id !== lead.id) return lead;
+    const terms = (form.terms ?? null) as Lead["terms"];
+    return {
+      ...lead,
+      terms,
+      labor_amount: termsRecordAmount(terms) ? (form.labor_amount ?? null) : null,
+      material_amount: termsAllowMaterials(terms) && form.materials_included ? (form.material_amount ?? null) : null,
+      for_you_amount: form.for_you_amount ?? null,
+      for_us_amount: form.for_us_amount ?? null,
+      diagnostic_fee_amount: form.diagnostic_fee_amount ?? null,
+      for_you_labor_percent: form.for_you_labor_percent ?? null,
+      for_us_labor_percent: form.for_us_labor_percent ?? null,
+      for_you_diagnostic_amount: form.for_you_diagnostic_amount ?? null,
+      for_us_diagnostic_amount: form.for_us_diagnostic_amount ?? null,
+    } as Lead;
+  }, [lead, form.id, form.terms, form.labor_amount, form.material_amount, form.materials_included, form.for_you_amount, form.for_us_amount, form.diagnostic_fee_amount, form.for_you_labor_percent, form.for_us_labor_percent, form.for_you_diagnostic_amount, form.for_us_diagnostic_amount]);
 
   const { isDuplicate, duplicateLeadName } = useDuplicatePhoneCheck(form.customer_phone || "", leadId);
 
@@ -276,6 +310,11 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
       "material_amount",
       "for_you_amount",
       "for_us_amount",
+      "diagnostic_fee_amount",
+      "for_you_labor_percent",
+      "for_us_labor_percent",
+      "for_you_diagnostic_amount",
+      "for_us_diagnostic_amount",
       "amount",
     ];
 
@@ -299,7 +338,8 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
       toast.error("You do not have permission to set that status");
       return;
     }
-    if (key === "status" && value === "paid") {
+    if (key === "status" && (value === "paid" || value === "partial_paid")) {
+      setPaymentRequestType(value);
       setPaymentOpen(true);
       return;
     }
@@ -453,93 +493,101 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
     }
   };
 
-  const handlePaymentConfirm = async (amount: number, screenshotFile: File | null) => {
+  const handlePaymentConfirm = async (amount: number, screenshotFile: File | null, comment?: string) => {
+    if (!user || !lead || paymentLoading) return;
     setPaymentLoading(true);
-    const currentUserName = profile?.full_name || user?.email || "Unknown user";
-    let screenshotUrl: string | null = null;
-
-    if (screenshotFile) {
-      const optimizedScreenshot = await optimizeImageForUpload(screenshotFile);
-      const ext = optimizedScreenshot.name.split(".").pop();
-      const path = `payments/${leadId}_${Date.now()}.${ext}`;
-      const { error: uploadError } = await supabase.storage.from("lead-photos").upload(path, optimizedScreenshot);
-      if (!uploadError) {
+    try {
+      if (role === "processor") {
+        await createPaymentRequest({
+          lead,
+          userId: user.id,
+          userName: profile?.full_name || user.email || "Unknown user",
+          requesterRole: role,
+          requestType: paymentRequestType,
+          amount,
+          comment,
+          screenshotFile,
+        });
+        setForm((prev) => ({ ...prev, status: "payment_requested" }));
+        setPaymentOpen(false);
+        queryClient.invalidateQueries({ queryKey: ["lead", leadId] });
+        queryClient.invalidateQueries({ queryKey: ["leads"] });
+        onUpdate();
+        toast.success(`${PAYMENT_REQUEST_TYPE_LABELS[paymentRequestType]} request sent for Admin approval`);
+        return;
+      }
+      const currentUserName = profile?.full_name || user.email || "Unknown user";
+      let screenshotUrl: string | null = null;
+      if (screenshotFile) {
+        const optimizedScreenshot = await optimizeImageForUpload(screenshotFile);
+        const ext = optimizedScreenshot.name.split(".").pop();
+        const path = `payments/${leadId}_${Date.now()}.${ext}`;
+        const { error: uploadError } = await supabase.storage.from("lead-photos").upload(path, optimizedScreenshot);
+        if (uploadError) throw uploadError;
         screenshotUrl = path;
       }
-    }
 
-    setForm((prev) => ({
-      ...prev,
-      status: "paid" as LeadStatus,
-      amount,
-      payment_amount: amount,
-      payment_screenshot_url: screenshotUrl,
-    }));
-
-    let paymentQuery = supabase
-      .from("leads")
-      .update({
-        status: "paid",
+      await updateLeadById(leadId, {
+        status: paymentRequestType,
         amount,
         payment_amount: amount,
         payment_screenshot_url: screenshotUrl,
-        last_edited_by: user?.id,
+        cs_tag: null,
+        last_edited_by: user.id,
         last_edited_by_name: currentUserName,
         last_edited_at: new Date().toISOString(),
-      })
-      .eq("id", leadId);
-
-    if (role === "customer_service" && user) {
-      paymentQuery = paymentQuery.eq("created_by", user.id);
-    }
-
-    const { error } = await paymentQuery;
-
-    setPaymentLoading(false);
-    setPaymentOpen(false);
-
-    if (error) {
-      toast.error(error.message);
-    } else {
-      if (user && lead) {
-        await logActivity(user.id, "payment_recorded", "lead", leadId, {
-          target_name: lead.job_id,
-          customer_name: lead.customer_name,
-          job_id: lead.job_id,
-          amount,
-          status_from: lead.status,
-          status_to: "paid",
-          screenshot_uploaded: !!screenshotUrl,
-          changes: {
-            status: {
-              before: lead.status,
-              after: "paid",
-            },
-            payment_amount: {
-              before: lead.payment_amount ?? null,
-              after: amount,
-            },
-            payment_screenshot_url: {
-              before: lead.payment_screenshot_url ?? null,
-              after: screenshotUrl ?? null,
-            },
-            amount: {
-              before: lead.amount ?? null,
-              after: amount,
-            },
+      });
+      setPaymentOpen(false);
+      setForm((prev) => ({ ...prev, status: paymentRequestType, amount, payment_amount: amount, payment_screenshot_url: screenshotUrl }));
+      await logActivity(user.id, "payment_recorded", "lead", leadId, {
+        target_name: lead.job_id,
+        customer_name: lead.customer_name,
+        job_id: lead.job_id,
+        amount,
+        status_from: lead.status,
+        status_to: paymentRequestType,
+        screenshot_uploaded: !!screenshotUrl,
+        changes: {
+          status: {
+            before: lead.status,
+            after: paymentRequestType,
           },
-        });
-      }
+          payment_amount: {
+            before: lead.payment_amount ?? null,
+            after: amount,
+          },
+          payment_screenshot_url: {
+            before: lead.payment_screenshot_url ?? null,
+            after: screenshotUrl ?? null,
+          },
+          amount: {
+            before: lead.amount ?? null,
+            after: amount,
+          },
+        },
+      });
 
-      toast.success("Payment recorded");
+      toast.success(`Payment recorded & status updated to ${PAYMENT_REQUEST_TYPE_LABELS[paymentRequestType]}`);
       queryClient.invalidateQueries({ queryKey: ["lead", leadId] });
+      queryClient.invalidateQueries({ queryKey: ["leads"] });
       onUpdate();
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : "Failed to record payment");
+    } finally {
+      setPaymentLoading(false);
     }
   };
 
   const saveMutation = useMutation({
     mutationFn: async () => {
       if (!user) return;
+      const quoteError = validateQuoteBreakdown({ terms: form.terms || "", laborAmount: String(form.labor_amount ?? ""), materialAmount: String(form.material_amount ?? ""), includesMaterials: Boolean(form.materials_included) });
+      if (quoteError) throw new Error(quoteError);
+      const asText = (value: number | null | undefined) => (value == null ? "" : String(value));
+      const feeError = validateDiagnosticFee(asText(form.diagnostic_fee_amount))
+        || validateLaborPercent(asText(form.for_you_labor_percent)) || validateLaborPercent(asText(form.for_us_labor_percent))
+        || validateDiagnosticFee(asText(form.for_you_diagnostic_amount)) || validateDiagnosticFee(asText(form.for_us_diagnostic_amount));
+      if (feeError) throw new Error(feeError);
       if (isDuplicate) throw new Error(`Duplicate phone: ${duplicateLeadName}`);
       if (!form.status || !canChangeStatus(role, form.status as LeadStatus)) {
         throw new Error("You do not have permission to set that status");
@@ -603,11 +651,17 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
         reference_name: form.reference_name,
         tech_name: role !== "customer_service" && role !== "cs_admin" ? form.tech_name : lead?.tech_name,
         tech_number: role !== "customer_service" && role !== "cs_admin" ? form.tech_number : lead?.tech_number,
-        terms: role !== "customer_service" && role !== "cs_admin" ? form.terms : lead?.terms,
-        labor_amount: role !== "customer_service" && role !== "cs_admin" ? form.labor_amount : lead?.labor_amount,
-        material_amount: role !== "customer_service" && role !== "cs_admin" ? form.material_amount : lead?.material_amount,
+        terms: form.terms,
+        labor_amount: termsRecordAmount(form.terms) ? form.labor_amount : null,
+        material_amount: termsAllowMaterials(form.terms) && form.materials_included ? form.material_amount : null,
         for_you_amount: role !== "customer_service" && role !== "cs_admin" ? form.for_you_amount : lead?.for_you_amount,
         for_us_amount: role !== "customer_service" && role !== "cs_admin" ? form.for_us_amount : lead?.for_us_amount,
+        // Beside For You / For Us, with the same role gate (2026-11-16).
+        diagnostic_fee_amount: role !== "customer_service" && role !== "cs_admin" ? (form.diagnostic_fee_amount ?? null) : (lead?.diagnostic_fee_amount ?? null),
+        for_you_labor_percent: role !== "customer_service" && role !== "cs_admin" ? (form.for_you_labor_percent ?? null) : (lead?.for_you_labor_percent ?? null),
+        for_us_labor_percent: role !== "customer_service" && role !== "cs_admin" ? (form.for_us_labor_percent ?? null) : (lead?.for_us_labor_percent ?? null),
+        for_you_diagnostic_amount: role !== "customer_service" && role !== "cs_admin" ? (form.for_you_diagnostic_amount ?? null) : (lead?.for_you_diagnostic_amount ?? null),
+        for_us_diagnostic_amount: role !== "customer_service" && role !== "cs_admin" ? (form.for_us_diagnostic_amount ?? null) : (lead?.for_us_diagnostic_amount ?? null),
       };
 
       if (form.status === "paid") {
@@ -647,26 +701,8 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
         await requestQuoteApproval({ lead, requesterId: user.id });
       }
 
-      if (
-        (lead?.status !== savedStatus && (savedStatus === "urgent_job" || savedStatus === "need_tech" || savedStatus === "job_in_progress")) ||
-        (savedStatus === "job_in_progress" && lead?.expected_completion_date !== form.expected_completion_date && form.expected_completion_date)
-      ) {
-        await dispatchLeadStatusNotification({
-          leadId,
-          leadName: form.customer_name,
-          status: savedStatus,
-          expectedCompletionDate: form.expected_completion_date,
-        });
-      }
-
-      if (lead?.status !== savedStatus && savedStatus === "quote_updated") {
-        await dispatchLeadStatusNotification({
-          leadId,
-          leadName: form.customer_name,
-          status: savedStatus,
-          quoteRequestedBy: lead?.quote_requested_by,
-        });
-      }
+      // Status alerts (Urgent Job, Need Tech, Job in Progress, Quote Updated) are
+      // sent by the database when the lead is saved (leads_notify_change).
 
       if (Object.keys(changes).length > 0) {
         await logActivity(user.id, "updated", "lead", leadId, {
@@ -709,6 +745,9 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
   const isProcessor = role === "processor";
   const isOpr = isOperatorRole(role);
   const isAdmin = role === "admin";
+  // A plain Operator sees half the labor and parts/materials only (operator-quote.ts).
+  const formQuote: QuoteFormValue = { terms: form.terms || "", laborAmount: String(form.labor_amount ?? ""), materialAmount: String(form.material_amount ?? ""), includesMaterials: Boolean(form.materials_included) };
+  const quoteSection = role === "opr" ? operatorQuoteFormValue(formQuote, lead?.show_quote_to_opr) : formQuote;
   const isCsAdmin = role === "cs_admin";
   const hasQuickChatAccess = canAccess("quick_chat");
   const hasTechQuickChatAccess = canAccess("tech_quick_chat");
@@ -811,6 +850,7 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
                   <QuoPhoneTrigger
                     contactName={lead.customer_name}
                     phone={lead.customer_phone}
+                    showLastMessageTime
                     chatType="customer"
                     className="inline-flex items-center gap-1.5 rounded-xl border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/20 transition-all no-underline shadow-sm"
                   >
@@ -822,6 +862,7 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
                   <QuoPhoneTrigger
                     contactName={lead.tech_name || "Technician"}
                     phone={lead.tech_number}
+                    showLastMessageTime
                     chatType="tech"
                     className="inline-flex items-center gap-1.5 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-700 dark:text-amber-300 hover:bg-amber-500/20 transition-all no-underline shadow-sm"
                   >
@@ -829,8 +870,9 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
                     <span>Tech Quick Chat</span>
                   </QuoPhoneTrigger>
                 )}
-                <CopyLeadButton lead={lead} />
-                <CompleteLeadCopyButton lead={lead} />
+                <CopyLeadButton lead={copyLead ?? lead} />
+                <CheckTemplateButton lead={lead} />
+                <CompleteLeadCopyButton lead={copyLead ?? lead} />
                 <CxUpdateRequestButton leadId={lead.id} customerName={lead.customer_name} />
                 <TechUpdateRequestButton leadId={lead.id} customerName={lead.customer_name} />
 
@@ -1074,6 +1116,8 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
             </div>
           </motion.div>
 
+          {quoteSection && <QuoteBreakdownFields readOnly={isOpr} value={quoteSection} onChange={(value) => setForm((previous) => ({ ...previous, terms: value.terms || null, labor_amount: parseAmountInput(value.laborAmount), material_amount: parseAmountInput(value.materialAmount), materials_included: value.includesMaterials }))} />}
+
           {!hideProcessorDetails && (
             <motion.div
               initial={{ opacity: 0, y: 10 }}
@@ -1116,66 +1160,25 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
                   )}
                 </div>
 
-                <div className="col-span-2 space-y-1.5">
-                  <Label className={labelClass}>Terms</Label>
-                  <Select value={form.terms ?? ""} onValueChange={(v) => update("terms", v as "free_estimate" | "quoted")}>
-                    <SelectTrigger className={fieldClass}>
-                      <SelectValue placeholder="Select terms..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="free_estimate">Free Estimate Visit</SelectItem>
-                      <SelectItem value="quoted">Quoted</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
 
-                {form.terms === "quoted" && (
-                  <>
-                    <div className="space-y-1.5">
-                      <Label className={labelClass}>Customer Labor ($)</Label>
-                      <Input
-                        type="number"
-                        step="0.01"
-                        value={form.labor_amount ?? ""}
-                        onChange={(e) => update("labor_amount", parseAmountInput(e.target.value))}
-                        className={fieldClass}
-                      />
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <Label className={labelClass}>Materials ($)</Label>
-                      <Input
-                        type="number"
-                        step="0.01"
-                        value={form.material_amount ?? ""}
-                        onChange={(e) => update("material_amount", parseAmountInput(e.target.value))}
-                        className={fieldClass}
-                      />
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <Label className={labelClass}>For You ($)</Label>
-                      <Input
-                        type="number"
-                        step="0.01"
-                        value={form.for_you_amount ?? ""}
-                        onChange={(e) => update("for_you_amount", parseAmountInput(e.target.value))}
-                        className={fieldClass}
-                      />
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <Label className={labelClass}>For Us ($)</Label>
-                      <Input
-                        type="number"
-                        step="0.01"
-                        value={form.for_us_amount ?? ""}
-                        onChange={(e) => update("for_us_amount", parseAmountInput(e.target.value))}
-                        className={fieldClass}
-                      />
-                    </div>
-                  </>
-                )}
+                {/* Internal Technician Share by terms (owner formats 2026-11-16). */}
+                <TechnicianShareFields
+                  idPrefix="panel"
+                  terms={form.terms}
+                  materialsIncluded={Boolean(form.materials_included)}
+                  values={{
+                    for_you_amount: form.for_you_amount == null ? "" : String(form.for_you_amount),
+                    for_us_amount: form.for_us_amount == null ? "" : String(form.for_us_amount),
+                    for_you_labor_percent: form.for_you_labor_percent == null ? "" : String(form.for_you_labor_percent),
+                    for_us_labor_percent: form.for_us_labor_percent == null ? "" : String(form.for_us_labor_percent),
+                    diagnostic_fee_amount: form.diagnostic_fee_amount == null ? "" : String(form.diagnostic_fee_amount),
+                    for_you_diagnostic_amount: form.for_you_diagnostic_amount == null ? "" : String(form.for_you_diagnostic_amount),
+                    for_us_diagnostic_amount: form.for_us_diagnostic_amount == null ? "" : String(form.for_us_diagnostic_amount),
+                  }}
+                  onChange={(field, value) => update(field, parseAmountInput(value))}
+                  labelClassName={labelClass}
+                  inputClassName={fieldClass}
+                />
               </div>
             </motion.div>
           )}
@@ -1211,30 +1214,30 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
             <div className="grid grid-cols-3 gap-4">
               <div className="space-y-1.5">
                 <Label className={labelClass}>Date</Label>
-                <Input
-                  type="date"
+                <DateInput
+                  aria-label="Date"
                   value={form.scheduled_date ?? ""}
-                  onChange={(e) => update("scheduled_date", e.target.value)}
+                  onChange={(value) => update("scheduled_date", value)}
                   className={fieldClass}
                 />
               </div>
 
               <div className="space-y-1.5">
                 <Label className={labelClass}>Start Time</Label>
-                <Input
-                  type="time"
+                <TimeInput
+                  aria-label="Start Time"
                   value={form.scheduled_time_start ?? ""}
-                  onChange={(e) => update("scheduled_time_start", e.target.value)}
+                  onChange={(value) => update("scheduled_time_start", value)}
                   className={fieldClass}
                 />
               </div>
 
               <div className="space-y-1.5">
                 <Label className={labelClass}>End Time</Label>
-                <Input
-                  type="time"
+                <TimeInput
+                  aria-label="End Time"
                   value={form.scheduled_time_end ?? ""}
-                  onChange={(e) => update("scheduled_time_end", e.target.value)}
+                  onChange={(value) => update("scheduled_time_end", value)}
                   className={fieldClass}
                 />
               </div>
@@ -1260,10 +1263,10 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
                     </span>
                   )}
                 </div>
-                <Input
-                  type="date"
+                <DateInput
+                  aria-label="Expected Job Completion Date"
                   value={form.expected_completion_date ?? ""}
-                  onChange={(e) => update("expected_completion_date", e.target.value)}
+                  onChange={(value) => update("expected_completion_date", value)}
                   className={fieldClass}
                 />
                 {(role === "admin" || role === "processor") && (jobCompletionState === "overdue" || jobCompletionState === "due_today") && (
@@ -1377,6 +1380,7 @@ const LeadDetailPanel = ({ leadId, onClose, onUpdate }: Props) => {
           onConfirm={handlePaymentConfirm}
           loading={paymentLoading}
           mode={isProcessor ? "request" : "direct"}
+          requestType={paymentRequestType}
         />
 
         <CancellationRequestSheet

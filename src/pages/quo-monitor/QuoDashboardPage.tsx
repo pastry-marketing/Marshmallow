@@ -81,6 +81,12 @@ import QuoNumberDisplayDialog from "@/components/quo-dashboard/QuoNumberDisplayD
 import QuoChatDialog from "@/components/quo-dashboard/QuoChatDialog";
 import ManageNumbersModal from "@/components/quo-dashboard/ManageNumbersModal";
 import RenderEmoji from "@/components/common/RenderEmoji";
+import { DateInput } from "@/components/ui/date-input";
+import { backgroundInterval } from "@/lib/overload-guard";
+import { createTrailingThrottle } from "@/lib/coalesced-refresh";
+
+/** At most one conversation-list refresh per window while webhook changes stream in. */
+const QUO_DASHBOARD_REALTIME_REFRESH_MS = 3000;
 
 
 interface QuoPhoneNumber {
@@ -347,25 +353,31 @@ export default function QuoDashboardPage() {
         return { data: [], count: 0 };
       }
     },
-    refetchInterval: 60000,
+    refetchInterval: backgroundInterval(60000),
   });
 
   const rawConversations = queryData.data;
   const totalCount = queryData.count;
 
   useEffect(() => {
+    // Webhook traffic updates quo_conversations thousands of times a day. Each
+    // change used to re-run the paginated exact-count list in every open
+    // dashboard; a burst now costs one refresh per window, and a change that
+    // arrives after a refresh still gets its own (nothing is dropped).
+    const refresh = createTrailingThrottle(() => {
+      void queryClient.invalidateQueries({ queryKey: ["quo-dashboard-conversations"] });
+    }, QUO_DASHBOARD_REALTIME_REFRESH_MS);
     const channel = supabase
       .channel("quo-dashboard-conversations-realtime")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "quo_conversations" },
-        () => {
-          queryClient.invalidateQueries({ queryKey: ["quo-dashboard-conversations"] });
-        }
+        refresh.request,
       )
       .subscribe();
 
     return () => {
+      refresh.dispose();
       void supabase.removeChannel(channel);
     };
   }, [queryClient]);
@@ -831,26 +843,26 @@ export default function QuoDashboardPage() {
                   <div className="space-y-1.5">
                     <div>
                       <Label className="text-[10px] text-muted-foreground">Start Date</Label>
-                      <Input
-                        type="date"
+                      <DateInput
+                        aria-label="Start Date"
                         value={startDate}
-                        onChange={(e) => {
-                          setStartDate(e.target.value);
+                        onChange={(value) => {
+                          setStartDate(value);
                           setDatePreset("custom");
                         }}
-                        className="h-8 text-xs"
+                        className="h-8 px-3 text-xs"
                       />
                     </div>
                     <div>
                       <Label className="text-[10px] text-muted-foreground">End Date</Label>
-                      <Input
-                        type="date"
+                      <DateInput
+                        aria-label="End Date"
                         value={endDate}
-                        onChange={(e) => {
-                          setEndDate(e.target.value);
+                        onChange={(value) => {
+                          setEndDate(value);
                           setDatePreset("custom");
                         }}
-                        className="h-8 text-xs"
+                        className="h-8 px-3 text-xs"
                       />
                     </div>
                   </div>

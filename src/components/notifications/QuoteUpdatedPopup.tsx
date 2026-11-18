@@ -6,7 +6,9 @@ import { motion, AnimatePresence } from "framer-motion";
 import { FileCheck, X, ArrowUpRight } from "lucide-react";
 import { useNotificationPopupSlot } from "./popup-slot";
 import { subscribeToNotifications } from "@/lib/realtime";
-import { useCoalescedRefresh } from "@/hooks/useCoalescedRefresh";
+import { useSharedRefresh } from "@/hooks/useCrossTab";
+import { isAlertOfKind, readActiveAlerts } from "@/lib/active-alerts";
+import { useRealtimeAwareInterval, useRealtimeReconnect } from "@/lib/realtime-health";
 
 interface QuoteUpdatedNotification {
   id: string;
@@ -58,7 +60,6 @@ export default function QuoteUpdatedPopup() {
   const { user, role, fullyAuthenticated } = useAuth();
   const navigate = useNavigate();
   const [items, setItems] = useState<QuoteUpdatedNotification[]>([]);
-  const baselineRef = useRef<string | null>(null);
   const seenIds = useRef<Set<string>>(new Set());
   // Ids dismissed locally but whose `read` write may not have landed yet — without this a poll
   // in that window refetches them as unread and the card the user just dismissed comes back.
@@ -70,24 +71,20 @@ export default function QuoteUpdatedPopup() {
     Boolean(user) &&
     fullyAuthenticated;
 
-  const loadUpdated = useCallback(async (isCurrent: () => boolean) => {
-    if (!user || !isEligible) return;
+  // The cutoff lives in this tab's session, so it is part of the shared key:
+  // only tabs with the same cutoff share one read (and one polling timer).
+  const userId = user?.id;
+  const baseline = useMemo(() => (userId && isEligible ? getOrInitBaseline(userId) : null), [userId, isEligible]);
+  const sharedKey = userId && baseline ? `notifications:quote-updated:${userId}:${baseline}` : null;
+  const readUpdated = useCallback(async () => {
+    if (!user || !baseline) return [];
+    const rows = await readActiveAlerts(user.id, user.created_at, "quote_updated");
+    // Only alerts newer than this session's start (unchanged behaviour).
+    return rows.filter((row) => Date.parse(row.created_at) > Date.parse(baseline)) as QuoteUpdatedNotification[];
+  }, [user, baseline]);
 
-    if (!baselineRef.current) baselineRef.current = getOrInitBaseline(user.id);
-
-    const { data } = await supabase
-      .from("notifications")
-      .select("id, title, message, lead_id, created_at")
-      .eq("user_id", user.id)
-      .eq("read", false)
-      .ilike("title", "%Quote Updated%")
-      .gt("created_at", baselineRef.current)
-      .order("created_at", { ascending: false })
-      .limit(FETCH_LIMIT);
-
-    if (!data || !isCurrent()) return;
-
-    const rows = (data as QuoteUpdatedNotification[]).filter((n) => !dismissedIds.current.has(n.id));
+  const applyUpdated = useCallback((data: QuoteUpdatedNotification[], isCurrent: () => boolean) => {
+    const rows = data.filter((n) => !dismissedIds.current.has(n.id));
     const hasNew = rows.some((n) => !seenIds.current.has(n.id));
     rows.forEach((n) => seenIds.current.add(n.id));
 
@@ -98,24 +95,31 @@ export default function QuoteUpdatedPopup() {
     }
 
     setItems(rows);
-  }, [user, isEligible]);
-  const fetchUpdated = useCoalescedRefresh(loadUpdated);
+  }, []);
+  const { refresh: fetchUpdated, isOwner } = useSharedRefresh(sharedKey, readUpdated, applyUpdated);
+  // Realtime delivers these alerts; the poll is a safety net (rare while realtime is
+  // healthy, every POLL_MS when not) plus one catch-up read when realtime recovers.
+  const pollMs = useRealtimeAwareInterval(POLL_MS);
+  useRealtimeReconnect(() => { void fetchUpdated(); }, isEligible && isOwner);
 
-  // Polling
+  // Polling: one tab per browser runs the timer.
   useEffect(() => {
     if (!isEligible) return;
     void fetchUpdated();
-    const interval = setInterval(fetchUpdated, POLL_MS);
-    return () => clearInterval(interval);
   }, [fetchUpdated, isEligible]);
+
+  useEffect(() => {
+    if (!isEligible || !isOwner) return;
+    const interval = setInterval(fetchUpdated, pollMs);
+    return () => clearInterval(interval);
+  }, [fetchUpdated, isEligible, isOwner, pollMs]);
 
   // Realtime — fire immediately when notification is inserted
   useEffect(() => {
     if (!user || !isEligible) return;
 
     return subscribeToNotifications(user.id, (payload) => {
-      const row = payload.new as { title?: string };
-      if (payload.eventType === "INSERT" && row.title?.toLowerCase().includes("quote updated")) {
+      if (payload.eventType === "INSERT" && isAlertOfKind(payload.new as { kind?: string; title?: string }, "quote_updated")) {
         void fetchUpdated();
       }
     });

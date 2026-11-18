@@ -1,123 +1,262 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ProcessorBoardPage from "./ProcessorBoardPage";
-import { ProcessorReviewFailure, type ProcessorJob } from "@/lib/processor-board";
-const state = vi.hoisted(() => ({ role: "processor", assess: vi.fn(), hook: vi.fn(), refetch: vi.fn() }));
-vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => ({ user: { id: "actor" }, role: state.role }) }));
-vi.mock("@/hooks/useProcessorBoard", () => ({ PROCESSOR_QUERY_KEY: ["processor-board"], useProcessorBoard: state.hook }));
+import { ProcessorReviewFailure, type ProcessorJob, type ProcessorQueue } from "@/lib/processor-board";
+
+const state = vi.hoisted(() => ({ role: "processor", canTechChat: true, chat: vi.fn(), assess: vi.fn(), detail: vi.fn(), hook: vi.fn(), refetch: vi.fn(), filters: [] as unknown[] }));
+vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => ({ user: { id: "actor" }, role: state.role, canAccess: () => state.canTechChat }) }));
+vi.mock("@/lib/quo-chat", () => ({ fetchQuoChatThread: state.chat, sendQuoChatMessage: vi.fn() }));
+vi.mock("@/hooks/useProcessorBoard", () => ({
+  PROCESSOR_QUERY_KEY: ["processor-board"],
+  useProcessorBoard: (filters: unknown) => { state.filters.push(filters); return state.hook(filters); },
+  useProcessorDetail: (job: { id: string } | null) => state.detail(job),
+}));
 vi.mock("@/lib/processor-board", async (load) => ({ ...await load<object>(), assessProcessorJob: state.assess }));
-const job: ProcessorJob = { id: "00000000-0000-4000-8000-000000000001", job_id: "JOB-1001", customer_name: "John Sample", customer_phone: null, address: "10 Sample St", city: "Miami", state: "FL", service_type: "Repair", tech_name: "Alex", tech_number: "4155550199", scheduled_date: "2026-01-01", scheduled_time_start: "10:00:00", scheduled_time_end: "12:00:00", customer_schedule_requirements: "Afternoons only", terms: "Quoted", status: "scheduled", updated_at: "2026-01-01T00:00:00Z", checked_at: null, assessment: null };
-function mount() { return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><MemoryRouter><ProcessorBoardPage /></MemoryRouter></QueryClientProvider>); }
+
+const chat = { state: "ready" as const, code: "ready", message: "Verified", fingerprint: "fp", conversation_id: "00000000-0000-4000-8000-0000000000c1", last_message_at: "2026-10-20T10:00:00Z", source: "saved_link" as const };
+const facts = (overrides: Record<string, unknown> = {}) => ({ policy: 10, tech_phone: "4155550199", enough_context: true, tech_took_job: true, job_update: "none", waiting_since: null, waiting_message_id: null, summary: "Technician accepted the job and has not updated it yet.",
+  evidence: [{ signal: "took_job", quote: "Ok I'll take it", message_id: "m2", message_time: "2026-10-08T14:05:00Z", from: "technician", via: "text" }],
+  window: { start: "2026-10-08T14:00:00Z", anchor: "customer_mention", anchor_message_id: "m1", messages: 12, omitted: 0 }, call_transcripts: { state: "available", checked: 1, missing: 0, skipped_segments: 0 },
+  source: "Quo current history", history_complete: true, ai_used: true, ai_reused: false, checked_at: "2026-10-20T10:05:00Z", lead_updated_at: "2026-10-15T10:00:00Z", status: "take_job_update", ...overrides });
+const summary = { policy: 10, tech_phone: "4155550199", job_update: "none", tech_took_job: true, enough_context: true };
+const job: ProcessorJob = { id: "00000000-0000-4000-8000-000000000001", job_id: "LD-1001", customer_name: "Shanice Walker", customer_phone: null, address: "12 Peach St", city: "Atlanta", state: "GA", service_type: "Furniture Assembly", tech_name: "Alex Tech", tech_number: "4155550199", scheduled_date: "2026-01-01", scheduled_time_start: "10:00:00", scheduled_time_end: "12:00:00", customer_schedule_requirements: "Afternoons only", terms: "quoted", status: "scheduled", updated_at: "2026-10-15T10:00:00Z", created_at: "2026-10-08T15:00:00Z",
+  board_status: "take_job_update", ai_stale: false, ai_summary: summary, checked_at: "2026-10-20T10:05:00Z", chat_setup: chat };
+const future: ProcessorJob = { ...job, id: "00000000-0000-4000-8000-000000000002", job_id: "LD-1002", customer_name: "Jeff Moore", scheduled_date: "2099-01-01", board_status: "upcoming", ai_summary: null, checked_at: null, created_at: "2026-10-20T15:00:00Z" };
+const queue = (rows: ProcessorJob[], extra: Partial<ProcessorQueue> = {}) =>
+  ({ data: { rows, total: rows.length, all_total: 40, counts: { take_job_update: 7, job_in_progress: 5, payment_pending: 6, send_dose: 2, wrong_tech_number: 4, not_enough_details: 3, upcoming: 13 }, observed_at: "2026-10-20T18:00:00Z", timezone: "America/New_York", monitoring: { ai_configured: true, current_history_configured: true, evidence_policy: 10 }, ...extra }, isLoading: false, isFetching: false, isError: false, refetch: state.refetch });
+function mount() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return { ...render(<QueryClientProvider client={client}><MemoryRouter><ProcessorBoardPage /></MemoryRouter></QueryClientProvider>), client };
+}
+const rowFor = (jobId: string) => screen.getAllByRole("row").find((row) => row.textContent?.includes(jobId))!;
 beforeEach(() => {
-  vi.clearAllMocks(); state.role = "processor";
-  state.assess.mockResolvedValue({ result: {} });
-  state.hook.mockReturnValue({ data: { rows: [job, { ...job, id: "00000000-0000-4000-8000-000000000002", job_id: "JOB-1002", customer_name: "Jane Example", status: "paid" }], total: 26, observed_at: "2026-10-15T18:00:00Z" }, isLoading: false, isFetching: false, isError: false, refetch: state.refetch });
+  sessionStorage.clear();
+  vi.clearAllMocks(); state.role = "processor"; state.canTechChat = true; state.filters = [];
+  state.chat.mockResolvedValue({ phoneNumber: { id: "PN12345678", number: "+17475887812", formattedNumber: "+17475887812", name: "Technician Communications" }, conversation: null, messages: [] });
+  state.assess.mockResolvedValue({ result: facts({ checked_at: new Date().toISOString() }), cached: false });
+  state.detail.mockReturnValue({ data: facts(), isLoading: false, isError: false });
+  state.hook.mockReturnValue(queue([future, job]));
 });
-afterEach(cleanup);
-describe("Processor Board interactions", () => {
-  it("shows technician identity and schedule, and opens this job's evidence instead of another job", () => {
-    mount(); expect(screen.getAllByText("4155550199").length).toBeGreaterThan(0);
-    fireEvent.click(screen.getAllByRole("button", { name: "Review JOB-1001" })[0]);
-    const dialog = screen.getByRole("dialog"); expect(dialog).toHaveTextContent("John Sample"); expect(dialog).not.toHaveTextContent("Jane Example");
-    expect(dialog).toHaveTextContent("Afternoons only"); expect(dialog).toHaveTextContent("not a completed AI review");
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+describe("Processor Board", () => {
+  it("shows lead, technician, service, terms, schedule, AI status and actions in each row", () => {
+    mount();
+    const row = rowFor("LD-1001");
+    for (const text of ["Shanice Walker", "#LD-1001", "Alex Tech", "4155550199", "Furniture Assembly", "Quoted", "Jan 1", "10:00 AM – 12:00 PM", "Take Job Update", "Checked"]) expect(row).toHaveTextContent(text);
+    expect(within(row).getByRole("button", { name: "Tech chat for LD-1001" })).toBeEnabled();
+    expect(within(row).getByRole("button", { name: "Review LD-1001" })).toHaveAttribute("aria-expanded", "false");
+    expect(within(row).getByRole("link", { name: "Open lead LD-1001" })).toHaveAttribute("href", `/leads/${job.id}`);
+    expect(screen.getByLabelText("Jobs on the board")).toHaveTextContent("40");
   });
-  it("retains the job and reports a failed review without fake completion", async () => {
-    state.assess.mockRejectedValue(new Error("Synthetic provider unavailable")); mount();
-    fireEvent.click(screen.getAllByRole("button", { name: "Review JOB-1001" })[0]);
-    fireEvent.click(screen.getByRole("button", { name: "Check this job" }));
-    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Synthetic provider unavailable"));
-    expect(screen.getByRole("dialog")).toHaveTextContent("Saved lead status: Scheduled");
-    expect(state.assess).toHaveBeenCalledExactlyOnceWith(job.id, "America/New_York");
+  it("shows each lead's current saved status in its own column", () => {
+    state.hook.mockReturnValue(queue([{ ...future, status: "payment_requested" }, job, { ...job, id: "00000000-0000-4000-8000-000000000003", job_id: "LD-1003", status: "legacy_custom" }]));
+    mount();
+    expect(screen.getByRole("columnheader", { name: "Lead Status" })).toBeInTheDocument();
+    const statusCell = (jobId: string) => within(rowFor(jobId)).getAllByRole("cell")[5];
+    expect(statusCell("LD-1001")).toHaveTextContent("Scheduled");
+    expect(statusCell("LD-1002")).toHaveTextContent("Paid Approval Pending");
+    // A status the CRM has no label for is shown as saved, not hidden.
+    expect(statusCell("LD-1003")).toHaveTextContent("legacy custom");
   });
-  it("bulk checks only eligible jobs and guards repeated clicks", async () => {
-    let resolve!: () => void;
-    state.assess.mockImplementation(() => new Promise((done) => { resolve = () => done({ result: {} }); })); mount();
-    const button = screen.getByRole("button", { name: "Refresh AI · this page" });
-    fireEvent.click(button); fireEvent.click(button);
-    expect(state.assess).toHaveBeenCalledTimes(1); resolve();
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("No lead statuses or messages were changed"));
-  });
-  it("keeps failed-review page filters consistent with the displayed status counts", async () => {
-    state.assess.mockRejectedValue(new Error("Synthetic provider unavailable")); mount();
-    const actionCard = screen.getByRole("button", { name: /Take Job Update/ });
-    fireEvent.click(actionCard);
-    fireEvent.click(screen.getAllByRole("button", { name: "Review JOB-1001" })[0]);
-    fireEvent.click(screen.getByRole("button", { name: "Check this job" }));
-    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Synthetic provider unavailable"));
-    expect(screen.queryAllByLabelText("Review JOB-1001")).toHaveLength(0);
-    expect(actionCard).toHaveTextContent("0");
-    expect(screen.getByRole("dialog")).toHaveTextContent("Unavailable");
-  });
-  it("searches with debounce, changes page on action, and exposes recovery on load failure", async () => {
-    mount(); fireEvent.change(screen.getByRole("textbox", { name: "Search jobs or technicians" }), { target: { value: "John" } });
-    await waitFor(() => expect(state.hook).toHaveBeenLastCalledWith(expect.objectContaining({ search: "John", offset: 0 })));
-    fireEvent.click(screen.getByRole("button", { name: "Next page" }));
-    expect(state.hook).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 25 }));
-  });
-  it("keeps incomplete jobs visible with a repair action and skips their AI requests", async () => {
-    const incomplete = { ...job, id: "00000000-0000-4000-8000-000000000003", job_id: "JOB-MISSING", tech_number: null, scheduled_date: null };
-    state.hook.mockReturnValue({ data: { rows: [incomplete, job], total: 2 }, refetch: state.refetch }); mount();
-    expect(screen.getAllByText(/Save a valid technician number/).length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole("button", { name: "Refresh AI · this page" }));
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("1 reviewed · 0 failed · 1 skipped"));
-    expect(state.assess).toHaveBeenCalledExactlyOnceWith(job.id, "America/New_York");
-    fireEvent.change(screen.getByLabelText("Filter this page"), { target: { value: "setup" } });
-    expect(screen.queryAllByLabelText("Review JOB-1001")).toHaveLength(0);
-    fireEvent.click(screen.getAllByLabelText("Review JOB-MISSING")[0]);
-    expect(screen.getByRole("button", { name: "Check this job" })).toBeDisabled();
-    expect(screen.getByRole("link", { name: /Open saved lead/ })).toHaveAttribute("href", `/leads/${incomplete.id}`);
-  });
-  it("retries failed jobs only, leaving successful jobs and setup problems untouched", async () => {
-    const second = { ...job, id: "00000000-0000-4000-8000-000000000003", job_id: "JOB-1003" };
-    state.hook.mockReturnValue({ data: { rows: [job, second], total: 2 }, refetch: state.refetch });
-    state.assess.mockResolvedValueOnce({ result: {} }).mockRejectedValueOnce(new ProcessorReviewFailure("Synthetic Quo timeout")); mount();
-    fireEvent.click(screen.getByRole("button", { name: "Refresh AI · this page" }));
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("1 reviewed · 1 failed"));
-    expect(screen.getAllByText("Synthetic Quo timeout").length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole("button", { name: "Retry failed · 1" }));
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("1 reviewed · 0 failed"));
-    expect(state.assess.mock.calls.map(([id]) => id)).toEqual([job.id, second.id, second.id]);
-    expect(screen.queryByRole("button", { name: /Retry failed/ })).not.toBeInTheDocument();
-  });
-  it("does not advertise a batch retry for errors needing configuration changes", async () => {
-    state.assess.mockRejectedValue(new ProcessorReviewFailure("Verify saved technician chat", false, "chat_setup")); mount();
-    fireEvent.click(screen.getByRole("button", { name: "Refresh AI · this page" }));
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("1 failed"));
-    expect(screen.queryByRole("button", { name: /Retry failed/ })).not.toBeInTheDocument();
-    expect(screen.getAllByText("Verify saved technician chat").length).toBeGreaterThan(0);
-  });
-  it("skips fresh evidence during page refresh while permitting an explicit single-job recheck", async () => {
-    const reviewed = { ...job, checked_at: new Date().toISOString(), assessment: { status: "payment_pending", evidence: [], timezone: "America/New_York", checked_at: new Date().toISOString(), lead_updated_at: job.updated_at } };
-    state.hook.mockReturnValue({ data: { rows: [reviewed], total: 1 }, refetch: state.refetch }); mount();
-    fireEvent.click(screen.getByRole("button", { name: "Refresh AI · this page" }));
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("0 reviewed · 0 failed · 1 skipped"));
+  it("never runs AI just because the board was opened, even for unchecked or changed jobs", async () => {
+    state.hook.mockReturnValue(queue([future, { ...job, ai_stale: true }]));
+    mount();
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); });
     expect(state.assess).not.toHaveBeenCalled();
-    fireEvent.click(screen.getAllByLabelText("Review JOB-1001")[0]);
-    fireEvent.click(screen.getByRole("button", { name: "Check this job" }));
+    expect(screen.queryByLabelText("Auto-check changed chats")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Refresh AI Status/ })).not.toBeInTheDocument();
+    expect(rowFor("LD-1002")).toHaveTextContent("Waiting for its first server check");
+    expect(rowFor("LD-1001")).toHaveTextContent("new activity, server re-checks soon");
+    expect(screen.getByText(/Opening the board never runs AI/)).toBeInTheDocument();
+  });
+  it("Refresh only reloads the board", () => {
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(state.refetch).toHaveBeenCalled();
+    expect(state.assess).not.toHaveBeenCalled();
+  });
+  it("shows every job in one list with no paging controls", () => {
+    const many = Array.from({ length: 40 }, (_, i) => ({ ...future, id: `00000000-0000-4000-8000-${String(100 + i).padStart(12, "0")}`, job_id: `LD-${2000 + i}` }));
+    state.hook.mockReturnValue(queue(many));
+    mount();
+    expect(screen.getAllByRole("row")).toHaveLength(41);
+    expect(screen.queryByRole("button", { name: "Next page" })).not.toBeInTheDocument();
+    expect(screen.getByText("40 jobs · leads from the last 30 days · newest first")).toBeInTheDocument();
+    expect(state.filters.at(-1)).not.toHaveProperty("offset");
+  });
+  it("shows a passed appointment in red and an upcoming one normally", () => {
+    mount();
+    expect(rowFor("LD-1001").querySelector("[data-overdue]")).toHaveClass("text-red-500");
+    expect(rowFor("LD-1002").querySelector("[data-overdue]")).toBeNull();
+  });
+  it("keeps the overdue screen-reader label inside the table's scroll box (no empty page scroll below the board)", () => {
+    mount();
+    // .sr-only is position:absolute. Without a positioned scroll box it escapes the
+    // box's clipping and stretches the page down to the last overdue row's offset
+    // (reproduced in Chromium: ~3,360px of empty scroll for 83 rows).
+    const region = screen.getByRole("region", { name: "Board jobs" });
+    const label = screen.getByText("Appointment time has passed");
+    expect(label).toHaveClass("sr-only");
+    expect(region).toContainElement(label);
+    expect(region).toHaveClass("relative", "overflow-auto");
+  });
+  it("keeps the server's newest-lead order", () => {
+    mount();
+    expect(screen.getAllByRole("row").slice(1).map((row) => row.textContent?.match(/#(LD-\d+)/)?.[1])).toEqual(["LD-1002", "LD-1001"]);
+  });
+  it("filters by AI status on the server, with Wrong Tech Number and no Payment Overdue", () => {
+    mount();
+    const group = screen.getByRole("group", { name: "Filter by AI status" });
+    for (const [label, count] of [["All", "40"], ["Take Job Update", "7"], ["Job In Progress", "5"], ["Payment Pending", "6"], ["Send Dose", "2"], ["Wrong Tech Number", "4"], ["Not enough details in the chat", "3"], ["Upcoming", "13"]]) {
+      expect(within(group).getByRole("button", { name: `${label} ${count}` })).toBeInTheDocument();
+    }
+    expect(within(group).queryByRole("button", { name: /Payment Overdue/ })).not.toBeInTheDocument();
+    fireEvent.click(within(group).getByRole("button", { name: "Wrong Tech Number 4" }));
+    expect(state.filters.at(-1)).toMatchObject({ aiStatus: "wrong_tech_number" });
+    fireEvent.click(within(group).getByRole("button", { name: "All 40" }));
+    expect(state.filters.at(-1)).toMatchObject({ aiStatus: null });
+  });
+  it("flags a wrong tech number on the row and blocks checking it", () => {
+    const wrong = { ...job, job_id: "LD-1009", tech_number: "415555019", board_status: "wrong_tech_number" as const, ai_summary: null, checked_at: null };
+    state.hook.mockReturnValue(queue([wrong]));
+    state.detail.mockReturnValue({ data: undefined, isLoading: false, isError: false });
+    mount();
+    expect(rowFor("LD-1009")).toHaveTextContent("Wrong Tech Number");
+    expect(rowFor("LD-1009")).toHaveTextContent("Fix the tech number on the lead");
+    fireEvent.click(screen.getByRole("button", { name: "Review LD-1009" }));
+    const review = screen.getByRole("region", { name: "Review LD-1009" });
+    expect(review).toHaveTextContent("valid 10-digit");
+    expect(within(review).getByRole("button", { name: /Check again/ })).toBeDisabled();
+  });
+  it("opens the review inline, loading its full evidence only then", () => {
+    state.hook.mockReturnValue(queue([job]));
+    mount();
+    expect(state.detail).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Review LD-1001" }));
+    expect(state.detail).toHaveBeenCalledWith(expect.objectContaining({ id: job.id }));
+    const review = screen.getByRole("region", { name: "Review LD-1001" });
+    expect(review.closest("table")).not.toBeNull();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(review).toHaveTextContent("Technician accepted the job and has not updated it yet.");
+    expect(review).toHaveTextContent("“Ok I'll take it”");
+    expect(review).toHaveTextContent("starting where Shanice Walker is first mentioned");
+    expect(state.assess).not.toHaveBeenCalled();
+  });
+  it("shows loading and load failure for the review honestly", () => {
+    state.hook.mockReturnValue(queue([job]));
+    state.detail.mockReturnValue({ data: undefined, isLoading: true, isError: false });
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "Review LD-1001" }));
+    expect(screen.getByLabelText("Loading review")).toBeInTheDocument();
+    cleanup();
+    state.detail.mockReturnValue({ data: undefined, isLoading: false, isError: true });
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "Review LD-1001" }));
+    expect(within(screen.getByRole("region", { name: "Review LD-1001" })).getByRole("alert")).toHaveTextContent("could not be loaded");
+  });
+  it("shows our share and the job timeline for a done, unpaid job", () => {
+    const step = (at: string, quote: string) => ({ at, message_id: `m-${at}`, quote });
+    const timeline = { job_tag: "2", details: step("2026-10-08T14:00:00Z", "*Customer # 2* ..."), took_job: step("2026-10-08T14:05:00Z", "Yes"), visit_confirmed: null, update_requested: null,
+      completed: { ...step("2026-10-15T15:00:00Z", "Done ✅"), by: "technician" }, share_requested: step("2026-10-15T15:10:00Z", "Active Zelle: ..."), share_promised: null, share_sent: null, share_received: null,
+      share_state: "requested", other_jobs_in_window: false };
+    state.hook.mockReturnValue(queue([{ ...job, board_status: "send_dose", ai_summary: { ...summary, job_update: "completed", share_state: "requested", share_at: "2026-10-15T15:10:00Z", checked_by: "daily_check" } }]));
+    state.detail.mockReturnValue({ data: facts({ job_update: "completed", completed_at: "2026-10-15T15:00:00Z", share_state: "requested", timeline, rules_only: true, checked_by: "daily_check" }), isLoading: false, isError: false });
+    mount();
+    expect(rowFor("LD-1001")).toHaveTextContent("Send Dose");
+    expect(rowFor("LD-1001")).toHaveTextContent("Share requested · Oct 15");
+    fireEvent.click(screen.getByRole("button", { name: "Review LD-1001" }));
+    const steps = screen.getByRole("region", { name: "Job timeline" });
+    expect(steps).toHaveTextContent("*Customer # 2*");
+    expect(steps).toHaveTextContent("✓ Technician took the job");
+    expect(steps).toHaveTextContent("“Yes”");
+    expect(steps).toHaveTextContent("✓ Job completed");
+    expect(steps).toHaveTextContent("– Tech says share sent");
+    expect(steps).toHaveTextContent("no AI was needed");
+    expect(screen.getByRole("region", { name: "Our share" })).toHaveTextContent("until the technician sends our share");
+    expect(screen.getByRole("region", { name: "Review LD-1001" })).toHaveTextContent("by the daily check");
+  });
+  it("shows our screenshot acknowledgement as the share sent, still waiting on accounts", () => {
+    const step = (at: string, quote: string) => ({ at, message_id: `m-${at}`, quote });
+    const timeline = { job_tag: "2", details: step("2026-10-08T14:00:00Z", "*Customer # 2* ..."), took_job: step("2026-10-08T14:05:00Z", "Yes"), visit_confirmed: null, update_requested: null,
+      completed: { ...step("2026-10-15T15:00:00Z", "Hey, I'm done"), by: "technician" }, share_requested: step("2026-10-15T15:10:00Z", "Active Zelle: ..."), share_promised: null, share_sent: null,
+      share_checking: step("2026-10-15T16:00:00Z", "Thanks, let me check & confirm with my accounts department."), share_received: null, share_state: "sent", other_jobs_in_window: false };
+    state.hook.mockReturnValue(queue([{ ...job, board_status: "payment_pending", ai_summary: { ...summary, job_update: "completed", share_state: "sent", share_at: "2026-10-15T16:00:00Z" } }]));
+    state.detail.mockReturnValue({ data: facts({ job_update: "completed", completed_at: "2026-10-15T15:00:00Z", share_state: "sent", timeline }), isLoading: false, isError: false });
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "Review LD-1001" }));
+    const steps = screen.getByRole("region", { name: "Job timeline" });
+    expect(steps).toHaveTextContent("✓ Screenshot received · accounts checking");
+    expect(steps).toHaveTextContent("– Tech sent a picture (payment screenshot)");
+    expect(steps).toHaveTextContent("“Thanks, let me check & confirm with my accounts department.”");
+    expect(steps).toHaveTextContent("– Share received");
+  });
+  it("shows the customer's side with their quote, and says when that chat could not be read", () => {
+    state.detail.mockReturnValue({ data: facts({ job_update: "completed", customer_chat: { state: "read", messages: 3, omitted: 0, last_message_at: "2026-10-15T17:00:00Z" },
+      customer_view: { update: "completed", note: "Customer says the work is done.", quote: "He finished, looks great", message_id: "c2", message_time: "2026-10-15T17:00:00Z" } }), isLoading: false, isError: false });
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "Review LD-1001" }));
+    const side = screen.getByRole("region", { name: "Customer's side" });
+    expect(side).toHaveTextContent("Says the work is done");
+    expect(side).toHaveTextContent("“He finished, looks great”");
+    expect(side).toHaveTextContent("Read 3 customer chat messages");
+    cleanup();
+    state.detail.mockReturnValue({ data: facts({ customer_chat: { state: "unavailable", messages: 0, omitted: 0, last_message_at: null } }), isLoading: false, isError: false });
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "Review LD-1001" }));
+    expect(screen.getByRole("region", { name: "Customer's side" })).toHaveTextContent("could not be read");
+  });
+  it("says when this lead's details message was not found in the chat", () => {
+    state.hook.mockReturnValue(queue([job]));
+    state.detail.mockReturnValue({ data: facts({ timeline: { job_tag: null, details: null, took_job: null, visit_confirmed: null, update_requested: null, completed: null, share_requested: null, share_promised: null, share_sent: null, share_received: null, share_state: "none", other_jobs_in_window: false } }), isLoading: false, isError: false });
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "Review LD-1001" }));
+    expect(screen.getByRole("region", { name: "Job timeline" })).toHaveTextContent("customer-details message was not found");
+  });
+  it("Check again checks only that job, once, then reloads the board", async () => {
+    state.hook.mockReturnValue(queue([job, future]));
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "Review LD-1001" }));
+    fireEvent.click(within(screen.getByRole("region", { name: "Review LD-1001" })).getByRole("button", { name: /Check again/ }));
     await waitFor(() => expect(state.assess).toHaveBeenCalledTimes(1));
+    expect(state.assess).toHaveBeenCalledWith(job.id, "America/New_York");
   });
-  it("stops after the in-flight job and does not start remaining requests", async () => {
-    let finish!: () => void;
-    state.assess.mockImplementation(() => new Promise((done) => { finish = () => done({ result: {} }); }));
-    state.hook.mockReturnValue({ data: { rows: [job, { ...job, id: "second", job_id: "JOB-SECOND" }], total: 2 }, refetch: state.refetch }); mount();
-    fireEvent.click(screen.getByRole("button", { name: "Refresh AI · this page" }));
-    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuemax", "2");
-    fireEvent.click(screen.getByRole("button", { name: "Stop after current job" })); finish();
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("1 not started"));
-    expect(state.assess).toHaveBeenCalledTimes(1);
+  it("reports a failed check on the row without claiming success", async () => {
+    state.hook.mockReturnValue(queue([job]));
+    state.assess.mockRejectedValueOnce(new ProcessorReviewFailure("AI provider is unavailable. Previous result is kept; check again.", true, "ai_provider"));
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "Review LD-1001" }));
+    fireEvent.click(within(screen.getByRole("region", { name: "Review LD-1001" })).getByRole("button", { name: /Check again/ }));
+    await waitFor(() => expect(rowFor("LD-1001")).toHaveTextContent("Check failed"));
+    expect(rowFor("LD-1001")).toHaveTextContent("Take Job Update");
+    expect(screen.getByRole("region", { name: "Review LD-1001" })).toHaveTextContent("AI provider is unavailable");
   });
-  it("retires a failure when the saved record changes, without losing the job", async () => {
-    state.assess.mockRejectedValue(new Error("Old assignment failure")); const view = mount();
-    fireEvent.click(screen.getByRole("button", { name: "Refresh AI · this page" }));
-    await waitFor(() => expect(screen.getAllByText("Old assignment failure").length).toBeGreaterThan(0));
-    state.hook.mockReturnValue({ data: { rows: [{ ...job, updated_at: "2026-10-15T19:00:00Z" }], total: 1 }, refetch: state.refetch });
-    view.rerender(<QueryClientProvider client={new QueryClient()}><MemoryRouter><ProcessorBoardPage /></MemoryRouter></QueryClientProvider>);
-    expect(screen.queryByText("Old assignment failure")).not.toBeInTheDocument();
-    expect(screen.getAllByLabelText("Review JOB-1001")).toHaveLength(2);
+  it("opens Tech Quick Chat for the row's technician and respects chat permission", async () => {
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "Tech chat for LD-1001" }));
+    await waitFor(() => expect(state.chat).toHaveBeenCalledWith("+14155550199", "tech", chat.conversation_id));
+    cleanup();
+    state.canTechChat = false;
+    mount();
+    expect(screen.getByRole("button", { name: "Tech chat for LD-1001" })).toBeDisabled();
   });
-  it.each(["opr", "opr_admin", "customer_service", "cs_admin"])("does not read or show jobs to %s", (role) => {
-    state.role = role; mount(); expect(screen.getByRole("alert")).toHaveTextContent("restricted"); expect(state.hook).not.toHaveBeenCalled();
+  it("debounces search into the server query", async () => {
+    mount();
+    fireEvent.change(screen.getByPlaceholderText(/Search lead/), { target: { value: " Shanice " } });
+    await waitFor(() => expect(state.filters.at(-1)).toMatchObject({ search: "Shanice" }), { timeout: 2000 });
+  });
+  it("shows a recovery action when the board cannot load", () => {
+    state.hook.mockReturnValue({ data: undefined, isLoading: false, isFetching: false, isError: true, error: new Error("Processor Board database setup is unavailable."), refetch: state.refetch });
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading board" }));
+    expect(state.refetch).toHaveBeenCalled();
+  });
+  it.each(["customer_service", "cs_admin", "opr", "opr_admin"])("blocks %s without reading the board", (role) => {
+    state.role = role;
+    mount();
+    expect(screen.getByRole("alert")).toHaveTextContent("restricted to Admin and Processor");
+    expect(state.hook).not.toHaveBeenCalled();
   });
 });

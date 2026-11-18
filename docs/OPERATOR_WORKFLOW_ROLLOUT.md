@@ -4,16 +4,29 @@
 
 - Copy Complete Details is enabled by default for every existing role, including
   Operator (`opr`) and Operator Admin (`opr_admin`). Admin always retains access.
-- Settings → Feature Access → Copy Complete Details offers role switches and
-  per-user Inherit / Allow / Deny under the expandable **User overrides** row.
-  Search by name or filter by role to find a specific teammate. The user override wins. Only Admin may change
-  these settings; no profile flag or navigation grant can bypass them.
-- Feature & Navigation Access is desktop-first: four columns per page, Previous /
-  Next arrows, sticky table headings, user/role filters and feature search, without
-  horizontal dragging. Narrow screens use labelled stacked controls. Fixed role
+- Settings → Feature Access offers **one Copy Details switch per user, immediately
+  after Manual Lead**. The duplicate Copy Complete Details role/default panel and
+  Inherit/Allow/Deny dropdowns are removed. On means Allow; off means Deny for that
+  specific user only. Untouched users still inherit their existing saved role
+  default; saved overrides take precedence. Merely opening/searching this view
+  writes nothing. Only Admin may change these settings, using the existing audited
+  `set_lead_copy_permission(NULL,user_id,boolean)` RPC; no profile flag or navigation
+  grant can bypass it. Original default-enabled behavior is unchanged, including
+  both Operator roles, and Admin always retains access. No bulk reset is performed.
+- Feature & Navigation Access is desktop-first: all columns in one contained
+  scrollable table with sticky user identity/headings, user/role filters and feature
+  search. Copy Details also matches Copy All Details and Copy Complete Details.
+  Narrow screens use the same labelled on/off switches. Fixed role
   and profile-flag permissions are labelled rather than offered as ineffective
   switches. Failed permission reads show Unavailable with a retry action; failed
   navigation writes do not show save success or change the displayed grant.
+- Copy read failures show an error/retry control and disable unverified switches;
+  copy save failures keep the saved state and permit retry, without a success toast.
+  A synchronous in-flight guard prevents duplicate saves. Existing settings/access
+  query keys are invalidated after success; desktop/mobile share one settings read.
+  The per-user switch UI needs only CRM publication after merging: no migration,
+  Edge deployment or Donut release/install is needed. It does not change the
+  separately installed Copilot pause or other deployment boundaries.
 - The same permission gates lead cards, Operator cards, tables, both detail views,
   and the hold snapshot's copy action. Quote visibility remains independent.
 - The latest `main` moved the list copy button into an action row hidden from both
@@ -53,6 +66,43 @@
   into snapshots. Deleting the lead/user cascades its hold alerts.
 - Obsolete Operator Urgent Job notifications are marked read when a hold arrives.
   Other roles' notifications are not cleared. The hold popup gets display priority.
+
+## Copy Details single-switch follow-up — 2026-10-19
+
+Frontend-only, on `fix/copy-details-user-toggle` from Boostera main. The separate
+role/default card, expandable user editor and per-user dropdowns no longer repeat
+the same permission controls. Copy Details is one column directly after Manual
+Lead in the existing Feature Access view, with the same control on mobile.
+
+Five-layer review: Settings and its child remain Admin-only; the unchanged
+`resolveLeadCopyAccess` and `get_lead_copy_access` still apply saved user overrides,
+saved role defaults and Admin-always-allowed behavior. Writes use only the existing
+Admin-authorized `set_lead_copy_permission` RPC, whose permission-table RLS and
+atomic activity log are unchanged. No direct profile/navigation grant is used.
+No table/column/enum, generated type, function, lead visibility, quote restriction
+or SQL harness change is needed. No migration or production mutation was made.
+Donut has no native equivalent; its source/ZIP and installation remain unchanged.
+
+Efficiency review: on the synthetic two-user Windows/jsdom fixture, the previous
+closed-override layout contains five role switches plus four per-user selects
+(both responsive layouts); the new layout has four per-user switches and no role
+editor. Both before and after use one initial settings request, with zero writes
+on mount/search. The new test asserts one read and four copy controls. Lookup maps
+are built once per settings result instead of scanning role/override arrays for
+each cell. One selected-user mutation plus the existing cache invalidations is
+retained; repeated clicks during an in-flight save cannot issue another mutation.
+Realtime, background jobs, storage/bandwidth, API shapes, database queries/RLS and
+indexes are unchanged. These are local UI/request comparisons, not measured
+production usage or billing savings.
+
+Regression coverage exercises default-enabled access for all five non-Admin
+roles, saved role/user precedence, exact-user allow/deny, desktop/mobile order and
+search, reload persistence, excluded callers, pending/failed reads, denied writes,
+retry, duplicate-save guarding and saved-success versus refresh-failure handling.
+The existing list-copy tests retain both Operator defaults and hidden-quote
+redaction. Browser tests mock all external HTTP/websocket traffic; they never
+change real user permissions or send customer data. Actual validation results are
+reported in the completion handoff; the older rollout counts below are historical.
 
 ## Manual deployment order
 
@@ -275,3 +325,41 @@ Never apply the minimal fixture to an existing Supabase project.
   configuration. No production writes, backend deployment, CRM Publish or live
   workflow verification were performed. Updating the PR branch does not merge
   it into `main` or publish the CRM.
+
+## Operator (opr) sees City, State and ZIP only — 2026-11-06
+
+Business rule: users with the **Operator** role (`opr`) — not Operator Admin
+(`opr_admin`) — see a job's location as **City, ST ZIP** only. They never see the
+street address or map position, the customer's phone or landline, or the
+technician's name or number. Operator Admin and every other role are unchanged.
+
+- **Location** comes from the server: `public.location_label(leads)` (PostgREST
+  computed field, selected as `location_label` for Operators only), from migration
+  `20261203000000_opr_location_only.sql`. It uses the saved city/state/ZIP when they
+  are clean, otherwise the state and ZIP at the end of the address; the city is
+  shown only when it is a Census place (`us_places`) or a plain place name with no
+  digits, units or street words. Anything doubtful falls back to `ST ZIP`. Checked
+  read-only on production data (2026-11-06): all 65 urgent jobs get a ZIP and 63 a
+  city; no label contained street text or a house number.
+- **CRM screens** (`src/lib/operator-privacy.ts`, `redactLeadForOperator`): lead
+  cards, the lead detail page (phone/landline/contact and technician fields hidden,
+  Address shown as Location, nearby-areas panel hidden), both urgent tables, the
+  nearby urgent leads list, and Copy Complete Details. The customer number is still
+  used invisibly for the reply/attention highlights.
+- **Hold alerts**: the server stores Operator snapshots without address, customer
+  numbers or technician details, redacts them again when an Operator reads them,
+  and the migration redacts Operator snapshots stored before it.
+- **Limit**: lead rows are still readable by Operators in the database (the
+  existing lead RLS); hiding is enforced on every CRM screen, not at the row level.
+  A server-only Operator read path is the follow-up for full database enforcement.
+- No Donut counterpart (Donut is not an Operator tool).
+- Tests: `src/lib/operator-privacy.test.ts`, Copy and hold-card tests, isolated SQL
+  harness `supabase/tests/105_opr_location_only.sql` (via
+  `scripts/test-operator-workflow-db.mjs`).
+- Order: apply the migration **before** publishing the CRM (the CRM selects
+  `location_label`, which the migration creates).
+- Status (2026-11-06): migration **applied in production**. Verified read-only:
+  `location_label` callable by signed-in users (not anonymous); 403 Operator hold
+  snapshots, 0 still holding address/number/technician; Operator Admin snapshots
+  unchanged; all 65 urgent jobs labelled with a ZIP, 63 with a city. CRM screen
+  changes **await CRM Publish**.

@@ -2,6 +2,8 @@ import { useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, CheckCircle2, XCircle, User, History, Sparkles } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { subscribeToTableChanges } from "@/lib/realtime";
+import type { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -18,11 +20,12 @@ import {
 } from "@/components/ui/alert-dialog";
 import StatusBadge from "@/components/leads/StatusBadge";
 import { canReviewCancellationRequest, reviewCancellationRequest } from "@/lib/cancellation-requests";
-import type { Lead, LeadCancellationRequest } from "@/types";
+import { CANCELLATION_PAGE_LEAD_COLUMNS, type CancellationPageLead } from "@/lib/request-page-leads";
+import type { LeadCancellationRequest } from "@/types";
 import { toast } from "sonner";
 
 type RequestWithLead = LeadCancellationRequest & {
-  lead?: Lead | null;
+  lead?: CancellationPageLead | null;
   requester_name?: string | null;
 };
 
@@ -51,11 +54,11 @@ export default function LeadCancellationRequests() {
       const requesterIds = rows.map((row) => row.requested_by).filter(Boolean) as string[];
 
       const [{ data: leads }, { data: profiles }] = await Promise.all([
-        leadIds.length ? supabase.from("leads").select("*").in("id", leadIds) : Promise.resolve({ data: [] }),
+        leadIds.length ? supabase.from("leads").select(CANCELLATION_PAGE_LEAD_COLUMNS).in("id", leadIds) : Promise.resolve({ data: [] }),
         requesterIds.length ? supabase.from("profiles_public" as never).select("id, full_name").in("id", requesterIds) : Promise.resolve({ data: [] }),
       ]);
 
-      const leadById = new Map(((leads ?? []) as Lead[]).map((lead) => [lead.id, lead]));
+      const leadById = new Map(((leads ?? []) as CancellationPageLead[]).map((lead) => [lead.id, lead]));
       const requesterById = new Map(((profiles ?? []) as { id: string; full_name: string }[]).map((profile) => [profile.id, profile.full_name]));
 
       return rows.map((request) => ({
@@ -67,60 +70,53 @@ export default function LeadCancellationRequests() {
   });
 
   useEffect(() => {
-    const channel = supabase
-      .channel("cancellation-page-realtime")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "lead_cancellation_requests" },
-        async (payload) => {
-          if (payload.eventType === "DELETE") {
-            const oldRow = payload.old;
-            queryClient.setQueryData<RequestWithLead[]>(["lead-cancellation-requests-page"], (old) => {
-              if (!old) return old;
-              return old.filter((r) => r.id !== oldRow.id);
-            });
-            return;
-          }
-          
-          if (payload.eventType === "UPDATE") {
-            const newRow = payload.new as LeadCancellationRequest;
-            queryClient.setQueryData<RequestWithLead[]>(["lead-cancellation-requests-page"], (old) => {
-              if (!old) return old;
-              if (newRow.status !== "pending") return old.filter((r) => r.id !== newRow.id);
-              return old.map((r) => (r.id === newRow.id ? { ...r, ...newRow } : r));
-            });
-            return;
-          }
-
-          if (payload.eventType === "INSERT") {
-            const newRow = payload.new as LeadCancellationRequest;
-            if (newRow.status !== "pending") return;
-            
-            const { data: leadData } = await supabase.from("leads").select("*").eq("id", newRow.lead_id).single();
-            let requesterName = newRow.requested_by_name || null;
-            if (newRow.requested_by) {
-              const { data: profile } = await supabase.from("profiles_public").select("full_name").eq("id", newRow.requested_by).maybeSingle();
-              if (profile) requesterName = profile.full_name;
-            }
-            
-            const enrichedRequest: RequestWithLead = {
-              ...newRow,
-              lead: leadData as Lead,
-              requester_name: requesterName,
-            };
-            
-            queryClient.setQueryData<RequestWithLead[]>(["lead-cancellation-requests-page"], (old) => {
-              if (!old) return old;
-              return [enrichedRequest, ...old];
-            });
-          }
+    // Shared with the sidebar badge and the user's other tabs (one subscription per browser).
+    return subscribeToTableChanges<RealtimePostgresChangesPayload<LeadCancellationRequest>>(
+      "lead_cancellation_requests",
+      async (payload) => {
+        if (payload.eventType === "DELETE") {
+          const oldRow = payload.old;
+          queryClient.setQueryData<RequestWithLead[]>(["lead-cancellation-requests-page"], (old) => {
+            if (!old) return old;
+            return old.filter((r) => r.id !== oldRow.id);
+          });
+          return;
         }
-      )
-      .subscribe();
 
-    return () => {
-      void supabase.removeChannel(channel);
-    };
+        if (payload.eventType === "UPDATE") {
+          const newRow = payload.new as LeadCancellationRequest;
+          queryClient.setQueryData<RequestWithLead[]>(["lead-cancellation-requests-page"], (old) => {
+            if (!old) return old;
+            if (newRow.status !== "pending") return old.filter((r) => r.id !== newRow.id);
+            return old.map((r) => (r.id === newRow.id ? { ...r, ...newRow } : r));
+          });
+          return;
+        }
+
+        if (payload.eventType === "INSERT") {
+          const newRow = payload.new as LeadCancellationRequest;
+          if (newRow.status !== "pending") return;
+
+          const { data: leadData } = await supabase.from("leads").select(CANCELLATION_PAGE_LEAD_COLUMNS).eq("id", newRow.lead_id).single();
+          let requesterName = newRow.requested_by_name || null;
+          if (newRow.requested_by) {
+            const { data: profile } = await supabase.from("profiles_public").select("full_name").eq("id", newRow.requested_by).maybeSingle();
+            if (profile) requesterName = profile.full_name;
+          }
+
+          const enrichedRequest: RequestWithLead = {
+            ...newRow,
+            lead: leadData as unknown as CancellationPageLead,
+            requester_name: requesterName,
+          };
+
+          queryClient.setQueryData<RequestWithLead[]>(["lead-cancellation-requests-page"], (old) => {
+            if (!old) return old;
+            return [enrichedRequest, ...old];
+          });
+        }
+      },
+    );
   }, [queryClient]);
 
   const handleReview = async (request: RequestWithLead, action: "approved" | "rejected") => {

@@ -2,6 +2,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { DollarSign, CheckCircle2, XCircle, User, MapPin } from "lucide-react";
 import { InlineSuggestions } from "@/components/payments/InlineSuggestions";
 import { supabase } from "@/integrations/supabase/client";
+import { subscribeToTableChanges } from "@/lib/realtime";
+import type { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -20,14 +22,15 @@ import StatusBadge from "@/components/leads/StatusBadge";
 import {
   canReviewPaymentRequest,
   reviewPaymentRequest,
+  PAYMENT_REQUEST_TYPE_LABELS,
   type LeadPaymentRequest,
 } from "@/lib/payment-requests";
-import type { Lead } from "@/types";
+import { PAYMENT_PAGE_LEAD_COLUMNS, type PaymentPageLead } from "@/lib/request-page-leads";
 import { toast } from "sonner";
 import { useEffect, useState } from "react";
 import { getSignedUrl } from "@/lib/storage";
 
-type Row = LeadPaymentRequest & { lead?: Lead | null; requester_name?: string | null };
+type Row = LeadPaymentRequest & { lead?: PaymentPageLead | null; requester_name?: string | null };
 
 const roleLabel: Record<string, string> = {
   customer_service: "CS",
@@ -83,12 +86,12 @@ export default function LeadPaymentRequests() {
       const requesterIds = reqs.map((r) => r.requested_by).filter(Boolean) as string[];
 
       const [{ data: leads }, { data: profiles }] = await Promise.all([
-        leadIds.length ? supabase.from("leads").select("*").in("id", leadIds) : Promise.resolve({ data: [] }),
+        leadIds.length ? supabase.from("leads").select(PAYMENT_PAGE_LEAD_COLUMNS).in("id", leadIds) : Promise.resolve({ data: [] }),
         requesterIds.length
           ? supabase.from("profiles_public" as never).select("id, full_name").in("id", requesterIds)
           : Promise.resolve({ data: [] }),
       ]);
-      const leadMap = new Map(((leads ?? []) as Lead[]).map((l) => [l.id, l]));
+      const leadMap = new Map(((leads ?? []) as unknown as PaymentPageLead[]).map((l) => [l.id, l]));
       const profMap = new Map(((profiles ?? []) as { id: string; full_name: string }[]).map((p) => [p.id, p.full_name]));
 
       return reqs.map((r) => ({
@@ -100,59 +103,53 @@ export default function LeadPaymentRequests() {
   });
 
   useEffect(() => {
-    const channel = supabase
-      .channel("lead-payment-requests-page-realtime")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "lead_payment_requests" },
-        async (payload) => {
-          if (payload.eventType === "DELETE") {
-            const oldRow = payload.old;
-            queryClient.setQueryData<Row[]>(["lead-payment-requests-page"], (old) => {
-              if (!old) return old;
-              return old.filter((r) => r.id !== oldRow.id);
-            });
-            return;
-          }
-
-          if (payload.eventType === "UPDATE") {
-            const newRow = payload.new as LeadPaymentRequest;
-            queryClient.setQueryData<Row[]>(["lead-payment-requests-page"], (old) => {
-              if (!old) return old;
-              if (newRow.status !== "pending") return old.filter((r) => r.id !== newRow.id);
-              return old.map((r) => (r.id === newRow.id ? { ...r, ...newRow } : r));
-            });
-            return;
-          }
-
-          if (payload.eventType === "INSERT") {
-            const newRow = payload.new as LeadPaymentRequest;
-            if (newRow.status !== "pending") return;
-
-            const { data: leadData } = await supabase.from("leads").select("*").eq("id", newRow.lead_id).single();
-            let requesterName = newRow.requested_by_name || null;
-            if (newRow.requested_by) {
-              const { data: profile } = await supabase.from("profiles_public").select("full_name").eq("id", newRow.requested_by).maybeSingle();
-              if (profile) requesterName = profile.full_name;
-            }
-
-            const enrichedRequest: Row = {
-              ...newRow,
-              lead: leadData as Lead,
-              requester_name: requesterName,
-            };
-
-            queryClient.setQueryData<Row[]>(["lead-payment-requests-page"], (old) => {
-              if (!old) return old;
-              return [enrichedRequest, ...old];
-            });
-          }
+    // Shared with the sidebar badge and the user's other tabs (one subscription per browser).
+    return subscribeToTableChanges<RealtimePostgresChangesPayload<LeadPaymentRequest>>(
+      "lead_payment_requests",
+      async (payload) => {
+        if (payload.eventType === "DELETE") {
+          const oldRow = payload.old;
+          queryClient.setQueryData<Row[]>(["lead-payment-requests-page"], (old) => {
+            if (!old) return old;
+            return old.filter((r) => r.id !== oldRow.id);
+          });
+          return;
         }
-      )
-      .subscribe();
-    return () => {
-      void supabase.removeChannel(channel);
-    };
+
+        if (payload.eventType === "UPDATE") {
+          const newRow = payload.new as LeadPaymentRequest;
+          queryClient.setQueryData<Row[]>(["lead-payment-requests-page"], (old) => {
+            if (!old) return old;
+            if (newRow.status !== "pending") return old.filter((r) => r.id !== newRow.id);
+            return old.map((r) => (r.id === newRow.id ? { ...r, ...newRow } : r));
+          });
+          return;
+        }
+
+        if (payload.eventType === "INSERT") {
+          const newRow = payload.new as LeadPaymentRequest;
+          if (newRow.status !== "pending") return;
+
+          const { data: leadData } = await supabase.from("leads").select(PAYMENT_PAGE_LEAD_COLUMNS).eq("id", newRow.lead_id).single();
+          let requesterName = newRow.requested_by_name || null;
+          if (newRow.requested_by) {
+            const { data: profile } = await supabase.from("profiles_public").select("full_name").eq("id", newRow.requested_by).maybeSingle();
+            if (profile) requesterName = profile.full_name;
+          }
+
+          const enrichedRequest: Row = {
+            ...newRow,
+            lead: leadData as unknown as PaymentPageLead,
+            requester_name: requesterName,
+          };
+
+          queryClient.setQueryData<Row[]>(["lead-payment-requests-page"], (old) => {
+            if (!old) return old;
+            return [enrichedRequest, ...old];
+          });
+        }
+      },
+    );
   }, [queryClient]);
 
   const handleReview = async (row: Row, action: "approved" | "rejected") => {
@@ -166,7 +163,8 @@ export default function LeadPaymentRequests() {
         reviewerRole: role,
         action,
       });
-      toast.success(action === "approved" ? "Lead marked Paid" : "Paid request rejected");
+      const typeLabel = PAYMENT_REQUEST_TYPE_LABELS[row.request_type];
+      toast.success(action === "approved" ? `Lead marked ${typeLabel}` : `${typeLabel} request rejected`);
       queryClient.invalidateQueries({ queryKey: ["lead-payment-requests-page"] });
       queryClient.invalidateQueries({ queryKey: ["leads"] });
       queryClient.invalidateQueries({ queryKey: ["pending-payment-requests-count"] });
@@ -209,7 +207,7 @@ export default function LeadPaymentRequests() {
             <DollarSign className="h-4 w-4 text-emerald-600" />
           </div>
           <div>
-            <h1 className="text-2xl font-semibold tracking-[-0.035em]">Paid Approval Pending</h1>
+            <h1 className="text-2xl font-semibold tracking-[-0.035em]">Payment Approval Pending</h1>
             <p className="mt-1 text-sm text-muted-foreground">
               {requests.length} pending request{requests.length === 1 ? "" : "s"}
             </p>
@@ -253,7 +251,7 @@ export default function LeadPaymentRequests() {
       ) : requests.length === 0 && approvedSuggestions.length === 0 ? (
         <Card className="border-dashed">
           <CardContent className="flex min-h-[220px] items-center justify-center text-sm text-muted-foreground">
-            No pending Paid requests.
+            No pending payment requests.
           </CardContent>
         </Card>
       ) : (
@@ -271,6 +269,9 @@ export default function LeadPaymentRequests() {
                         {lead && <StatusBadge status={lead.status} size="sm" />}
                         <span className="rounded-full border border-border/60 px-2 py-0.5 text-[11px] text-muted-foreground">
                           {lead?.job_id || row.lead_id}
+                        </span>
+                        <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
+                          {PAYMENT_REQUEST_TYPE_LABELS[row.request_type]} request
                         </span>
                       </div>
 
@@ -320,7 +321,7 @@ export default function LeadPaymentRequests() {
                             onClick={() => handleApprove(row)}
                           >
                             <CheckCircle2 className="h-4 w-4" />
-                            Approve & mark paid
+                            Approve & mark {PAYMENT_REQUEST_TYPE_LABELS[row.request_type].toLowerCase()}
                           </Button>
                           <AlertDialog>
                             <AlertDialogTrigger asChild>

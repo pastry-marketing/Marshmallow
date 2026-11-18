@@ -1,0 +1,238 @@
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * The customer quote split (Labor / Parts-Materials) is edited and saved by
+ * every editing role on an existing lead — CS and CS Admin included — while the
+ * internal For You/For Us technician split stays gated to non-CS roles.
+ */
+const state = vi.hoisted(() => ({
+  role: "customer_service" as string,
+  lead: {} as Record<string, unknown>,
+  updates: [] as Record<string, unknown>[],
+}));
+
+vi.mock("@/integrations/supabase/client", () => {
+  const builder = (table: string) => {
+    const proxy: unknown = new Proxy(function noop() {}, {
+      get(_target, prop) {
+        if (prop === "then") {
+          const data = table === "leads" ? state.lead : null;
+          return (resolve: (v: unknown) => unknown) => Promise.resolve({ data, error: null, count: 0 }).then(resolve);
+        }
+        return () => proxy;
+      },
+    });
+    return proxy;
+  };
+  const channel = () => { const ch = { on: () => ch, subscribe: () => ch, unsubscribe: () => Promise.resolve() }; return ch; };
+  return { supabase: { from: builder, rpc: () => builder("rpc"), channel, removeChannel: () => Promise.resolve(),
+    functions: { invoke: () => Promise.resolve({ data: null, error: null }) },
+    storage: { from: () => ({ createSignedUrls: () => Promise.resolve({ data: [], error: null }) }) } } };
+});
+vi.mock("@/contexts/AuthContext", () => {
+  const user = { id: "cs-1", email: "cs@example.test" };
+  return { useAuth: () => ({ user, role: state.role, profile: { full_name: "Synthetic CS" }, canAccess: () => true }) };
+});
+vi.mock("@/lib/lead-updates", () => ({
+  NO_ROW_UPDATED_MESSAGE: "not applied",
+  updateLeadById: vi.fn(async (_id: string, changes: Record<string, unknown>) => { state.updates.push(changes); }),
+}));
+vi.mock("@/lib/activity", () => ({ logActivity: vi.fn(async () => {}) }));
+vi.mock("@/lib/lead-address-geocoding", () => ({ geocodeAndPersistLeadAddress: vi.fn(async () => false) }));
+vi.mock("@/hooks/useDuplicatePhoneCheck", () => ({ useDuplicatePhoneCheck: () => ({ isDuplicate: false, duplicateLeadName: null, checking: false }) }));
+vi.mock("@/hooks/useNearbyUrgentLeads", () => ({ useNearbyUrgentLeads: () => [] }));
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn(), warning: vi.fn() } }));
+const Null = () => null;
+for (const path of [
+  "@/components/leads/QuoPhoneTrigger", "@/components/leads/NoteThread", "@/components/leads/NearbyUrgentLeads",
+  "@/components/leads/LeadTagControl", "@/components/leads/CopyLeadButton", "@/components/leads/CheckTemplateButton",
+  "@/components/leads/CompleteLeadCopyButton", "@/components/leads/CxUpdateRequestButton", "@/components/leads/TechUpdateRequestButton",
+  "@/components/leads/ReminderButton", "@/components/leads/LeadPhotoActions", "@/components/leads/PaymentDialog",
+  "@/components/leads/ImageLightbox", "@/components/leads/CancellationRequestSheet", "@/components/leads/CancellationRequestPanel",
+  "@/components/leads/UrgentAICheckDialog", "@/components/leads/LeadCoverageBadge", "@/components/leads/MultiDateTimePicker",
+  "@/components/leads/NumberNameCombobox", "@/components/leads/NearbyAreasList",
+]) vi.doMock(path, () => ({ default: Null }));
+vi.mock("@/components/service-combobox", () => ({ ServiceCombobox: () => null }));
+
+const { default: LeadDetailPage } = await import("./LeadDetailPage");
+
+const baseLead = {
+  id: "lead-1", job_id: "LD-SYN1", status: "needs_quote", customer_name: "Synthetic Customer", customer_phone: "5550100000",
+  number_name: "Main", service_type: "Plumbing", address: "1 Test St, Miami, FL 33101", latitude: 25.7, longitude: -80.2,
+  created_by: "cs-1", terms: "quoted", labor_amount: 200, material_amount: 50, for_you_amount: 120, for_us_amount: 80,
+};
+
+const mount = async () => {
+  render(<MemoryRouter initialEntries={["/leads/lead-1"]}><Routes><Route path="/leads/:id" element={<LeadDetailPage />} /></Routes></MemoryRouter>);
+  await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+};
+const save = async () => {
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: /save/i })); await new Promise((r) => setTimeout(r, 20)); });
+};
+
+beforeEach(() => { state.lead = { ...baseLead }; state.updates = []; });
+afterEach(cleanup);
+
+describe.each(["customer_service", "cs_admin"])("%s editing an existing lead's quote", (role) => {
+  beforeEach(() => { state.role = role; });
+
+  it("can edit the labor amount and the edit is saved", async () => {
+    await mount();
+    fireEvent.change(screen.getByLabelText("Customer Labor ($)"), { target: { value: "300" } });
+    await save();
+    expect(state.updates).toHaveLength(1);
+    expect(state.updates[0]).toMatchObject({ terms: "quoted", labor_amount: 300, material_amount: 50 });
+  });
+
+  it("choosing No for materials saves no materials charge at all", async () => {
+    await mount();
+    fireEvent.click(screen.getByRole("combobox", { name: "Parts/Materials charges?" }));
+    fireEvent.click(screen.getByRole("option", { name: "No" }));
+    expect(screen.queryByLabelText("Parts/Materials ($)")).not.toBeInTheDocument();
+    await save();
+    expect(state.updates[0]).toMatchObject({ labor_amount: 200, material_amount: null });
+  });
+
+  it("still cannot change the internal For You/For Us split or the Diagnostic Fee", async () => {
+    state.lead = { ...baseLead, diagnostic_fee_amount: 60 };
+    await mount();
+    expect(screen.queryByLabelText("Diagnostic Fee ($)")).not.toBeInTheDocument();
+    await save();
+    expect(state.updates[0]).toMatchObject({ for_you_amount: 120, for_us_amount: 80, diagnostic_fee_amount: 60 });
+  });
+
+  it("keeps the saved labor percentages too", async () => {
+    state.lead = { ...baseLead, terms: "free_estimate", for_you_labor_percent: 55, for_us_labor_percent: 45, for_you_diagnostic_amount: 20, for_us_diagnostic_amount: 30 };
+    await mount();
+    expect(screen.queryByLabelText("For You (% of labor)")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("For You ($ from diagnostic)")).not.toBeInTheDocument();
+    await save();
+    expect(state.updates[0]).toMatchObject({ for_you_labor_percent: 55, for_us_labor_percent: 45, for_you_diagnostic_amount: 20, for_us_diagnostic_amount: 30 });
+  });
+});
+
+it("rejects Yes-materials with no amount instead of saving", async () => {
+  state.role = "customer_service";
+  await mount();
+  fireEvent.change(screen.getByLabelText("Parts/Materials ($)"), { target: { value: "" } });
+  await save();
+  expect(state.updates).toHaveLength(0);
+});
+
+describe("Operator viewing a lead's quote (half labor rule)", () => {
+  beforeEach(() => { state.role = "opr"; });
+  afterEach(() => { state.role = "customer_service"; });
+
+  it("shows half the labor and the parts/materials amount, never the full labor", async () => {
+    await mount();
+    const section = screen.getByRole("region", { name: "Quote breakdown" });
+    expect(section).toHaveTextContent("$100.00");
+    expect(section).toHaveTextContent("$50.00");
+    expect(section).not.toHaveTextContent("$200.00");
+    expect(screen.queryByText("$200.00")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Customer Labor ($)")).not.toBeInTheDocument();
+  });
+
+  it("shows no quote section when an admin hid the quote from Operators", async () => {
+    state.lead = { ...baseLead, show_quote_to_opr: false };
+    await mount();
+    expect(screen.queryByRole("region", { name: "Quote breakdown" })).not.toBeInTheDocument();
+  });
+});
+
+it("other roles still see and edit the full labor amount", async () => {
+  state.role = "processor";
+  await mount();
+  expect(screen.getByLabelText("Customer Labor ($)")).toHaveValue(200);
+});
+
+describe("Diagnostic/Service Call terms and For You / For Us on every term (2026-11-16)", () => {
+  beforeEach(() => { state.role = "admin"; });
+  afterEach(() => { state.role = "customer_service"; });
+
+  it("saves the Diagnostic Fee in its own column and drops stale labor and materials", async () => {
+    state.lead = { ...baseLead, terms: "diagnostic_service_call", labor_amount: 200, material_amount: 50, diagnostic_fee_amount: 89 };
+    await mount();
+    expect(screen.queryByLabelText("Customer Labor ($)")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Parts/Materials charges?")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Diagnostic Fee ($)")).toHaveValue(89);
+    fireEvent.change(screen.getByLabelText("Diagnostic Fee ($)"), { target: { value: "99" } });
+    await save();
+    expect(state.updates[0]).toMatchObject({ terms: "diagnostic_service_call", diagnostic_fee_amount: 99, labor_amount: null, material_amount: null, for_you_amount: 120, for_us_amount: 80 });
+  });
+
+  it("a Quoted job keeps its labor AND a Diagnostic Fee", async () => {
+    await mount();
+    fireEvent.change(screen.getByLabelText("Diagnostic Fee ($)"), { target: { value: "75" } });
+    await save();
+    expect(state.updates[0]).toMatchObject({ terms: "quoted", labor_amount: 200, material_amount: 50, diagnostic_fee_amount: 75 });
+  });
+
+  it("refuses a negative Diagnostic Fee instead of saving", async () => {
+    await mount();
+    fireEvent.change(screen.getByLabelText("Diagnostic Fee ($)"), { target: { value: "-5" } });
+    await save();
+    expect(state.updates).toHaveLength(0);
+  });
+
+  const shown = () => ["For You ($ from labor)", "For You ($ incl. material)", "For Us ($ from labor)", "For You ($ from diagnostic)", "For Us ($ from diagnostic)",
+    "For You (% of labor)", "For Us (% of labor)", "Diagnostic Fee ($)"].filter((label) => screen.queryByLabelText(label));
+  const diagnostic = ["Diagnostic Fee ($)", "For You ($ from diagnostic)", "For Us ($ from diagnostic)"];
+
+  it.each([
+    ["quoted", ["For You ($ incl. material)", "For Us ($ from labor)", ...diagnostic]],
+    ["free_estimate", ["For You (% of labor)", "For Us (% of labor)", ...diagnostic]],
+    ["diagnostic_service_call", [...diagnostic, "For You (% of labor)", "For Us (% of labor)"]],
+    [null, ["For You ($ from labor)", "For Us ($ from labor)", ...diagnostic]],
+  ])("shows the Internal Technician Share fields for terms %s", async (terms, expected) => {
+    state.lead = { ...baseLead, terms };
+    await mount();
+    expect(screen.getByText("Internal Technician Share")).toBeInTheDocument();
+    expect(shown().sort()).toEqual([...expected].sort());
+  });
+
+  it("saves Free Estimate labor percentages and keeps the hidden dollar shares", async () => {
+    state.lead = { ...baseLead, terms: "free_estimate" };
+    await mount();
+    fireEvent.change(screen.getByLabelText("For You (% of labor)"), { target: { value: "60" } });
+    fireEvent.change(screen.getByLabelText("For Us (% of labor)"), { target: { value: "40" } });
+    await save();
+    expect(state.updates[0]).toMatchObject({ terms: "free_estimate", labor_amount: null, material_amount: null,
+      for_you_labor_percent: 60, for_us_labor_percent: 40, for_you_amount: 120, for_us_amount: 80 });
+  });
+
+  it("saves the diagnostic split on a Quoted job beside the labor split", async () => {
+    await mount();
+    fireEvent.change(screen.getByLabelText("For You ($ from diagnostic)"), { target: { value: "20" } });
+    fireEvent.change(screen.getByLabelText("For Us ($ from diagnostic)"), { target: { value: "30" } });
+    await save();
+    expect(state.updates[0]).toMatchObject({ terms: "quoted", for_you_amount: 120, for_us_amount: 80, for_you_diagnostic_amount: 20, for_us_diagnostic_amount: 30 });
+  });
+
+  it("refuses a negative diagnostic split instead of saving", async () => {
+    await mount();
+    fireEvent.change(screen.getByLabelText("For Us ($ from diagnostic)"), { target: { value: "-1" } });
+    await save();
+    expect(state.updates).toHaveLength(0);
+  });
+
+  it("refuses a labor percentage over 100 instead of saving", async () => {
+    state.lead = { ...baseLead, terms: "free_estimate" };
+    await mount();
+    fireEvent.change(screen.getByLabelText("For You (% of labor)"), { target: { value: "150" } });
+    await save();
+    expect(state.updates).toHaveLength(0);
+  });
+
+  it("Operators see only the Diagnostic/Service Call term, not the fee", async () => {
+    state.role = "opr";
+    state.lead = { ...baseLead, terms: "diagnostic_service_call", labor_amount: null, material_amount: null, diagnostic_fee_amount: 89 };
+    await mount();
+    const section = screen.getByRole("region", { name: "Quote breakdown" });
+    expect(section).toHaveTextContent("Diagnostic/Service Call");
+    expect(section).not.toHaveTextContent("$89");
+    expect(section).not.toHaveTextContent("$44.50");
+  });
+});

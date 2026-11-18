@@ -6,7 +6,9 @@ import { motion, AnimatePresence } from "framer-motion";
 import { ClipboardList, X, ArrowUpRight } from "lucide-react";
 import { useNotificationPopupSlot } from "./popup-slot";
 import { subscribeToNotifications } from "@/lib/realtime";
-import { useCoalescedRefresh } from "@/hooks/useCoalescedRefresh";
+import { useSharedRefresh } from "@/hooks/useCrossTab";
+import { isAlertOfKind, readActiveAlerts } from "@/lib/active-alerts";
+import { useRealtimeAwareInterval, useRealtimeReconnect } from "@/lib/realtime-health";
 
 interface IncompleteDetailsNotification {
   id: string;
@@ -50,21 +52,14 @@ export default function IncompleteDetailsPopup() {
   const isEligible =
     (role === "customer_service" || role === "cs_admin") && Boolean(user) && fullyAuthenticated;
 
-  const loadIncomplete = useCallback(async (isCurrent: () => boolean) => {
-    if (!user || !isEligible) return;
+  // One tab per browser reads (and polls); other tabs receive the same rows.
+  const sharedKey = user && isEligible ? `notifications:incomplete:${user.id}` : null;
+  const readIncomplete = useCallback(async () => (
+    user ? (await readActiveAlerts(user.id, user.created_at, "incomplete_details")) as IncompleteDetailsNotification[] : []
+  ), [user]);
 
-    const { data } = await supabase
-      .from("notifications")
-      .select("id, title, message, lead_id, created_at")
-      .eq("user_id", user.id)
-      .eq("read", false)
-      .ilike("title", "%Incomplete Details%")
-      .order("created_at", { ascending: false })
-      .limit(FETCH_LIMIT);
-
-    if (!data || !isCurrent()) return;
-
-    const rows = (data as IncompleteDetailsNotification[]).filter(
+  const applyIncomplete = useCallback((data: IncompleteDetailsNotification[], isCurrent: () => boolean) => {
+    const rows = data.filter(
       (n) => !dismissedIds.current.has(n.id),
     );
     const hasNew = rows.some((n) => !seenIds.current.has(n.id));
@@ -77,23 +72,30 @@ export default function IncompleteDetailsPopup() {
     }
 
     setItems(rows);
-  }, [user, isEligible]);
-  const fetchIncomplete = useCoalescedRefresh(loadIncomplete);
+  }, []);
+  const { refresh: fetchIncomplete, isOwner } = useSharedRefresh(sharedKey, readIncomplete, applyIncomplete);
+  // Realtime delivers these alerts; the poll is a safety net (rare while realtime is
+  // healthy, every POLL_MS when not) plus one catch-up read when realtime recovers.
+  const pollMs = useRealtimeAwareInterval(POLL_MS);
+  useRealtimeReconnect(() => { void fetchIncomplete(); }, isEligible && isOwner);
 
   useEffect(() => {
     if (!isEligible) return;
     void fetchIncomplete();
-    const interval = setInterval(fetchIncomplete, POLL_MS);
-    return () => clearInterval(interval);
   }, [fetchIncomplete, isEligible]);
+
+  useEffect(() => {
+    if (!isEligible || !isOwner) return;
+    const interval = setInterval(fetchIncomplete, pollMs);
+    return () => clearInterval(interval);
+  }, [fetchIncomplete, isEligible, isOwner, pollMs]);
 
   // Realtime so the popup lands the moment the tag is applied.
   useEffect(() => {
     if (!user || !isEligible) return;
 
     return subscribeToNotifications(user.id, (payload) => {
-      const row = payload.new as { title?: string };
-      if (payload.eventType === "INSERT" && row.title?.toLowerCase().includes("incomplete details")) {
+      if (payload.eventType === "INSERT" && isAlertOfKind(payload.new as { kind?: string; title?: string }, "incomplete_details")) {
         void fetchIncomplete();
       }
     });

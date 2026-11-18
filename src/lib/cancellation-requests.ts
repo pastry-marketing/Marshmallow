@@ -3,7 +3,7 @@ import type { AppRole, Lead, LeadCancellationRequest, LeadStatus } from "@/types
 import { logActivity } from "@/lib/activity";
 import { optimizeImageForUpload } from "@/lib/image-upload";
 import { updateLeadById } from "@/lib/lead-updates";
-import { deliverLeadNotification } from "@/lib/lead-notifications";
+import type { ReviewActionLead } from "@/lib/request-page-leads";
 
 export const CANCELLATION_REQUEST_STATUS: LeadStatus = "cancellation_requested";
 
@@ -22,7 +22,10 @@ type CreateCancellationRequestArgs = {
 
 type ReviewCancellationRequestArgs = {
   request: LeadCancellationRequest;
-  lead: Lead;
+  // Only the fields the review actually reads, so callers can join leads with
+  // a narrow projection (see src/lib/request-page-leads.ts). A full Lead
+  // still satisfies this.
+  lead: ReviewActionLead;
   reviewerId: string;
   reviewerName?: string | null;
   reviewerRole: AppRole;
@@ -187,25 +190,8 @@ export async function createCancellationRequest({
       last_edited_at: new Date().toISOString(),
     });
 
-  const approverRoles = getCancellationApproverRoles(requesterRole);
-  const { data: roles } = await supabase
-    .from("user_roles")
-    .select("user_id, role")
-    .in("role", approverRoles);
-
-  if (roles?.length) {
-    try {
-      await deliverLeadNotification({
-        leadId: lead.id,
-        title: "Lead cancellation request",
-        message: `${lead.customer_name} needs cancellation approval`,
-        userIds: roles.map((row: { user_id: string; role: string }) => row.user_id),
-      });
-    } catch (notificationError) {
-      console.error("Failed to notify cancellation approvers", notificationError);
-    }
-  }
-
+  // Approvers are notified by the database (lead_cancellation_requests_notify),
+  // using the same rule as getCancellationApproverRoles.
   await logActivity(userId, "cancellation_requested", "lead", lead.id, {
     target_name: lead.job_id,
     customer_name: lead.customer_name,

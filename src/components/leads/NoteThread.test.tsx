@@ -34,7 +34,17 @@ vi.mock("@/integrations/supabase/client", () => ({ supabase: {
     return query;
   },
 } }));
-vi.mock("@/lib/realtime", () => ({ realtimeBus: new EventTarget() }));
+const noteRelay = vi.hoisted(() => ({ held: 0, opened: 0 }));
+vi.mock("@/lib/realtime", () => ({
+  realtimeBus: new EventTarget(),
+  relayTableToBus: (table: string) => {
+    if (table !== "lead_notes") throw new Error(`unexpected table ${table}`);
+    noteRelay.held++;
+    noteRelay.opened++;
+    let released = false;
+    return () => { if (!released) { released = true; noteRelay.held--; } };
+  },
+}));
 
 function visibility(value: DocumentVisibilityState) {
   vi.spyOn(document, "visibilityState", "get").mockReturnValue(value);
@@ -55,6 +65,22 @@ afterEach(() => {
 });
 
 describe("note polling request optimization", () => {
+  it("never fetches or displays a CS thread for regular OPR, while OPR Admin keeps access", async () => {
+    state.role = "opr";
+    const { rerender } = render(<NoteThread leadId="lead-1" noteType="cs" label="CS notes" />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_001); });
+    expect(state.reads).toHaveLength(0);
+    expect(screen.queryByText("CS notes")).not.toBeInTheDocument();
+    state.role = "opr_admin";
+    rerender(<NoteThread leadId="lead-1" noteType="cs" label="CS notes" />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(state.reads).toHaveLength(1);
+    // The thread heading is static; the note bubble enters with a motion opacity
+    // transition that fake timers do not drive. Render presence is what proves
+    // the fetched content is displayed, while the heading proves the thread.
+    expect(screen.getByText("CS notes")).toBeVisible();
+    expect(screen.getByText("Initial synthetic note")).toBeInTheDocument();
+  });
   it("pauses hidden polling, immediately catches up on return and keeps the 15-second visible cadence", async () => {
     render(<NoteThread leadId="lead-1" noteType="cs" label="CS notes" />);
     await act(async () => { await vi.advanceTimersByTimeAsync(1); });
@@ -103,15 +129,22 @@ describe("note polling request optimization", () => {
   });
 
   it("does not poll an excluded thread and cleans up polling and catch-up listeners on unmount", async () => {
+    noteRelay.held = 0;
+    noteRelay.opened = 0;
     const excluded = render(<NoteThread leadId="lead-1" noteType="processor" label="Processor notes" />);
     await act(async () => { visibility("visible"); await vi.advanceTimersByTimeAsync(60_000); });
     expect(state.reads).toHaveLength(0);
     expect(screen.queryByText("Processor notes")).toBeNull();
+    // A thread the user cannot read does not subscribe to lead notes either.
+    expect(noteRelay.opened).toBe(0);
     excluded.unmount();
     const visible = render(<NoteThread leadId="lead-1" noteType="cs" label="CS notes" />);
     await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(noteRelay.held).toBe(1);
     const count = state.reads.length;
     visible.unmount();
+    // Lead notes are only subscribed while a thread is open.
+    expect(noteRelay.held).toBe(0);
     await act(async () => { visibility("visible"); await vi.advanceTimersByTimeAsync(60_000); });
     expect(state.reads).toHaveLength(count);
   });

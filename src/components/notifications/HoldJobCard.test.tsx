@@ -16,6 +16,20 @@ export const alertFixture: HoldAlert = {
   },
 };
 describe("Marshmallow read-only hold card", () => {
+  it("shows an Operator's server-redacted snapshot as City, State and ZIP only", () => {
+    const redacted = { ...alertFixture, snapshot: { ...alertFixture.snapshot, customer_phone: null, customer_landline: null, address: null,
+      tech_name: null, tech_number: null, city: "Coral Springs", state: "FL", zip_code: "33071" } };
+    const { container } = render(<HoldJobCard alert={redacted} onAcknowledge={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /complete card/i }));
+    expect(container).toHaveTextContent("Coral Springs, FL, 33071");
+    for (const secret of ["10 Main St", "5550100000", "Test Tech", "5550100001"]) expect(container).not.toHaveTextContent(secret);
+  });
+  it("shows the scheduled window in 12-hour AM/PM time", () => {
+    const { container } = render(<HoldJobCard alert={alertFixture} onAcknowledge={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Complete card" }));
+    expect(container).toHaveTextContent("2026-10-16 · 1:00 PM - 3:00 PM");
+    expect(container).not.toHaveTextContent("13:00");
+  });
   it("labels the CX schedule-confirmation hold reason", () => {
     render(<HoldJobCard alert={{ ...alertFixture, reason: "waiting_schedule_confirmation" }} onAcknowledge={vi.fn()} />);
     expect(screen.getByText("Urgent Job → Waiting for CX for Schedule Confirmation")).toBeInTheDocument();
@@ -39,5 +53,37 @@ describe("Marshmallow read-only hold card", () => {
     render(<HoldJobCard alert={{ ...alertFixture, read: true }} onAcknowledge={vi.fn()} />);
     expect(screen.queryByRole("button", { name: "Acknowledge" })).toBeNull();
     expect(screen.getByText("Acknowledged")).toBeInTheDocument();
+  });
+
+  it("redacts the snapshot client-side for a plain opr viewer, including the quote", () => {
+    const quoted = { ...alertFixture, snapshot: { ...alertFixture.snapshot, quote: "$150 private" } };
+    render(<HoldJobCard alert={quoted} role="opr" onAcknowledge={vi.fn()} />);
+    expect(screen.getByText("MM-123")).toBeInTheDocument();
+    expect(screen.queryByText("Test Customer")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Complete card" }));
+    expect(screen.queryByText("Quote")).toBeNull();
+    for (const secret of ["Test Customer", "10 Main St", "5550100000", "Test Tech", "5550100001", "$150 private"]) {
+      expect(screen.queryByText(secret)).toBeNull();
+    }
+  });
+
+  it("keeps City, State and ZIP from a server-redacted snapshot for a plain opr viewer", () => {
+    const redacted = { ...alertFixture, snapshot: { ...alertFixture.snapshot, customer_phone: null, customer_landline: null, address: null,
+      tech_name: null, tech_number: null, city: "Coral Springs", state: "FL", zip_code: "33071" } };
+    const { container } = render(<HoldJobCard alert={redacted} role="opr" onAcknowledge={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Complete card" }));
+    expect(screen.getByText("Location")).toBeInTheDocument();
+    expect(container).toHaveTextContent("Coral Springs, FL, 33071");
+    expect(screen.queryByText("Address")).toBeNull();
+    for (const secret of ["Test Customer", "10 Main St", "5550100000", "Test Tech"]) expect(container).not.toHaveTextContent(secret);
+  });
+
+  it("keeps the full snapshot, including the quote, for opr_admin", () => {
+    const quoted = { ...alertFixture, snapshot: { ...alertFixture.snapshot, quote: "$150" } };
+    render(<HoldJobCard alert={quoted} role="opr_admin" onAcknowledge={vi.fn()} />);
+    expect(screen.getByText(/Test Customer/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Complete card" }));
+    expect(screen.getByText("Quote")).toBeInTheDocument();
+    expect(screen.getByText("$150")).toBeInTheDocument();
   });
 });

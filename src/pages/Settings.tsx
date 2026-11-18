@@ -6,7 +6,6 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent } from "@/components/ui/card";
@@ -25,14 +24,16 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { toast } from "sonner";
-import { Plus, Shield, Eye, EyeOff, Trash2, ShieldCheck, ShieldOff, QrCode, Copy, RefreshCw, KeyRound, Lock, FileText, BookOpen, Megaphone, FileSpreadsheet, Hash } from "lucide-react";
+import { Plus, Shield, Eye, EyeOff, Trash2, ShieldCheck, ShieldOff, QrCode, Copy, RefreshCw, KeyRound, Lock, FileText, BookOpen, Megaphone, FileSpreadsheet, Hash, Workflow } from "lucide-react";
 import { DocumentationTab } from "@/components/settings/DocumentationTab";
 import { GoogleSheetsTab } from "@/components/settings/GoogleSheetsTab";
 import LeadCopyAccessSettings from "@/components/settings/LeadCopyAccessSettings";
-import CopilotAccessSettings from "@/components/settings/CopilotAccessSettings";
-import CopilotPermissionSwitch from "@/components/settings/CopilotPermissionSwitch";
+import MessageTemplatesTab from "@/components/settings/MessageTemplatesTab";
+import PaidLeadAccessDialog from "@/components/settings/PaidLeadAccessDialog";
+import { describePaidWindow, fetchPaidLeadAccess, setPaidLeadAccess, type PaidAccessChoice } from "@/lib/paid-lead-access";
 import { type AccessFeature } from "@/components/settings/FeatureAccessMatrix";
 const CrmUpdates = lazy(() => import("@/pages/CrmUpdates"));
+const StructureTab = lazy(() => import("@/components/settings/StructureTab"));
 import { cn } from "@/lib/utils";
 import { ALL_LEAD_STATUSES, STATUS_LABELS, ALL_NAV_ITEMS } from "@/lib/constants";
 import { adminApi } from "@/lib/admin-api";
@@ -42,7 +43,7 @@ import type { AppRole, LeadStatus } from "@/types";
 import MFAEnroll from "@/components/auth/MFAEnroll";
 import { motion } from "framer-motion";
 import { heroTitle } from "@/lib/motion";
-import { DEFAULT_MESSAGE_TEMPLATES, MESSAGE_TEMPLATE_LABELS, type MessageTemplateKey } from "@/lib/message-templates";
+import { backgroundInterval } from "@/lib/overload-guard";
 
 const generateCode = () => {
   const arr = new Uint32Array(1);
@@ -57,6 +58,7 @@ const NAV_SECTION_LABELS: Record<string, string> = {
   processor_board: "Processor Board",
   calls: "Calls Log",
   analytics: "Analytics",
+  cs_team_performance: "CS Team Performance",
   settings: "Settings",
   activity_logs: "Activity Logs",
   schedule: "Schedule",
@@ -66,6 +68,7 @@ const NAV_SECTION_LABELS: Record<string, string> = {
   quote_approval_requests: "Quote Approval",
   urgent_review_requests: "Urgent Review",
   cx_updates: "CX & Tech Updates",
+  notifications: "Notification History",
   quote_pending_requests: "Quotes to Send",
   map_view: "Map View",
   technicians: "Technicians",
@@ -102,6 +105,7 @@ interface SettingsUser {
   opr_code: string | null;
   can_view_tech_report: boolean | null;
   can_add_manual_leads: boolean | null;
+  can_edit_processor_notes: boolean | null;
 }
 
 interface AccessCodeRow {
@@ -124,55 +128,6 @@ interface StatusVisibilityRow {
   is_visible: boolean;
 }
 
-type MessageTemplateRow = {
-  key: MessageTemplateKey;
-  template: string;
-};
-
-type MessageTemplateUpsert = MessageTemplateRow & {
-  updated_by: string | null;
-};
-
-type MessageTemplateClient = {
-  from: (table: "message_templates") => {
-    select: (columns: string) => Promise<{ data: MessageTemplateRow[] | null; error: Error | null }>;
-    upsert: (row: MessageTemplateUpsert) => Promise<{ error: Error | null }>;
-  };
-};
-
-const messageTemplateDb = supabase as unknown as MessageTemplateClient;
-
-function TemplateEditor({
-  initialValue,
-  saving,
-  onSave,
-}: {
-  templateKey: MessageTemplateKey;
-  initialValue: string;
-  saving: boolean;
-  onSave: (value: string) => void;
-}) {
-  const [value, setValue] = useState(initialValue);
-
-  useEffect(() => {
-    setValue(initialValue);
-  }, [initialValue]);
-
-  return (
-    <div className="space-y-3">
-      <Textarea value={value} onChange={(event) => setValue(event.target.value)} rows={12} />
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-[11px] text-muted-foreground">
-          Available placeholders include {"{tech_name}"}, {"{schedule_time}"}, {"{customer_name}"}, {"{customer_phone}"}, {"{customer_address}"}, {"{service_details}"}, and {"{quote}"}.
-        </p>
-        <Button onClick={() => onSave(value)} disabled={saving || !value.trim()}>
-          {saving ? "Saving..." : "Save template"}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
 // OPR Admin always inherits the OPR role defaults, so it intentionally has no
 // separate role row that could drift out of sync.
 const MANAGED_ROLES: AppRole[] = ["customer_service", "processor", "opr", "cs_admin"];
@@ -188,7 +143,7 @@ const Settings = () => {
   const [newName, setNewName] = useState("");
   const [newRole, setNewRole] = useState<AppRole>("customer_service");
   const [creating, setCreating] = useState(false);
-  const [activeTab, setActiveTab] = useState<"users" | "nav_permissions" | "status_permissions" | "templates" | "security" | "documentation" | "crm_updates" | "google_sheets">("users");
+  const [activeTab, setActiveTab] = useState<"users" | "nav_permissions" | "status_permissions" | "templates" | "security" | "documentation" | "structure" | "crm_updates" | "google_sheets">("users");
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
   const [passwordUserId, setPasswordUserId] = useState("");
   const [passwordUserName, setPasswordUserName] = useState("");
@@ -224,6 +179,13 @@ const Settings = () => {
               }[]
             | null;
         };
+        // Read separately so the user list still loads if the
+        // 20261220000000 migration has not been applied yet (the grant then
+        // reads as off, and switching it reports the database error).
+        const { data: notesGrants } = (await supabase.from("profiles").select("id, can_edit_processor_notes" as never)) as unknown as {
+          data: { id: string; can_edit_processor_notes: boolean | null }[] | null;
+        };
+        const notesGrantByUserId = new Map((notesGrants ?? []).map((row) => [row.id, row.can_edit_processor_notes]));
 
         return (profiles ?? [])
           .map((profile) => {
@@ -239,6 +201,7 @@ const Settings = () => {
               opr_code: profile.opr_code,
               can_view_tech_report: profile.can_view_tech_report,
               can_add_manual_leads: profile.can_add_manual_leads,
+              can_edit_processor_notes: notesGrantByUserId.get(profile.id) ?? false,
             } as SettingsUser;
           })
           .filter((entry): entry is SettingsUser => entry !== null);
@@ -271,6 +234,7 @@ const Settings = () => {
             opr_code: null,
             can_view_tech_report: false,
             can_add_manual_leads: manualLeadByUserId.get(profile.id) ?? false,
+            can_edit_processor_notes: null,
           } as SettingsUser;
         })
         .filter((entry): entry is SettingsUser => entry !== null);
@@ -300,7 +264,7 @@ const Settings = () => {
         return [];
       }
     },
-    refetchInterval: 15000,
+    refetchInterval: backgroundInterval(15000),
   });
 
   const userTotpMap = useMemo(() => {
@@ -363,6 +327,28 @@ const Settings = () => {
     },
   });
 
+  // Paid-lead grants: which paid leads each user with Paid switched on can see.
+  const { data: paidGrants = [] } = useQuery({
+    queryKey: ["settings-paid-lead-access"],
+    enabled: isAdmin,
+    queryFn: fetchPaidLeadAccess,
+  });
+  const paidGrantByUser = useMemo(() => new Map(paidGrants.map((grant) => [grant.user_id, grant])), [paidGrants]);
+  const [paidDialogUserId, setPaidDialogUserId] = useState<string | null>(null);
+  const savePaidAccess = useMutation({
+    mutationFn: ({ userId, choice }: { userId: string; choice: PaidAccessChoice | null }) => setPaidLeadAccess(userId, choice),
+    onSuccess: (_data, { choice }) => {
+      setPaidDialogUserId(null);
+      queryClient.invalidateQueries({ queryKey: ["settings-paid-lead-access"] });
+      queryClient.invalidateQueries({ queryKey: ["settings-status-visibility"] });
+      queryClient.invalidateQueries({ queryKey: ["lead-status-visibility"] });
+      queryClient.invalidateQueries({ queryKey: ["paid-lead-access"] });
+      queryClient.invalidateQueries({ queryKey: ["leads"] });
+      toast.success(choice ? `Paid leads shared: ${choice.mode === "all" ? "all time" : describePaidWindow({ start_date: choice.start, end_date: choice.end })}` : "Paid leads access removed");
+    },
+    onError: (err: unknown) => toast.error(err instanceof Error ? err.message : "Failed to update paid lead access"),
+  });
+
   const { data: statusVisibility = [] } = useQuery<StatusVisibilityRow[]>({
     queryKey: ["settings-status-visibility"],
     enabled: isAdmin,
@@ -377,39 +363,6 @@ const Settings = () => {
 
       return data ?? [];
     },
-  });
-
-  const { data: messageTemplates = [] } = useQuery<Array<{ key: MessageTemplateKey; template: string }>>({
-    queryKey: ["settings-message-templates"],
-    enabled: isAdmin,
-    queryFn: async () => {
-      const { data, error } = await messageTemplateDb.from("message_templates").select("key, template");
-      if (error) throw error;
-
-      const rows = (data ?? []) as Array<{ key: MessageTemplateKey; template: string }>;
-      const byKey = new Map(rows.map((row) => [row.key, row.template]));
-      return (Object.keys(DEFAULT_MESSAGE_TEMPLATES) as MessageTemplateKey[]).map((key) => ({
-        key,
-        template: byKey.get(key) ?? DEFAULT_MESSAGE_TEMPLATES[key],
-      }));
-    },
-  });
-
-  const updateTemplate = useMutation({
-    mutationFn: async ({ key, template }: { key: MessageTemplateKey; template: string }) => {
-      const { error } = await messageTemplateDb.from("message_templates").upsert({
-        key,
-        template,
-        updated_by: user?.id ?? null,
-      });
-      if (error) throw error;
-    },
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["settings-message-templates"] });
-      queryClient.invalidateQueries({ queryKey: ["message-template", variables.key] });
-      toast.success("Template saved");
-    },
-    onError: (err: unknown) => toast.error(err instanceof Error ? err.message : "Failed to save template"),
   });
 
   const userById = useMemo(() => new Map(users.map((targetUser) => [targetUser.id, targetUser])), [users]);
@@ -761,6 +714,25 @@ const Settings = () => {
     onError: (error) => toast.error(`Failed to update report access: ${error.message}`),
   });
 
+  // Admin-only: profiles UPDATE RLS and protect_profile_privilege_flags() refuse
+  // anyone else. Lets a Processor edit other users' Processor Notes.
+  const toggleCanEditProcessorNotes = useMutation({
+    mutationFn: async ({ userId, allowed }: { userId: string; allowed: boolean }) => {
+      const { data, error } = await supabase.from("profiles")
+        .update({ can_edit_processor_notes: allowed } as never).eq("id", userId).select("id");
+      if (error) throw error;
+      if (!data?.length) throw new Error("Not permitted");
+      return { userId, allowed };
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(settingsUsersQueryKey, (old: SettingsUser[] | undefined) =>
+        old ? old.map((u) => (u.id === data.userId ? { ...u, can_edit_processor_notes: data.allowed } : u)) : [],
+      );
+      toast.success(`Edit Processor Notes ${data.allowed ? "granted" : "revoked"}`);
+    },
+    onError: (error) => toast.error(`Failed to update Edit Processor Notes: ${error.message}`),
+  });
+
   // profiles UPDATE RLS is admin-only, so this goes through the SECURITY
   // DEFINER RPC that lets a CS Admin (with can_manage_users) grant the flag
   // to Customer Service users only.
@@ -815,18 +787,18 @@ const Settings = () => {
   };
 
   const featureColumns: AccessFeature<SettingsUser>[] = [
-    { key: "marshmallow_copilot", label: "Marshmallow Copilot", renderControl: (target) => <CopilotPermissionSwitch user={target} /> },
     ...ALL_NAV_ITEMS.map((section) => ({
       key: section,
       label: NAV_SECTION_LABELS[section] || section,
       searchTerms: section === "cx_updates" ? ["Get CX Update", "Get Tech Update", "CX Updates", "Tech Updates", "Question More"]
-        : section === "processor_board" ? ["Dispatch Board", "Job Update Board"] : [],
+        : section === "processor_board" ? ["Dispatch Board", "Job Update Board"]
+        : section === "cs_team_performance" ? ["Analytics", "CS Report", "Team Performance"] : [],
       renderControl: (target: SettingsUser) => {
         const fixedReason = section === "optimization" || section === "payment_requests"
           ? "Admin only"
           : section === "ai_assistance" ? "Customer Service roles only"
           : section === "processor_board" ? "Admin and Processor roles only"
-          : section === "cx_updates" ? "Admin, Processor, CS Admin and Customer Service roles"
+          : section === "cx_updates" || section === "notifications" ? "Admin, Processor, CS Admin and Customer Service roles"
           : section === "settings" ? "Controlled by Manage CS in Users"
           : section === "quote_pending_requests" ? "Controlled by Quotation Master"
           : section === "cancellation_requests" && canAccessCancellationRequests(target.role) ? "Included with role" : null;
@@ -854,6 +826,16 @@ const Settings = () => {
         ? <Switch aria-label={`Manual Lead for ${target.full_name || "Unnamed user"}`} checked={target.can_add_manual_leads || false} disabled={toggleCanAddManualLead.isPending}
             onCheckedChange={(checked) => toggleCanAddManualLead.mutate({ userId: target.id, allowed: checked })} />
         : <span className="text-xs text-muted-foreground">{target.role === "cs_admin" ? "Included with role" : "Not available"}</span>,
+    },
+    {
+      key: "edit_processor_notes", label: "Edit Processor Notes",
+      searchTerms: ["Processor Notes", "Edit others' notes", "Notes thread"],
+      renderControl: (target) => target.role === "processor"
+        ? <Switch aria-label={`Edit Processor Notes for ${target.full_name || "Unnamed user"}`}
+            title="Edit other users' notes in the Processor Notes thread"
+            checked={target.can_edit_processor_notes || false} disabled={!isAdmin || toggleCanEditProcessorNotes.isPending}
+            onCheckedChange={(checked) => toggleCanEditProcessorNotes.mutate({ userId: target.id, allowed: checked })} />
+        : <span className="text-xs text-muted-foreground">Processors only</span>,
     },
   ];
 
@@ -1005,13 +987,14 @@ const Settings = () => {
             { key: "users", label: "Users", icon: Shield },
             ...(isAdmin ? [{ key: "nav_permissions" as const, label: "Feature Access", icon: Shield }] : []),
               ...(isAdmin ? [{ key: "status_permissions" as const, label: "Status Visibility", icon: Eye }] : []),
-              ...(isAdmin ? [{ key: "templates" as const, label: "Templates", icon: FileText }] : []),
+            ...(isAdmin ? [{ key: "templates" as const, label: "Templates", icon: FileText }] : []),
             
             
             { key: "security", label: "Security", icon: ShieldCheck },
             ...(isAdmin ? [{ key: "crm_updates" as const, label: "CRM Updates", icon: Megaphone }] : []),
             ...(isAdmin ? [{ key: "google_sheets" as const, label: "Google Sheets", icon: FileSpreadsheet }] : []),
             ...(isAdmin ? [{ key: "documentation" as const, label: "Documentation", icon: BookOpen }] : []),
+            ...(isAdmin ? [{ key: "structure" as const, label: "Structure", icon: Workflow }] : []),
           ] as const
         ).map((tab) => (
           <button
@@ -1035,6 +1018,12 @@ const Settings = () => {
 
       {activeTab === "documentation" && isAdmin && <DocumentationTab />}
 
+      {activeTab === "structure" && isAdmin && (
+        <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Loading…</div>}>
+          <StructureTab />
+        </Suspense>
+      )}
+
       {activeTab === "crm_updates" && isAdmin && (
         <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Loading…</div>}>
           <CrmUpdates />
@@ -1042,6 +1031,7 @@ const Settings = () => {
       )}
 
       {activeTab === "google_sheets" && isAdmin && <GoogleSheetsTab />}
+      {activeTab === "templates" && isAdmin && <MessageTemplatesTab />}
 
       {activeTab === "users" && (
         <div className="grid gap-3">
@@ -1292,7 +1282,6 @@ const Settings = () => {
 
       {activeTab === "nav_permissions" && isAdmin && (
         <div className="space-y-4">
-<CopilotAccessSettings users={users} />
           <LeadCopyAccessSettings users={users} features={featureColumns} />
           {navPermissionsError && <div className="flex flex-wrap items-center gap-3 rounded-xl border border-destructive/30 p-4"><p role="alert" className="text-sm text-destructive">Navigation permissions could not be loaded: {navPermissionsError.message}</p><Button variant="outline" onClick={() => void refetchNavPermissions()}>Retry navigation permissions</Button></div>}
         </div>
@@ -1417,52 +1406,67 @@ const Settings = () => {
                           </div>
                         </td>
 
-                        {ALL_LEAD_STATUSES.map((status) => (
-                          <td key={status} className="px-2 py-3 text-center">
-                            <Switch
-                              checked={getStatusVisibility(targetUser.id, status)}
-                              onCheckedChange={(checked) =>
-                                toggleStatusVisibility.mutate({
-                                  userId: targetUser.id,
-                                  status,
-                                  isVisible: checked,
-                                })
-                              }
-                            />
-                          </td>
-                        ))}
+                        {ALL_LEAD_STATUSES.map((status) => {
+                          // Paid for a user also decides which paid leads they can see:
+                          // switching it on asks All time or a date range.
+                          if (status === "paid") {
+                            const grant = paidGrantByUser.get(targetUser.id);
+                            const on = getStatusVisibility(targetUser.id, status);
+                            return (
+                              <td key={status} className="px-2 py-3 text-center">
+                                <Switch
+                                  checked={on}
+                                  disabled={savePaidAccess.isPending}
+                                  aria-label={`Paid leads for ${targetUser.full_name || targetUser.email || "user"}`}
+                                  onCheckedChange={(checked) => {
+                                    if (checked) setPaidDialogUserId(targetUser.id);
+                                    else savePaidAccess.mutate({ userId: targetUser.id, choice: null });
+                                  }}
+                                />
+                                {on && grant && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setPaidDialogUserId(targetUser.id)}
+                                    className="mt-1 block w-full whitespace-nowrap text-[9px] text-primary underline-offset-2 hover:underline"
+                                    title="Change which paid leads this user can see"
+                                  >
+                                    {describePaidWindow(grant)}
+                                  </button>
+                                )}
+                              </td>
+                            );
+                          }
+                          return (
+                            <td key={status} className="px-2 py-3 text-center">
+                              <Switch
+                                checked={getStatusVisibility(targetUser.id, status)}
+                                onCheckedChange={(checked) =>
+                                  toggleStatusVisibility.mutate({
+                                    userId: targetUser.id,
+                                    status,
+                                    isVisible: checked,
+                                  })
+                                }
+                              />
+                            </td>
+                          );
+                        })}
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
             </div>
+            <PaidLeadAccessDialog
+              open={paidDialogUserId !== null}
+              userName={(paidDialogUserId && (getUserById(paidDialogUserId)?.full_name || getUserById(paidDialogUserId)?.email)) || "this user"}
+              current={paidDialogUserId ? paidGrantByUser.get(paidDialogUserId) ?? null : null}
+              saving={savePaidAccess.isPending}
+              onCancel={() => setPaidDialogUserId(null)}
+              onConfirm={(choice) => { if (paidDialogUserId) savePaidAccess.mutate({ userId: paidDialogUserId, choice }); }}
+            />
           </CardContent>
         </Card>
-      )}
-
-      {activeTab === "templates" && (
-        <div className="grid gap-4 lg:grid-cols-2">
-          {messageTemplates.map((templateRow) => (
-            <Card key={templateRow.key} className="border-border/60 bg-card/95">
-              <CardContent className="space-y-4 p-5">
-                <div>
-                  <p className="text-sm font-semibold text-foreground">{MESSAGE_TEMPLATE_LABELS[templateRow.key]}</p>
-                  <p className="mt-1 text-[12px] leading-5 text-muted-foreground">
-                    Admin changes here sync to every role. Popup edits made while copying stay private to that popup.
-                  </p>
-                </div>
-
-                <TemplateEditor
-                  templateKey={templateRow.key}
-                  initialValue={templateRow.template}
-                  saving={updateTemplate.isPending}
-                  onSave={(value) => updateTemplate.mutate({ key: templateRow.key, template: value })}
-                />
-              </CardContent>
-            </Card>
-          ))}
-        </div>
       )}
 
       {activeTab === "security" && (

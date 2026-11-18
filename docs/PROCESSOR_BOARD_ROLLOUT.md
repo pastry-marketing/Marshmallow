@@ -1,5 +1,1620 @@
 # Processor Board
 
+## Payment screenshots (2026-10-26; both Edge functions awaiting redeploy)
+
+Technicians mostly send our share as a **screenshot with no words**. The CRM stores
+pictures on each Quo message (`quo_messages.media`), but checks read only the text,
+so a picture-only message was dropped before the rules and AI saw it. Now:
+
+- Pictures are carried through (mirror `media`; for current Quo history, the
+  mirror's pictures are matched by Quo message id). A picture-only text reads as
+  `[picture]` with `images: N`.
+- Rule: a technician picture after our share request (or after the technician
+  promised it) is the payment screenshot → share **sent** (Payment Pending), shown
+  in Review as **Tech sent a picture (payment screenshot)**. Not counted: pictures
+  before we asked (job photos), pictures captioned as job photos (before/after,
+  parts, damage, install…), or pictures after only the daily update template.
+  "We haven't received it" afterwards → back to requested.
+- AI is told what `[picture]` means and may cite it as share_sent.
+- The picture itself is **not** opened or read (no amount/recipient check); the
+  team still verifies in Payment Pending. Rules version 3, so every job is re-read
+  on its next check. No migration.
+
+## Customer's side (2026-10-26; migration 20261127000000 + both Edge functions awaiting approval)
+
+Each check also reads the **customer's own texts with our office** (their linked
+conversation or their number), from the day before the lead was saved, server-side
+for that one lead. AI uses them only for the customer's point of view on the job,
+never for our share or the technician's acceptance:
+
+| Customer says | Effect |
+| --- | --- |
+| The work is done (exact customer quote) | Completes a job the technician did not report (then Payment Pending / Send Dose by the share and the clock). |
+| Not finished / coming back / waiting for parts, after a completion | Reopens it: Job In Progress, no dose yet. |
+| Tech did not show, unhappy, issue remains, cancelled or rescheduled | Shown in Review under **Customer's side**; never a status by itself. |
+
+A customer claim counts only with an exact quote from a customer message (not our
+office, not invented, not "will be done tomorrow"). If the customer chat cannot be
+read, the check still saves from the technician chat and Review says so. AI is not
+skipped when the customer wrote after the technician's "Done". Customer texts are
+part of the check's input hash, so a new customer message means a new AI answer.
+
+**Triggers.** Migration `20261127000000_processor_board_customer_messages.sql`
+makes a new customer message re-check the job (worker queue, within about 5
+minutes) and show "new activity" on the board, exactly like a technician message.
+Only results saved by the new Edge code are compared, and an unreadable customer
+chat is never compared, so it cannot loop the queue; the apply/deploy order does not
+matter. SQL harness `162`: **224/224 PASS** (all board migrations applied twice on
+isolated PGlite). Rollback: see the migration footer.
+
+## Timeline rules v2 from a deeper chat review (2026-10-26; both Edge functions awaiting redeploy)
+
+A second pass over the same export, job by job, comparing the old and new rules on
+every changed field. The first evaluation counted every message that repeats the
+customer details (our follow-ups do) as a new job; it now counts each customer
+once: **470 real jobs**, not 1,085.
+
+| Change | Why (what the chats showed) |
+| --- | --- |
+| Confirm prompt | All its wordings: "confirm if you get the complete customer details", "check if you got the details", "Received??". |
+| Took the job | Replies such as "I received", "Recieved", "Comfirmed", "Kk", "Si", "Hi ok", "Got details…" (refusals/questions excluded); a 👍/Liked reaction on our confirm prompt or this job's details; answering the visit reminder. |
+| Share requests | Our daily update template ("is it in progress or completed?") carries the Zelle details: it is an update request, not a share request or completion. A previous job's share, a waived share, or "once the job is completed" is not this job's request. "Send my shares" / "did you send our cut" are. |
+| Share sent | Our "Thanks, let me check & confirm with my accounts department" after the technician's payment screenshot (images are not text in the export) → **Screenshot received · accounts checking** (share state sent). "We haven't received it" / "still pending" afterwards → back to requested. "Did you send the payment?" → "Yes" counts; "sent the estimate/report/invoice" does not. |
+| Completion | Opening sentences such as "I'm done", "the job is completed. Customer is happy…", "Done with the work", and "she paid $190 by check" / "I collected the 199" — unless the message mentions a part, return visit, diagnostic, deposit, another job or "but". |
+
+Before → after on the 470 jobs: took job 263 → 305; completed from the tech's own
+words 28 → 46 (share-request inference 156 → 134, 5 false completions removed);
+share sent 33 → 93 (about 53 jobs showed "share requested", heading for Send Dose,
+after we had acknowledged the payment screenshot). Every changed field was
+hand-reviewed; regressions found in review (dispatch "our cut" wording, "sent the
+estimate", deposits, "my previous job") were fixed before commit.
+
+A rules version is now part of each check's input hash, so the next check of a job
+re-reads it with the new rules even when the chat is unchanged; no migration and no
+policy change. Jobs whose share is requested/sent are re-checked daily, so most
+board rows refresh within a day of the redeploy; **Check again** refreshes one now.
+Redeploy **both** `processor-board` and `processor-board-daily`, then publish the CRM
+(Review shows the new step).
+
+## Last 30 days only (2026-10-24; migration 20261126000000 awaiting manual application)
+
+The board and the server worker now include only leads created in the last 30 days
+(rolling, `created_at >= now() - 30 days`), so no AI is spent on older leads. Older
+leads are unchanged and stay in the CRM. Apply
+`supabase/migrations/20261126000000_processor_board_last_30_days.sql`; no Edge
+redeploy is needed. SQL harness `161`: **214/214 PASS** on isolated PGlite.
+
+## v4 job timeline rules from real chats (2026-10-24; migration 20261125000000 + both Edge functions awaiting approval)
+
+Built from an analysis of 1,079 exported technician chats (614 technicians, ~99,000
+messages, Aug–Oct 2026; 84% call-transcript lines). Every job follows the same
+steps: offer → full customer details tagged **"*Customer # N*"** (98.5% tagged; no
+job IDs are ever sent) → "confirm if you received complete customer details?" →
+"Yes/Ok" (took the job) → automated visit reminder → update request → "Done" →
+share request ("Active Zelle … send our shares") → "sent" → "we received the
+payment". **Payment is the technician sending our share**, not the customer.
+
+| Area | v4 rule |
+| --- | --- |
+| Exact rules (`_shared/processor-job-timeline.ts`) | Find this lead's details message by exact customer phone, full name or street; take its tag; read the standard steps from texts after it. Reactions are ignored; replies after another job's details count only when they name this job; nothing before this job's details counts. Without the details message the rules say nothing. |
+| AI | Still reads calls and free-form replies, now given the rule facts (`knownFacts`) and the share definition. Rule facts and AI facts are merged; a later AI "in progress" (parts, return visit) beats an earlier rule completion. AI is skipped only for a text-only job whose completion the rules found and where the tech wrote nothing else after it. |
+| Payment / Send Dose | Share state from the tech chat: requested → promised → sent → received. Any share step means the job is done. Sent/received → Payment Pending (verify, mark Paid); requested/promised not sent 3+ days after the schedule → Send Dose. The customer chat is no longer read. |
+| Re-check | Results from v3 (policy 10) keep showing; the worker re-checks every job once with the new rules (policy 11), changed jobs first. Daily re-check runs until the share is received. |
+| Review | New **Job timeline** (each step with time and quote) and **Our share** sections. |
+
+Offline evaluation (`npx vite-node scripts/evaluate-processor-timeline.ts -- <export.csv>`,
+aggregate counts only, nothing leaves the machine) on the export: all 1,085 jobs
+matched their own details message; tag found 1,075; took job 394; visit confirmed
+211; update requested 510; completed 431 (64 from the tech's own words, 367 from our
+share request); share requested 427, sent 89, received 29; 41 settled by rules
+alone. Hand-checked samples: took-job, update-request and payment-received hits were
+correct; completion/sent rules were tightened after the first sample (reactions,
+"wants it done", "sent you the contact info") and re-checked.
+
+Apply `supabase/migrations/20261125000000_processor_board_job_timeline.sql`, then
+redeploy **both** `processor-board` and `processor-board-daily`, then publish the
+CRM. SQL harness `160` (11 checks): **209/209 PASS** with every board migration
+applied twice on isolated PGlite. Rollback: see the migration footer.
+
+## v3 rules after user testing (2026-10-24; migration 20261124000000 + both Edge functions awaiting approval)
+
+Supersedes the status, payment-overdue, auto-check and pagination parts of the v2
+section below.
+
+| Area | v3 rule |
+| --- | --- |
+| Send Dose | The technician took or completed the job (or the lead is saved Payment Pending / Job Done), it is still not paid, and more than 3 days have passed since the scheduled date and time. Never while the chat (or the saved lead) says the job is still in progress. The 60-minute "unanswered" rule and **Payment Overdue** are removed. |
+| Payment Pending | Completed and unpaid, under 3 days since the schedule; Paid Approval Pending always. |
+| Wrong Tech Number | The tech number is missing or not a valid 10-digit number (11 digits only with a leading 1). Shown first; such jobs are never sent to AI. |
+| Other statuses | Job In Progress, Take Job Update, Not enough details in the chat, Upcoming — unchanged. |
+| When checks run | **Server only.** Every 5 minutes the dispatcher looks for due jobs and calls `processor-board-daily` only if there are some: (1) lead edited or a new tech message, or a new customer message for a completed job; (2) never checked; (3) completed and unpaid, not checked in 20 hours. Failures back off 15 min → 24 h. Opening the board never runs AI; "Check again" in Review checks one job on request. |
+| Board list | Every job, no pagination, newest lead first, with a compact AI summary per row. Full evidence loads only when a Review opens (`detail` action). List refresh every 60 s. |
+
+Apply `supabase/migrations/20261124000000_processor_board_send_dose_worker.sql`,
+then redeploy **both** `processor-board` (list summary + detail action) and
+`processor-board-daily` (due-job queue + retry recording), then publish the CRM.
+Vault/Edge secrets from the daily-check setup are reused; the cron entry keeps its
+name and now runs every 5 minutes. SQL harness `159` (28 checks) covers every rule
+above, the queue order, backoff, dispatcher and browser denial: **197/197 PASS** on
+isolated PGlite with all board migrations applied twice. Rollback: see the
+migration footer.
+
+## v2: lead chat window, six statuses and change-driven checks (2026-10-23; awaiting migration + Edge deployment)
+
+Supersedes the board scope, ordering, statuses and AI input described in the
+older sections below. Those sections remain as history.
+
+### Behavior
+
+| Area | v2 rule |
+| --- | --- |
+| Board scope | Technician name or number saved, and a schedule or an active job status. Excludes `paid`, `partial_paid`, `cancelled`, `scammed` (and legacy `done`/`completed`). Lead RLS and per-user status visibility still apply. |
+| Order | Newest lead (`created_at`) first, 25 per page. |
+| Statuses | Paid Approval Pending → Payment Pending. Send Dose (tech took the job and our message about it, including a payment question, unanswered 60+ min). Completed (tech said completed, or saved Payment Pending / Job Done) → Payment Pending, then **Payment Overdue** 24 h after the tech's completion message (or the appointment when there is none), unless the customer promised a later date. Then Job In Progress → Not enough details in the chat → Take Job Update (appointment passed) → Upcoming. Jobs never checked use only the saved status and schedule. |
+| Payment (completed jobs) | The customer's own conversations (linked to the lead, or the exact customer number) are read from a day before completion: texts only, CRM mirror. AI reports Waiting on customer / Promised (with date) / Refused or disputes / Says paid / Not asked yet / Unclear, each backed by a verbatim quote; "waiting" is re-checked against the messages (any customer reply after our request cancels it). A failed customer read keeps the technician result and is retried by the daily check. |
+| Filter / counts | Server-side (`p_ai_status`), so counts and filters cover every board job, not one page. |
+| AI input | Tech chat from the first customer mention on/after the day before lead creation, else from that day; texts + speaker-verified call segments + answered calls. Other recent jobs for the tech are named so AI ignores them. Over 60k chars: dispatch + newest messages kept, omitted count shown. |
+| Trust | AI returns facts only. Completion/acceptance need verbatim technician quotes; negated or future wording is rejected; "waiting" must point at our own message. Statuses are computed once, in SQL. AI never writes leads or sends messages. |
+| UI | Compact table like Urgent leads: lead name + ID, tech name + number, service, terms, schedule (red when passed), current lead status (the saved CRM status badge), AI status, Chat / Review (inline, no sidebar) / Open lead, created date. Status chips filter the board. |
+
+### How checks are triggered (no repeated rechecking)
+
+1. **Time-based changes need no AI.** Facts are time-independent; the list query
+   computes Take Job Update / Send Dose from them and `now()`. The 30 s list poll
+   is a cheap SQL read.
+2. **AI reruns only on change.** A row is checked when it has no v2 facts, was
+   saved for another technician, or `ai_stale` (lead `updated_at` or its tech
+   conversation's `last_message_time` changed). Realtime lead/conversation events
+   refresh the list, which marks the changed rows.
+3. **Unchanged chat reuses the answer.** The server hashes the exact window it would
+   send; an identical hash reuses the saved facts with no AI call.
+4. **No duplicates.** One sequential runner per open board, the existing 2-minute
+   lease across sessions, backoff for failures, and setup failures wait for a fix.
+
+5. **Customer messages also trigger.** For completed jobs the saved result keeps the
+   customer conversations' latest message time; a new customer message marks the
+   job stale (`processor_customer_last_message`). Non-payment jobs ignore customer chat.
+6. **Daily safety check (server).** `marshmallow_private.dispatch_processor_board_daily`
+   runs every 15 minutes from pg_cron but calls the new `processor-board-daily`
+   function only when completed, unpaid jobs exist that were not checked in 20 hours
+   (3 per call, payment approvals skipped). So each such job is re-read about once a
+   day even when nobody writes, which also catches messages a webhook missed.
+   Unchanged chats reuse the saved answers; audit rows say "Processor Board daily check".
+
+### Apply / deploy (manual, in order)
+
+1. Apply `supabase/migrations/20261122000000_processor_board_lead_window_statuses.sql`
+   (adds `processor_board_status`, `processor_customer_last_message` and
+   `list_processor_board_jobs`; no table, RLS, index or lead change; the old
+   `list_processor_jobs` stays for the current v10 Edge).
+1c. Apply `supabase/migrations/20261122002000_processor_board_stale_never_null.sql`
+   (defect fix: unchecked jobs whose customer has a CRM conversation returned
+   `ai_stale = NULL`, which made the CRM reject the whole page as "backend out of
+   date"; only `list_processor_board_jobs` changes). Apply after 1b.
+1b. Apply `supabase/migrations/20261122001000_processor_board_daily_check.sql`
+   (lets a NULL actor save as the daily check, adds the candidate query, the
+   dispatcher and the `processor-board-daily-check` cron entry). It does nothing
+   until step 3b.
+2. Regenerate `src/integrations/supabase/types.ts` (the two new functions are not
+   in it; the CRM does not call them directly, so the build does not depend on it).
+3. Deploy `processor-board` (policy 10) **and publish the CRM together**. The new
+   CRM shows "backend is out of date" against the old function (no fabricated rows);
+   the old CRM cannot parse v2 results, so do not leave old CRM + new function live.
+3b. Daily check (separately approved): generate a random secret; set it as Edge
+   secret `PROCESSOR_DAILY_CRON_SECRET`; store it in Vault as
+   `processor_board_daily_cron_secret` and the project URL as
+   `processor_board_daily_project_url`; deploy `processor-board-daily`
+   (`verify_jwt = false`, it checks the secret itself).
+4. No Donut ZIP change.
+
+Rollback: unpublish to the previous CRM and redeploy `processor-board` v10 together,
+then drop the two new functions (SQL in the migration footer). v2 results saved in
+`processor_job_assessments` (advisory cache, `result->>'policy' = '10'`) would make
+the old CRM's strict parser reject its page; clearing those cache rows is a separate
+write that needs approval. `activity_logs` audit rows are kept. No lead data changes.
+For the daily check alone: unschedule `processor-board-daily-check` and follow the
+rollback footer of `20261122001000_processor_board_daily_check.sql`.
+
+### Verification (local only)
+
+- SQL: `node scripts/test-processor-board-db.mjs <pglite dir>` applies every board
+  migration twice on isolated PGlite and runs harnesses 150–158: **169/169 PASS**
+  (156 runs again after the `ai_stale` fix; 158 is its regression check).
+  `156` covers scope, order, each status incl. Payment Overdue / promised date /
+  approvals / Send Dose after completion, tech and customer staleness, counts,
+  filter + search, RLS, visibility deny, excluded roles and admin. `157` covers daily
+  candidates, idle/unconfigured/configured dispatch (stubbed pg_net/Vault), the
+  daily-check audit name, unknown actor and stale save refusal, and browser denial.
+- Vitest: Edge handler (window, transcripts, reuse, no-chat, unquoted completion,
+  unanswered message, mirror behind, denied roles, scope, failures, lease, list
+  filter, customer payment read/reuse/failure, daily worker secret/candidates/no
+  customer data), lead-window, payment verification, planner, contract and page.
+- Not run: shared-production SQL, deployed Edge, signed-in browser QA, live Quo/AI.
+
+### Efficiency review
+
+- UI: one layout rendered (table or cards), inline review only for the open row.
+- Cache/realtime: existing query key and shared realtime bus; one list invalidation
+  per check batch, rows patched immediately from each result.
+- API/AI: AI only for changed chats; identical windows reuse facts; no-chat leads
+  skip AI. The window bound replaces sending all job-linked history since creation.
+  Customer chats are read only for completed jobs; the daily dispatcher makes no
+  Edge call when nothing is due (one indexed query per 15 minutes).
+- Database: one list RPC computes status, counts and the page in one statement over
+  the board's base set (left joins on primary keys). No new index; measure with
+  `EXPLAIN ANALYZE` on production before proposing one.
+- Donut: not applicable (no counterpart).
+- No production usage or billing comparison was made.
+
+## Five action tags, clear check results and saved call transcripts (2026-10-23; Edge installed, CRM publication pending)
+
+This follow-up addresses the new screenshots and supersedes the earlier text-only
+AI input/filter and No action yet badge descriptions below.
+
+### Count reconciliation — not a missing Scheduled page
+
+Read-only administrator-scope aggregation matched the screenshots: **369** leads
+currently saved as `scheduled`, plus **337** other unfinished leads with saved
+schedules, totals **706** radar jobs. Other statuses included 73 Payment Pending,
+34 In Progress, 24 Partially Paid and previously scheduled follow-up/reschedule/
+approval workflows. The normal Scheduled page counts only its current saved status;
+the Board intentionally keeps unfinished previously scheduled jobs until a terminal
+paid/cancelled/done/completed outcome. It also retains incomplete scheduled records
+for repair. Counts are not interchangeable or global AI outcome totals. The Board
+now says that it includes other saved statuses, not just Scheduled. No record,
+scope rule, exact total, ordering, pagination or visibility predicate was changed.
+
+### Simpler, honest presentation
+
+- Only Take Job Update, Job In Progress, Payment Pending, Send Dose and Needs Review
+  are action badges. Internal legacy `scheduled`/`unavailable` values remain readable
+  for compatibility, but upcoming appointments are a plain schedule note, not an
+  extra No action yet badge or a fabricated progress/follow-up action. Unavailable
+  checks use the same Needs Review filter. The setup filter is not a new action.
+- Rows show exact check time, one action and one short result. No duplicated
+  previous-AI / schedule-rule / technical paragraphs. Saved statuses, earlier
+  evidence, fresh AI evidence and uncertain context still have explicit, readable
+  wording. Context matches retain **verify in chat**; changed assignments never
+  inherit an earlier quote. A fresh unchanged-history check says no new update
+  while retaining its verified work/completion evidence, not that no chat exists.
+- Run summaries are short; their complete checked/failed/skipped/not-started and
+  tied-reply counts remain in a collapsed Check details disclosure. Review retains
+  source quotes, stale/error warnings, exact source times, chat permissions and
+  visible action controls. Call coverage is independently reported, including old
+  text-only results, missing transcripts and excluded unknown speakers.
+
+### Call evidence and complete job-linked input
+
+The old Quo `/messages` read does not supply saved call transcript events. Production
+metadata inspection (no transcript text printed) found **6,069** saved
+`call.transcript.completed` rows with structured `data.object.dialogue` arrays.
+Quo's documented `identifier` is the speaker's phone; a null `userId` alone can
+also mean unknown identity and is **not** proof that the technician spoke.
+
+- One additional caller-JWT, conversation/time-scoped paginated read obtains only
+  saved `call.completed` and `call.transcript.completed` events. It runs alongside
+  text-history retrieval, not as one provider request per call. No new recordings,
+  transcription generation, bulk sync/backfill, webhook change or external sending.
+  Existing `idx_quo_messages_conversation_time` covers conversation/time access;
+  no index, schema, RLS or generated database type changes were added.
+- New `processor-call-transcripts.ts` requires the original saved call, matching
+  technician participant, Quo conversation/line and actual call start/end/answer
+  times. Transcript delivery time never establishes a later appointment's outcome.
+  Only completed structured dialogue with exact-number external speakers can be
+  technician evidence. Internal users remain Our team; unknown/other speakers and
+  invalid segments are excluded and reported. Flattened text, summaries and audio
+  alone are not speaker proof. Missing original calls/transcripts remain partial.
+- A call has its own context boundary: no adjacent SMS dispatch or another call
+  supplies its job identity. A uniquely identified question can anchor the following
+  technician reply in that same call until a different/unknown job or speaker breaks
+  context. Existing peer-job/unit/schedule/negation/future-claim checks still apply.
+  Saved quotes carry original transcript-row and call IDs and show Call transcript
+  vs Text message. They remain advisory, never automatic status/payment approval.
+- Answered calls prevent false non-response even if their transcript is missing.
+  Call-only acceptance/questions cannot satisfy the text-acceptance/delivered-text
+  request requirements for Send Dose. A call-history read failure is independent
+  of successful text evidence, reported explicitly, and blocks a silence finding.
+- AI now receives **all attributable job-linked text/call candidates**, including
+  older non-keyword/non-English updates, not only the previous latest-20/keyword
+  subset. Other jobs' content is still excluded before AI. The existing 80,000-char
+  provider-input boundary fails explicitly rather than silently dropping history.
+  Extraction still reuses unchanged job-specific evidence after rereading history.
+  New optional result fields describe call coverage, unchanged job text and reused
+  extraction; legacy result parsing stays compatible. Input/extraction policy is 9.
+
+Authority/parity: Admin/Processor-only route/helpers/endpoint, caller row/status and
+chat RLS, service-only leases, revision-checked advisory save/audit, terminal statuses
+and approvals remain unchanged. There is no native Donut Board/per-job assessment
+counterpart; its separate technician-wide intelligence and v1.7.0 sources/artifacts
+are unchanged. No migration or database repair is needed. With explicit user
+approval, `processor-board` **v10 ACTIVE / evidence policy 9** is deployed with JWT
+verification retained. All ten deployed files match the reviewed local sources,
+including the new `supabase/functions/_shared/processor-call-transcripts.ts`.
+No-token/invalid-token/preflight boundary probes passed **401/401/200**. Bundle
+SHA-256: `d0208ea5941964b513c427171442e8c1ef4098440643032ca2ae2d137a9ac25d`.
+CRM Publish and real signed-in/provider QA remain separate; boundary probes are
+not evidence of live model accuracy. The prior v9/policy 8 source snapshot and
+verified v10 artifacts are saved outside the repository at
+`C:\Users\User 1\AppData\Local\Temp\opencode\processor-transcripts-release-20261023`.
+Rollback is a separately approved redeployment of the saved v9 source/config with
+JWT verification retained; it requires no migration or customer-data repair.
+
+Efficiency review: existing query keys, shared realtime, 30-second recovery read,
+five-minute reuse/backoff, focused-job scheduling and one-in-flight guard remain.
+No additional frontend fetch, subscription, timer, worker, storage write or download.
+The extra server read is explicitly bounded/paginated and uses the existing caller
+scope/index; no transcript-provider N+1 requests. Full job-linked AI input can cost
+more than the old selector: the synthetic 51-message same-job workload now supplies
+51 candidates vs 21, with zero attributable omissions, while excluding peer-job
+content. Two unchanged checks still use one AI extraction/advisory save; they now
+perform two scoped call reads (one each), rather than none. These are local resource
+counts, not measured production savings, latency or model accuracy. Current
+read-only function logs showed 1,384 HTTP 200, nine 401 and two 429 in the default
+24-hour window, with no 5xx in that aggregate. Existing advisory findings remain
+unchanged; [review them here](https://supabase.com/dashboard/project/kxiqholnmhkwhdkhtopp/advisors).
+
+Validation: **215/215 focused tests across eight suites**, **1,090/1,090 full tests
+across 113 files**, **45/45 browser cases**, typecheck, production build and Donut
+integrity passed. Lint passed (0 errors, 28 existing
+warnings); build retains existing Browserslist, mixed-import and chunk-size
+warnings. The initial browser run passed
+43/45: two legacy theme assertions expected six colors; updated assertions now
+verify the intentional five categories, four distinct advisory colors and shared
+Needs Review styling for unavailable/setup cases. Corrected desktop/mobile call
+evidence screenshots were visually inspected: stable drawer and visible footer
+actions at 1440px and 390px. `git diff --check` passed. Tests use synthetic data
+and mocked provider/database boundaries; real signed-in model accuracy and CRM
+publication remain unverified. No write-based SQL harness was run or needed for
+this schema-unchanged follow-up.
+
+## Action help, no-outcome diagnosis and focused chat activity (2026-10-23; Edge installed, CRM publication pending)
+
+This supersedes the earlier rule that every completed review without extracted
+work evidence becomes Needs Review. Read-only production diagnostics found six
+saved `needs_review / no_verified_update` results, three for future appointments.
+That is an ordinary absence of verified progress/completion, not a broken setup.
+The screenshot's reason matches this path; no customer conversation was printed or
+repaired. True attribution uncertainty and setup/provider failures remain visible.
+
+- The four colored action filters explain their exact scope on hover or keyboard
+  focus, prefer placement above the button, escape the panel's clipping via a
+  portal and remain within the viewport. Escape dismisses them. Filtering still
+  affects only loaded-page advisory actions, not saved statuses or AI invocation.
+  Send Dose explains direct acceptance, a delivered job-specific request, current
+  history and the 60-minute wait; generic acceptance/plans are not work started.
+- A successfully reviewed **scheduled** job with `no_verified_update` uses its
+  confirmed appointment: No action yet before start; Take Job Update after start.
+  The no-verified-work warning and AI/source labels remain. Frontend handles fresh
+  compatible legacy results, while the Edge result now saves the same decision.
+  This does not invent progress/completion, reuse stale or changed assignments,
+  override pending approval workflows, or relax `job_attribution`/mirror warnings.
+- Opening Review still never starts AI and pauses unrelated page assessments after
+  the active request. With automatic tracking enabled and the timezone confirmed,
+  **later** `last_message_at` activity in the exact saved assignment/conversation
+  can now trigger a single focused assessment through Review/read-only chat.
+  Explicitly paused tracking, hidden tabs, setup errors and identity changes do not
+  auto-run it. Failed checks retain existing backoff and job-only manual retry.
+  An activity burst during an in-flight request receives one trailing check; only
+  the activity actually read advances the focus baseline, so newer changes are
+  not swallowed. No unrelated page assessment starts until focus closes.
+- Existing shared realtime/coalesced list reads and the 30-second recovery read
+  already invalidate conversation fingerprints. Outside Review, only eligible
+  loaded jobs whose saved inputs changed or freshness expired are assessed; a
+  shared technician conversation can invalidate multiple jobs because its event
+  does not prove which customer a message concerns. Each server review isolates
+  its own job, and unchanged job-linked evidence reuses extraction. Full available
+  text history in the job's lifetime is checked server-side for identity/silence;
+  AI still receives the latest 20 job-linked messages plus older keyword matches.
+  No global all-job worker, transcript ingestion change or 24/7 tracking is added.
+
+Read-only diagnostics: project reported ACTIVE_HEALTHY. Over the default preceding
+24-hour log window, Processor Board function-edge logs showed 1,399 HTTP 200, 15
+HTTP 401 and one HTTP 405, with no recorded 5xx in that aggregate. HTTP 200 is not
+proof of evidence accuracy. Existing security/performance advisories were reviewed,
+not fixed or attributed to this change. Findings/remediation remain in the
+[Supabase advisors](https://supabase.com/dashboard/project/kxiqholnmhkwhdkhtopp/advisors),
+including existing [mutable function search paths](https://supabase.com/docs/guides/database/database-linter?lint=0011_function_search_path_mutable)
+and [per-row auth evaluation](https://supabase.com/docs/guides/database/database-linter?lint=0003_auth_rls_initplan).
+No raw customer messages, credentials, remote writes or new live AI assessments
+were used for this investigation.
+
+Authority/parity: Admin/Processor UI/helper gates, caller-JWT row/status reads,
+RLS/invoker RPC, service-only leases and audited revision-checked saves, terminal
+statuses, approvals and generated types are unchanged. Donut has no native board
+or per-job assessment counterpart; its technician-wide intelligence remains a
+separate unchanged flow. No extension source or release is needed. No migration
+is added. `processor-board` Edge source advertises evidence policy **8** and changes
+only no-outcome action selection/input-cache version, not the evidence extraction
+prompt or matching rules. With the user's explicit approval, `processor-board`
+**v9 ACTIVE** was deployed through MCP to `kxiqholnmhkwhdkhtopp`, with
+`verify_jwt: true`. All **nine** deployed files were read back and matched the exact
+local source/configuration; only `processor-board-handler.ts` differed from the
+previous v8 bundle. Bundle SHA-256:
+`3f5284c33a7daa5f4f1162b53b2ab29eebbeb74d8bfd701f7f3cd5f827590f0f`.
+Live missing-token / invalid-token / CORS preflight checks returned **401/401/200**.
+These boundary checks do not establish signed-in workflow or provider accuracy.
+No schema, secrets, ingestion controls, customer records or outbound messages were
+changed as part of deployment. CRM Publish and real signed-in/provider QA remain
+separate.
+
+Rollback: the previously deployed **v8**, JWT setting, import map and all nine files
+were saved outside the repository before deployment, alongside the verified v9
+source and probe proof, under
+`C:\Users\User 1\AppData\Local\Temp\opencode\processor-actions-release-20261023`.
+Its previous bundle SHA-256 is
+`f648df9c531508bcbc5e5a3df6c8c4eb672f3862f0f3e84c81178e13879918b8`.
+If rollback is approved, redeploy the saved v8 files with its entrypoint/import map
+and JWT verification retained; do not alter schema or attempt to roll back saved
+lead statuses. The temporary loopback transfer bridge was stopped after verification.
+
+Efficiency review: four lightweight tooltip roots; no tooltip API requests. Focus
+activity compares existing metadata in constant time and reuses the in-flight
+guard, caller-scoped query key, attempt backoff and cleanup. No new subscriptions,
+poll interval, endpoint, payload field, worker, database query/index/RLS change or
+storage/download is introduced. Synthetic Windows/jsdom two-job workload: baseline
+Review deferred new activity until close; now two initial checks plus **one**
+selected-job refresh produce `[A, B, A]`, even when both rows' conversation metadata
+changes. Twenty rerenders during a pending activity check produce no parallel
+request and exactly one trailing selected-job check. Existing full-history/AI
+evidence-cache tests continue to check that another job's new text causes no extra
+target AI extraction. These are local correctness/request measurements, not measured
+production latency, billing savings or model accuracy.
+
+Local validation: **1,062/1,062 tests in 111 files** passed with
+`npm test -- --maxWorkers=1`, including all **156** focused Board/planner/handler/
+hook checks in the six affected suites. The **43/43** mocked browser cases passed
+on the full rerun, covering hover/keyboard help, viewport bounds, upcoming/overdue
+no-outcome labels and focused-message recovery on 1440px/390px layouts. The first
+browser run passed the existing 39 cases but failed four new test setups: an
+unscoped locator matched closing/open tooltip animations, and the fake clock was
+installed after application polling timers existed. Tests now wait for complete
+tooltip dismissal, measure the visible content container, and install the clock
+before navigation; no assertions, timeout limits or configuration were weakened.
+Desktop/mobile action-help screenshots were visually inspected after the final run.
+Typecheck, lint (**0 errors / 28 existing warnings**), build, Donut **v1.7.0** source/
+ZIP integrity and `git diff --check` passed. Existing Browserslist, mixed-import
+and bundle-size warnings remain. No SQL harness was run because database code is
+unchanged. Real signed-in/provider accuracy remains unverified. The user approved
+the reviewed backend deployment plus commit/push to `boostera/processor-fix`.
+Pushing the branch does not publish the CRM; CRM Publish remains pending.
+
+## Focused single-job Review controls (2026-10-23; local frontend update)
+
+The screenshots showed a page-wide spinner on Check this job while unrelated
+automatic checks continued behind Review, and the actual controls below repeated
+history/filter explanations. This change is CRM-only; no new migration, Edge
+source/deployment, database type, grant or Donut source/version/ZIP is required.
+
+- Opening Review stops the remaining page batch after the one in-flight request;
+  it does not abort a possibly-saving request or invoke AI just for opening.
+  Automatic assessment scheduling pauses through Review and the pinned read-only
+  technician chat, while normal scoped list/realtime/recovery reads continue.
+- Check this job prioritizes only the selected lead next. It never queues all rows
+  or a technician-wide assessment. A selected job already in flight is reused, not
+  duplicated. Busy/queued state is keyed by lead UUID, independent of other jobs'
+  progress. The drawer explains waiting for the current request vs checking this
+  job, including the existing two-minute client deadline; no promise of instant
+  or measured production latency improvement is made.
+- Temporary focus does not rewrite the caller's saved tracking pause preference.
+  Closing returns to that previous setting; closing an unstarted focused check,
+  hiding the tab, losing row access, or changing the assignment retires that queue.
+  In-flight responses retain the existing revision/fingerprint cache guards.
+  Explicit page-level manual takeover still persists a tracking pause as before.
+- Review has a fixed header and visible action footer, with one independently
+  scrollable content region. Status/next action, assigned technician/schedule,
+  missing-chat/failure instructions and source quotes remain prominent. The
+  existing read-only chat grant and exact conversation remain required. Technical
+  counts, full source summary and safety details appear once under the collapsed
+  Check details & safety disclosure, not multiple paragraphs above the buttons.
+  Saved customer schedule requirements remain available in their own disclosure.
+  AI-used/no-AI/unknown usage and previous-evidence labels remain explicit.
+
+Permission/parity review: Admin/Processor route/helper gates, caller-authenticated
+`processor-board` v8 and invoker RPC/RLS, audited revision-checked assessment save,
+approval/terminal status gates and generated types are unchanged. No native Donut
+Processor Board or job-specific action was found; technician-wide intelligence
+is a different unchanged flow. CRM Publish and real signed-in/provider QA remain
+separate; this task does not deploy the frontend or change customer records.
+
+Efficiency review: no new endpoint/payload, subscription, timer, worker, storage
+access or download. Existing query keys/cache, shared realtime and coalesced reads
+remain. Windows/jsdom synthetic three-job regression: after A starts, focusing B
+without checking leaves **one** assessment call; checking B yields **A then B**, no
+C or duplicated request while Review stays open. Closing resumes C if tracking
+was enabled. The source baseline continued the page batch behind Review; request
+counts here are local controlled behavior, not production invoice savings or a
+reason to drop remaining work. Browser checks also verify the action footer stays
+in view after scrolling lengthy diagnostics on desktop/mobile.
+
+Local validation: **69/69** focused Processor Board tests, **39/39** mocked browser
+cases (including 1440px/390px focused-job priority and footer geometry), typecheck,
+lint (**0 errors / 28 existing warnings**), production build and Donut **v1.7.0**
+source/ZIP integrity passed. Desktop/mobile focused-review screenshots were
+visually inspected. The initial default-worker `npm test` run passed 1,040 tests
+but failed two unchanged `AppSidebar.test.tsx` cases: a five-second timeout followed
+by an empty-render assertion. The isolated sidebar rerun passed **4/4**; the full
+`npm test -- --maxWorkers=1` rerun passed **1,042/1,042 tests in 111 files** without
+changing test limits, assertions or configuration. This is consistent with timing
+contention, not proof of its cause. Build retains existing Browserslist/chunk and
+mixed-import warnings. Final `git diff --check` passed. SQL harnesses and live
+provider/browser checks were not run for this frontend-only task. Committing and
+pushing this update do not publish the CRM; CRM Publish and real signed-in/provider
+QA are still pending.
+
+## Urgent-leads-style panel and honest job review (2026-10-23; database + Edge installed, CRM publication pending)
+
+This supersedes the incomplete-row hiding and five-minute display fallback below.
+The user subsequently explicitly approved the Supabase application/deployment and
+remote commit. CRM publication and signed-in provider QA remain separate.
+
+Applied through MCP to Marshmallow `kxiqholnmhkwhdkhtopp`:
+`processor_board_review_visibility` (remote version **20261023043949**, exact local
+migration SHA-256 `4e7b9859be60aa48b151665026bdd469802ab8080b6ba344012285576ba298b4`)
+and `processor-board` **v8 ACTIVE**, evidence policy 7, `verify_jwt: true`.
+All nine deployed files were read back exactly against local source; bundle SHA-256
+`f648df9c531508bcbc5e5a3df6c8c4eb672f3862f0f3e84c81178e13879918b8`.
+No-token/invalid-token/preflight probes returned **401/401/200**. All **12** live
+non-persistent verification checks passed (exact scoped total, page bound, partial
+address projection, incomplete job search, terminal exclusions, invoker/grants and
+the Processor/four excluded role gates). The exact baseline harness 40 ran before
+and after application; all six-role matrix cells match, not just grand totals.
+The reviewed baseline only writes a temporary result table and rolls back; the
+write-based customer-data fixture/harness 155 was NOT run on production.
+
+Read-only pre-application snapshot: 706 matching radar jobs, seven incomplete
+scheduled records newly visible, and 652 records with full saved address text but
+blank city/state. These are timestamped audit counts, not fixed expected totals.
+Existing security/performance advisor summaries are unchanged, not zero findings;
+pre-existing warnings were not repaired or grants broadened as part of this task.
+Relevant existing advisor documentation:
+[RLS with no policy](https://supabase.com/docs/guides/database/database-linter?lint=0008_rls_enabled_no_policy).
+The board's service-only refresh-lock table deliberately has no browser policy.
+Rollback Edge v7, previous RPC definition, exact source payload, before/after
+matrices, advisor snapshots and verification proof are saved outside the repository
+under `processor-review-release-20261023` in the approved OpenCode temporary directory.
+
+- Keep the Urgent leads panel's restrained glass surface, compact heading/count,
+  small coloured tags, light row accents, contained scroll and small refresh
+  action. Search is below the list. Technician name/number, appointment time and
+  exact check timestamps remain readable; attention reasons wrap instead of
+  disappearing behind a tooltip. Dark/light, keyboard and reduced-motion support
+  remain. No new status dropdown, assistant panel or automatic outbound action.
+- Opening a confirmed, enabled board starts existing serial automatic checks on
+  the loaded newest-first page, not all matching jobs. Unchecked eligible rows say
+  Checking / Queued for check, never Scheduled as an AI finding. A checked future
+  appointment with no actionable evidence says No action yet. The summary shows
+  loaded vs matching counts. Fresh evidence is reused; hidden/paused tabs and
+  caller/assignment changes still retire queued work.
+- Missing/ambiguous chats and failures use Needs Review with a readable next step.
+  Edge evidence policy **7** adds structured job-attribution/no-verified-update/
+  mirror-incomplete reasons; no attributable reply spends zero AI calls. Saved
+  progress/payment workflows are distinct from AI confirmation. Negated/future
+  English outcomes receive an additional conservative source-text check; this is
+  not a promise of model accuracy or a replacement for reviewing quoted evidence.
+- A supported completion/progress check for the exact unchanged assignment can
+  remain visible as Previous AI result after five minutes, with refresh due. It
+  is never counted as fresh, and expired Send Dose is not actionable. Revision,
+  timezone or chat-fingerprint changes invalidate the old result. In-flight UI
+  saves also require the original revision/fingerprint before attaching evidence.
+  The existing 30-second UI clock allows at most 30 seconds of response-clock
+  skew, not materially future-dated checks.
+- Location means saved CUSTOMER job location: city/state first, then the full
+  address unchanged, then `half_address` (including saved house/street details).
+  Incomplete parts are labelled; only exhaustion of all usable saved sources says
+  Job location missing / Update the saved address. No AI/geocode lookup, location
+  guess, map-coordinate change, lead update or bulk repair occurs on board reads.
+- A previously scheduled job must not disappear because its technician name,
+  number or date/start needs repair. New migration
+  `supabase/migrations/20261023041010_processor_board_review_visibility.sql`
+  retains these rows, projects/searches `half_address`, preserves terminal/history
+  and caller/status visibility gates, sorts dated appointments newest first with
+  deterministic ties and undated repairs last, and keeps exact totals/25-row pages.
+  NSS was a wording mistake; no NSS mapping or exclusion is being introduced.
+
+### Application and rollback
+
+1. Keep existing applied migration history; manually apply only the new migration
+   after `20261022111039_processor_board_assigned_schedules_only.sql` (remote
+   version `20261022113108`). **Already applied via approved MCP as 20261023043949;
+   do not apply it again merely because its remote timestamp differs.**
+2. Run `supabase/tests/155_processor_board_review_visibility.sql` only in a
+   disposable/test database; it inserts synthetic rows and rolls back. The runner
+   `node scripts/test-processor-board-db.mjs <PGlite installation directory>`
+   applies each migration twice and checks harnesses 150, 153, 154 and 155 in order.
+   Inspect all PASS/FAIL rows. Existing 154 verifies the previous version before
+   155 verifies the replacement; it is not the final-function contract anymore.
+3. The exact `supabase/tests/40_leads_rls_baseline.sql` matrices were compared
+   before/after approved live application in the full schema; all cells match.
+   No production customer rows were inserted or updated for verification.
+4. Deploy the changed `processor-board` bundle with approval (JWT verification
+   retained), then publish CRM and do signed-in/provider QA. **v8 is deployed and
+   verified**; CRM Publish and real signed-in/provider QA remain pending. A stale
+   policy-6 backend would show a banner instead of silently claiming the new checks.
+5. Roll back only the RPC definition using the previous assigned-schedules-only
+   migration and restore the previous Edge/frontend sources together if required.
+   This hides incomplete rows again; no customer records were altered or need repair.
+
+Permission/parity review: fixed Admin/Processor UI/helper/server gates, invoker RPC,
+lead/assessment RLS, save/audit leases and generated database types/enums remain
+unchanged. No new columns/tables or grants; `half_address` already exists. Donut
+has no native board or job-specific assessment action (source search reconfirmed),
+so no extension source/version/ZIP change or release is required.
+
+Efficiency: existing query keys, coalesced shared realtime and 30-second recovery
+reads remain; no new channel, worker, per-row request, upload or download. Location
+fallback costs zero extra API/AI/geocode calls in synthetic desktop/mobile cases
+(previously zero calls but a false missing-area placeholder). Checking a page still
+batches two chat-setup reads, with one serial assessment at a time and unchanged
+extraction reuse/backoff. Full-history reads and safety caps are preserved. SQL
+adds one existing text column to a bounded page and its search; no new index/RLS
+tuning without query-plan evidence. No production billing or model-accuracy savings
+are claimed.
+
+Final local validation: `npm run validate` passed (full lint **0 errors / 28
+existing warnings**, app/node typechecks, **1,033 tests across 111 files**, and
+production build with Donut v1.7.0 source/ZIP integrity verified). The final mocked
+Playwright board suite passed **37/37** desktop/mobile, light/dark, reduced-motion,
+location-fallback, readable-remediation, approval, failure/recovery and denied-role
+cases. The disposable PGlite runner passed **81/81** SQL checks, applying each
+migration twice. `git diff --check` is clean. These do not substitute for real
+signed-in/model-accuracy QA; no live customer assessment was triggered for testing.
+
+## Compact simplified board, assigned-schedules-only queue and latest-message AI filter (2026-10-22; migration + Edge v7 APPLIED, CRM publication pending)
+
+Applied live on 2026-10-22 with explicit user approval via MCP: migration
+`processor_board_assigned_schedules_only` (recorded in remote history as
+`20261022113108`, matching the local file
+`20261022111039_processor_board_assigned_schedules_only.sql`; the active-radar
+base had been applied earlier as `20261022044310`) and the Edge `processor-board`
+bundle as **v7 ACTIVE** (`ezbr_sha256 2dae24fe…50b82bb`, `verify_jwt: true`, all
+nine files read back byte-exact against local source; no-auth/invalid-token
+probes return 401). Verified in the shared project read-only: with an Admin
+caller impersonated in a rolled-back transaction, the active total is 695 and
+equals the exact expected assigned-scheduled count; zero returned rows lack
+technician name/number, date or start time; Security Advisors report no
+findings. Rollback: restore `list_processor_jobs` from the active-radar
+migration and redeploy the v6 bundle (`processor-board-v6-verified-20261022`);
+v7 source copy is saved at `processor-board-v7-verified-20261022`.
+
+- Simplified panel per the requested screenshot look: slim title bar with the total
+  badge, exact latest check and the one "Refresh AI · this page" action; search
+  directly under the header; timezone confirmation and tracking state compacted onto
+  one summary line; all filters, timezone picker, tracking controls and page counts
+  moved into a collapsed-by-default "Filters & tracking" disclosure. The job table
+  gained a dedicated **Technician** column (name + number), customer/job and
+  schedule columns keep their width, and AI status cells are one-line with a
+  title tooltip. Mobile cards show technician identity and job time directly.
+- Queue correctness: only jobs with **both** a saved technician name and number
+  plus an appointment date and start time appear on the radar. Incomplete jobs
+  (previously shown with "Not assigned/manual" placeholders) stay in All Jobs for
+  repair; any EXPLAIN-era placeholder rows were display-only and are now excluded
+  at the source. `supabase/migrations/20261022111039_processor_board_assigned_schedules_only.sql`
+  updates `list_processor_jobs` (idempotent, no lead writes, RLS/authorization
+  unchanged) and must be applied manually after `20261022041621_processor_board_active_radar.sql`.
+  Rollback: restore only `list_processor_jobs` from the earlier migration.
+- AI input filter (user request): the provider prompt receives only up to the last
+  20 job-linked messages **plus** older job-linked messages matching update
+  keywords ("done", "on my way", "completed", "payment", "reschedule", …). Job
+  attribution happens before selection, another job's keyword match is never sent,
+  negated/future wording ("not done yet") is kept intact for AI to reject, and
+  latest non-English replies are always included without keyword guessing. The
+  server still reads full available history for identity and non-response timing;
+  only the AI payload is narrowed. The result reports `ai_scope`,
+  `ai_recent_limit` and `ai_messages_omitted`; the drawer and rows label
+  "AI · latest job updates + keywords" when a check used the filtered scope, and a
+  banner appears while the deployed backend is still below evidence policy 6.
+  The new Edge bundle is committed locally and **awaiting approved deployment**.
+
+Gates run so far: **99/99 focused tests** across `ProcessorBoardPage.test.tsx`,
+`ProcessorBoardPage.auto.test.tsx`, `processor-review-diagnostics.test.ts` and
+`processor-board-handler.test.ts` (new: closed-by-default filters with technician
+column, latest/keyword selection keeping peer wording out, handler payload pruning
+with evidence rejected from omitted messages, provider budget counts), and the
+PGlite fixture run of `scripts/test-processor-board-db.mjs` covering migration
+`20261022111039…` applied twice idempotently plus **all 154 harness checks PASS**
+(assigned-only totals, missing name/number/date/time exclusions in history,
+newest-schedule ordering ties, complete pagination, retained reschedule/approval
+statuses, per-user status deny and role denial matrix). Final round: typecheck
+clean, full lint 0 errors/28 pre-existing warnings, build with Donut v1.7.0
+integrity OK, and **29/29 mocked browser cases pass** (the two zero-evidence
+cases now assert the unverified-reply note in the review drawer, matching the
+updated UI contract where rows show the one-line origin and the drawer holds the
+full attribution breakdown). No assertion, timeout or configuration was weakened.
+
+## Tracking startup and manual controls (2026-10-22; CRM publication pending)
+
+The next screenshot exposed three UI defects: timezone confirmation was lost on
+every board mount, an automatic batch disabled the manual page/job controls, and
+explicit page refresh silently skipped all fresh evidence. A recovery list read
+was also awaited while keeping completed AI controls locked, and an assessment
+request had no client deadline.
+
+- `src/lib/processor-tracking.ts` remembers only explicit timezone confirmation,
+  selected timezone and tracking pause in same-tab `sessionStorage`, scoped by
+  caller, role and sign-in timestamp. Another caller/login/role starts unconfirmed;
+  changing timezone clears confirmation. Invalid or blocked storage falls back
+  safely to usable in-memory controls. No timezone is inferred from browser/state.
+- The top AI action now explains/focuses confirmation when needed rather than
+  appearing inert. Once confirmed, reopening the board resumes tracking without
+  another checkbox click (unless deliberately paused). Drawer checks explain why
+  first-time confirmation is required.
+- During automatic work, manual page/job/failed-only actions queue after the active
+  job and pause automatic tracking. There is still one review in flight. Jobs just
+  attempted are not duplicated; removed/reassigned jobs are retired from the queue.
+  Stop, unmount and hidden-tab transitions prevent queued work from starting.
+- Explicit manual refresh re-reads history even for fresh results. Automatic work
+  still reuses five-minute freshness/backoff; server extraction hashes/leases remain
+  authoritative. Recovery invalidation no longer holds the UI batch open. Each
+  assessment has a cleaned-up 120-second abort deadline and an honest timeout error:
+  the server may still finish, so refresh before retrying. No fake successful result.
+
+Five permission layers are unchanged: fixed Admin/Processor UI/helper access,
+authenticated server checks, existing caller/table RLS and generated types/enums.
+No migration, Edge source/deployment, grants, status, schedule, approval or outbound
+message changed. This is CRM-only; Donut has no native job-board tracking controls.
+No extension release is required. CRM Publish remains separate from committing.
+
+Efficiency review: existing query keys/cache, shared realtime, serial processing,
+loaded-page limit and background-free design remain. Only tiny non-customer UI
+preferences enter session storage; no new payload, database query/index/RLS, worker,
+storage upload or channel. The one in-flight request deadline is cleared on settle.
+Windows/Vitest synthetic two-job auto-to-manual takeover makes two total sequential
+assessment calls, not three (no repeat of the active job). Fresh explicit page
+refresh changes from zero calls to one per eligible job intentionally, while
+automatic fresh re-render remains zero additional calls. This fixes the requested
+action, not a measured billing reduction; live usage/accuracy are unverified.
+
+Pre-commit checks: **75/75 focused tests across four files**, **6/6 targeted mocked
+desktop/mobile browser cases**, typecheck and full lint (0 errors/28 existing
+warnings). Test contracts now assert explicit manual rechecks, unchanged automatic
+freshness, confirmation recovery, caller isolation, queued takeover/cancellation,
+backend failures and timeout cleanup. Repository-wide post-commit gates are
+reported separately; no assertion, timeout or configuration was weakened.
+
+## Internal CRM technician chat (2026-10-22; Edge v6 installed, frontend publication pending)
+
+The board's external Quo link was incorrect for operators who read the webhook
+mirror inside CRM without a separate Quo login. The board now opens the existing
+`QuoPhoneTrigger` as one root-level, read-only Tech Quick Chat, pinned to the
+backend-verified CRM conversation UUID, technician number and Technician
+Communications line. It never guesses a newer/customer conversation, launches an
+external tab, composes, queues, schedules or sends. The review Sheet closes while
+chat is open and returns on Close/Escape; desktop and mobile stay on-screen.
+The existing saved-lead Quick Chat sending workflow is unchanged.
+
+The independent `tech_quick_chat` grant is retained alongside the Admin/Processor
+board gate. Reads still use the authenticated CRM client and existing table RLS;
+no role, grant, schema, RPC, generated enum/type or migration changed. Missing or
+mismatched mirror/line/participant fails visibly without a fallback. Changes to
+the job's technician, conversation, permission or loaded scope retire the viewer.
+Pinned history is paginated in stable 500-row pages; over 10,000 rows is an
+explicit error, not a silently truncated conversation. Unpinned lead Quick Chat
+keeps its existing lookup and 500-row viewport.
+
+Backend list metadata now reports `monitoring.evidence_policy: 5`; older backends
+produce a visible attribution-update warning rather than silently implying the
+new rules are installed. Unconfirmed-timezone saved progress/payment labels are
+explicitly described as saved status, not a fresh AI finding. AI still requires
+timezone confirmation; no schedule, status, approval or outbound message changed.
+
+The user explicitly approved backend deployment with “deploy it”. The function is
+now **v6 ACTIVE**, `verify_jwt: true`, on `kxiqholnmhkwhdkhtopp`, bundle SHA
+`f93ed4a57916bf8beebf1381070e418ae4773d98038af7323931d1db121df939`.
+All nine deployed files were downloaded again and match local source byte for
+byte. Post-deployment no-credential and invalid-bearer probes both returned 401;
+CORS preflight returned 200, matching the v5 baseline. No authenticated assessment
+or paid provider call was made. These probes verify the boundary, not AI accuracy.
+The supplied screenshots
+already show provenance-capable UI; this newest internal-chat button still needs
+CRM publication. No native Donut job-board/viewer counterpart exists; the separate
+technician-wide intelligence flow and Donut v1.7.0 artifacts are unchanged.
+
+Before deployment, all nine live v5 files were downloaded to
+`C:\Users\User 1\AppData\Local\Temp\opencode\processor-board-v5-rollback-20261022`
+and compared with `ea68547`; all matched. Its `ROLLBACK.md` records metadata and
+the approved-target-only redeployment procedure. Rollback is a separate production
+operation requiring approval, not automatic cleanup.
+
+### Efficiency / verification boundaries
+
+- Local validation so far: typecheck passed; full lint passed with 0 errors and
+  28 existing warnings; all 29 mocked Chromium browser cases passed, including
+  internal chat, desktop/mobile bounds, permission denial, failed reads, no
+  external navigation and no AI calls on open. The initial failure fixture used
+  a retryable 503 and remained loading during SDK retries; the browser denial
+  case now uses a realistic 403 without changing any timeout/assertion. Unit
+  coverage separately verifies propagated read failures. A concurrent focused
+  run hit two 5-second page-test timeouts under load (95/97 passed). The first
+  full one-worker run overlapped Chromium and passed 996/998 across 109 files;
+  only the same two page tests timed out. The entire page file then passed 34/34
+  alone, unchanged. The final full run, without overlapping browser/build work,
+  passed **998/998 across 109 files**. No timeout, assertion or test configuration
+  was relaxed. `npm run build` passed, including unchanged Donut v1.7.0 source/ZIP
+  integrity. Board JS is now 45.01 kB / 14.09 kB gzip versus 44.05 / 13.83 before
+  this chat fix; board CSS remains 3.82 / 0.98 kB. Existing bundle/import warnings
+  and outdated Browserslist data were not hidden or fixed through unrelated changes.
+- UI/hooks/cache: one chat mounts only after an explicit click, not one per row;
+  no AI check is triggered by chat opening and no hidden-trigger unread watcher
+  is registered. Existing board query keys, freshness and automatic-check limits
+  remain unchanged. The viewer uses the existing chat recovery/realtime transport.
+- API/database/bandwidth: for a synthetic 501-message pinned chat on Windows/Vitest,
+  the old reader used one conversation + one message request but hid message 501;
+  the new reader uses one exact conversation + two message requests and returns
+  all 501. General Quick Chat still makes one message request/500-row viewport.
+  No schema/RLS/index changes, N+1 board lookup or provider calls were added.
+  History pagination deliberately increases reads to preserve complete review.
+- Realtime/background/storage: existing mounted-chat realtime and fallback polling
+  are reused, with cleanup on close/scope retirement; no new worker, cron, upload,
+  storage object or extension download. This is not a measured invoice saving.
+- Production billing/usage, signed-in RLS behavior, current mirror completeness and
+  real-model accuracy remain unverified. Mocked browser tests cannot establish them.
+
+## Verified Tech Quick Chat attribution (2026-10-22) — Edge v6 installed
+
+This section records the follow-up to the live complaint that the board said
+“0 technician messages identify this job” while the saved Tech Quick Chat on the
+lead clearly contained technician replies. Commit `b92ae0b` is pushed on
+`boostera/processor-fix`; the final serial run passed 980/980 tests across 108 files.
+The latest complaint separately approved backend deployment. No CRM publication,
+migration, provider call, assessment, lead/status write, schedule edit or outbound
+message occurred during this fix. See the newest section for its release state.
+
+### Live read-only diagnosis
+
+- `LD-7RL3L3` current Quo text history had **9 text events**: one
+  outbound customer-details dispatch that uniquely identified the job, and three
+  real technician texts (acknowledgements and a cancellation complaint).
+  The old rule required the technician text itself to repeat a job ID, complete
+  address, full name or exact customer phone; none did, so all three were counted
+  as “not assigned”. Call rows were not in the current-history text feed.
+- `LD-HJ83ZO` showed the same defect in the visible saved chat: technician
+  acknowledgements and appointment discussion followed this job's customer-details
+  dispatch, but were unassigned because they did not repeat its identifiers.
+  `LD-RORBQD` also had acknowledgements and a technician reschedule request.
+  These observations do not establish work started or finished.
+- The webhook mirror also stores call recordings, call transcripts, call summaries
+  and reactions as inbound `customer` rows. The current-history API feed is
+  text-only, so mirror diagnostics could count those artifacts as “technician
+  messages”. They are not technician replies and may contain both speakers.
+
+### Attribution rule and limits
+
+- A technician text that names this job in the same message remains **direct**
+  evidence under the existing unique-ID/address/full-name/exact-phone and
+  peer-exclusion checks.
+- A technician text that does **not** name the job is **context-attributed** only
+  when it follows this job's own delivered, job-identifying dispatch in the same 1:1
+  technician thread, before any other saved or unknown job's dispatch, and within
+  **7 days** of that dispatch. The reply must be strictly later (a tied timestamp
+  cannot establish order); failed/unknown delivery and another conversation cannot
+  anchor it. The reply itself is still the only quoted source.
+- Any peer dispatch, any unknown “Customer Name/Number/Address” dispatch, any
+  technician message that mentions another saved job, or the expiry of the window
+  closes/blocks the episode, including generic replies after a technician changes
+  topics to another job. Generic chatter does not re-open an episode.
+- Call recordings, transcripts, summaries, media and reactions never count as
+  technician text replies and are never sent to the AI as replies; server evidence
+  verification rejects them even if a model returns such an ID. All received rows
+  still participate in silence timing when present in the chosen feed; current
+  Quo text history does not independently prove whether a phone call occurred.
+- AI input is still limited to the target job's attributable replies plus this
+  job's delivered agent messages. Each message is labelled `names_job` or
+  `follows_job_dispatch`; server verification still requires the exact quote from
+  that same message, the correct sender, a non-future timestamp, the appointment
+  date guard and the peer checks. An unnamed reply after another job's dispatch is
+  rejected even if the model returns it. Short replies (synthetic examples: `Ok`,
+  `Done`) must be quoted in full, inside the verified episode; a short substring
+  from a longer or negated message is rejected. Acknowledgement alone is neither
+  progress nor completion.
+- Context-attributed evidence carries `identity_basis: thread_context` and is
+  shown as **context-attributed · verify in Quo**. It can establish acceptance,
+  progress or completion admissibly, but **Send Dose still requires a directly
+  identified acceptance** plus a delivered, unanswered, job-specific update
+  request and the existing 60-minute wait. Context-only evidence cannot accuse a
+  technician of silence.
+- The result now reports direct replies, context-attributed replies, real
+  technician texts, unassigned replies and excluded call/system rows separately.
+  Page/batch reply counts use attribution rather than outcome extraction: a reply
+  with no verified progress/completion is no longer misleadingly counted as zero.
+  Unassigned replies remain separately counted. The drawer names the same saved Tech
+  Quick Chat conversation as the source (current Quo history or webhook mirror).
+- No lead status, schedule, approval, quote, payment or conversation link is
+  changed. The board remains advisory and still requires schedule-timezone
+  confirmation. `policy: 5` invalidates prior extraction hashes.
+
+### Remaining limits and release state
+
+Conversation position is not proof of intent: a human must verify context-attributed
+replies in Quo before acting, especially completions that would suggest Payment
+Pending. A technician who discusses a job by phone, or whose job was never sent as
+a customer-details dispatch, can still produce no attributable reply. The three
+malformed saved numbers (`LD-EFM7FS`, `LD-BLYIQ8`, `LD-SHALGR`), the unconfirmed
+schedule-timezone convention and live real-conversation accuracy remain unresolved
+data/manual steps. No schema, RLS, generated type, migration or SQL harness change
+is needed; no Donut source/version/ZIP changed because Donut has no native board or
+job-specific assessment counterpart. Edge v6 is **installed**;
+CRM Publish and signed-in/provider QA remain the user's separate steps.
+
+**Release order matters:** publish the new frontend before deploying the new Edge
+source, then confirm publication and obtain explicit Edge deployment approval.
+The new frontend accepts existing v5 result fields, but an older frontend can
+reject the new `thread_context` provenance (or display an unqualified legacy
+completion label). Do not deploy v6 ahead of the matching UI. A branch push is
+not publication; verify the published UI's provenance support before deployment.
+
+### TODO / manager-message checklist
+
+| Requirement | Current source behavior / remaining check |
+| --- | --- |
+| Preserve interface; newest schedules first | Existing compact layout unchanged; installed list RPC orders by saved appointment date/time, then job creation, before pagination. |
+| Technician name/number, job time, last check | Saved identity/schedule and exact checked date/time are retained; missing/malformed setup remains visible with a repair path. |
+| Only assigned unfinished jobs on radar | Existing active radar excludes unassigned and terminal paid/cancelled/done/completed jobs; older unfinished assigned appointments remain accessible through pagination. |
+| Take Job Update | Overdue saved schedule rule, only after operator timezone confirmation; no guessed customer timezone. |
+| Job In Progress | Technician work/progress evidence for this job, not a bare acknowledgement, future plan or another job's message. |
+| Payment Pending | Technician completion evidence for this job; context-based completion explicitly requires manual verification. No approval/status write. |
+| Send Dose | Advisory only: direct acceptance, delivered job-specific request, 60-minute wait, current history and no later technician reply; never an automatic send. |
+| Do not mix one technician's 2–3 jobs | Direct identifier/peer checks plus bounded dispatch episodes; technician topic switches close the context. Ambiguity remains manual review. |
+| Identify AI use | Per-row AI-versus-saved-status/schedule-rule labels, provenance notes, reply diagnostics and successful-check counts remain separate. |
+| Automatic tracking | While the board is open/visible and timezone-confirmed, for the loaded page (up to 25 jobs); hiding/unmounting stops new checks. It is not an all-pages/background worker. |
+| NSS | No authoritative NSS status/tag was found in the source audit; no invented status mapping/filter was added. Confirm the intended saved status if another exclusion is required. |
+
+After approved release, verify the real saved chat and board side by side for a
+multi-job technician, an acknowledgement-only job, a completion, an unanswered
+request and a reschedule request. Build/mocked tests do not establish live model
+accuracy. Obtain verified phone corrections and a confirmed schedule convention
+before calling the production TODO complete.
+
+### Rollback and permissions
+
+All five permission layers were traced: fixed Admin/Processor UI and helper gates,
+`AuthContext.canAccess`, caller-token lead/status/chat scope, assessment-table RLS
+and service-only lease/save RPCs, plus generated database types. None changed. The
+optional JSON diagnostics/provenance do not add a database enum. Tests cover excluded
+roles, hidden/status-excluded jobs, provider/save failures and unchanged lead values.
+No live RLS write-based harness was run; no database authorization change is proposed.
+
+If approved deployment needs rollback, redeploy the nine-file v5 source from
+`ea68547` with its existing JWT verification setting preserved, and restore the
+frontend only after a separate compatibility review. Keep the provenance-capable
+new UI during backend rollback: stored `thread_context` JSON may remain in list
+results even after changing the backend. Do not delete assessment/customer records
+or rewrite migration history. New-context cached evidence must not be trusted by
+the old policy; input/extraction policy hashes force a fresh review when invoked,
+but do not themselves rewrite list results. Any live rechecks require approval.
+
+### Efficiency and verification record
+
+- No additional database read, Quo request, second provider call or timer per check.
+  More legitimate replies now qualify for the existing single AI extraction where
+  the earlier rule skipped it, so this is not a provider-cost reduction claim. Attribution
+  runs in memory over the history already read. It builds **one normalized peer
+  identity index per review**, not one full matcher per peer; a synthetic
+  Windows/Vitest 60-peer/360-message regression compares **3,660 identity reads** for the initial
+  per-peer compilation with **120 identity reads** (target matcher + peer index),
+  while retaining 180 contextual replies on that synthetic workload. The evidence hash now
+  includes the contextual IDs and policy so a changed episode cannot reuse stale
+  provenance; changed target text still forces a fresh extraction.
+- UI/cache reuse the existing page, query keys, freshness and retry/backoff; the
+  new counts come from the loaded result. No new realtime subscription, upload,
+  worker or storage work. The board chunk is 44.05 kB (13.83 kB gzip), up from
+  41.65 kB (13.18 kB gzip); CSS is unchanged at 3.82 kB (0.98 kB gzip).
+- Gates run locally: focused Processor Board tests **100 passed across 5 files**,
+  plus a **65-test** matcher/diagnostics/handler rerun after the peer-index change;
+  initial full `npm test` ran **968 tests across 108 files** with **966 passing**.
+  The two failures were unrelated `AppSidebar` timing/teardown tests under full
+  parallel load; that file passed **4/4** alone. The subsequent complete
+  `npm test -- --maxWorkers=1` passed **975/975 across 108 files**, including those
+  sidebar tests. After the final shared-identity/unit safeguards, the two-worker
+  full run passed **978/980**; only the same sidebar timeout/teardown pair failed.
+   The final serial run passed **980/980 across 108 files**. No test timeout,
+  assertion or repository configuration was changed to hide these failures.
+  `npm run lint` passed with **0 errors / 28 existing warnings**;
+  `npm run typecheck` and `npm run build` passed, including unchanged Donut v1.7.0
+  source/ZIP integrity. The latest focused safety/automatic-count pass is **79/79**.
+  Browser checks passed **25/25** with desktop/mobile context-attribution coverage,
+  excluded roles, saved-status preservation, safe failures, keyboard access and
+  no horizontal overflow. Reproduce with
+  `npx playwright test tests/operator-workflow/processor-board.spec.ts --config playwright.operator-workflow.config.ts --reporter=line`.
+  The default Lovable config cannot load its missing local package; a temporary
+  default-channel browser attempt timed out before creating a page and was stopped.
+  The existing operator-workflow config uses the working Chromium channel; no test
+  assertion or repository test setting was relaxed. The temporary config was removed.
+  One concurrent lint attempt hit `ENOENT` while Vitest removed a generated config
+  module; rerun lint separately from Vitest, without changing ignore rules.
+
+Read-only MCP reconfirmed the installed function is v5 ACTIVE with JWT verification
+enabled. Security/performance/health advisors were inspected; existing project-wide
+notices include mutable function search paths, executable definer functions,
+password protection, policy/index tuning and Auth connection information. No
+unrelated production change was made. These need their own authorization/grant
+review, not blindly revoked access or speculative indexes. See the
+[security-definer advisory guidance](https://supabase.com/docs/guides/database/database-linter?lint=0028_anon_security_definer_function_executable)
+and [database advisor reference](https://supabase.com/docs/guides/database/database-linter).
+The subsequent targeted last-day Processor Board logs query succeeded: 621 responses
+were 200, 11 were 422, 12 were 401 and 2 were 405. These counts do not establish
+model accuracy, error-free production behavior or complete health/billing evidence.
+
+## Evidence accuracy follow-up (2026-10-22) — Edge v5 installed; CRM publish pending
+
+This section supersedes the earlier manual-check timezone behavior. The user
+approved deployment and push, which are now done, on
+`fix/processor-board-evidence-accuracy-2026-10-22`, based on merged Boostera `main`
+`d8aa85b`. This release does not include CRM publication, migrations, customer-data
+repair, outbound messages or running paid/live assessments.
+
+`processor-board` is **v5 ACTIVE** on `kxiqholnmhkwhdkhtopp` with JWT verification
+preserved; all nine deployed files were read back and match the tested source
+exactly. Unauthenticated/invalid-credential probes returned 401 as configured.
+Prior live v4 remains backed up outside the repository for rollback.
+
+### Defects and bounded fixes
+
+- A review completing is not a verified technician outcome. The batch notice and
+  page evidence-quality summary now separately count successful checks and checks
+  with verified technician acceptance/progress/completion. A delivered outbound
+  request alone is not a verified technician update. Saved In Progress / Payment
+  Pending remains labelled as saved status, never newly AI-confirmed.
+- New result diagnostics count technician source messages that uniquely identify
+  the job, other technician text messages that cannot be assigned to it, and text
+  submitted for extraction. Zero attributed replies is exposed, not described as
+  a confirmed outcome. Unassigned replies may concern other jobs; this is not a
+  non-response finding. The drawer offers the exact verified saved Quo chat for
+  manual review; opening it sends nothing.
+- Equivalent complete address spellings (`Street`/`St`, `Apartment`/`Unit`/`#`)
+  now match without dropping house numbers, directionals or unit values. Shared
+  canonical addresses remain ambiguous. Missing/different units cannot silently
+  become matches, and mentioning another peer address still blocks evidence.
+- Exact factual quote spans may omit the identifier when their **same full source
+  message** uniquely identifies this job. Source ID, exact substring, sender,
+  appointment-date and peer-exclusion checks remain. The drawer identifies this
+  provenance. A generic reply never inherits identity from an adjacent dispatch.
+  Cache policy version is bumped; prior extraction is not reused under new rules.
+- Pure outbound dispatch cannot establish technician acceptance/progress/completion.
+  With no uniquely identified technician text there is no possible Send Dose
+  outcome, so AI extraction is skipped. If identified technician text exists, ALL
+  identified delivered agent messages remain eligible for extraction; update
+  questions do not need an English keyword. All history, including generic/media
+  replies, still participates in non-response timing; fresh history is never skipped.
+- The tracking state now explicitly says **not started**, **paused**, **unavailable**
+  or **enabled**, separate from the requested-tracking checkbox. Both manual and
+  automatic checks require timezone confirmation. Unconfirmed schedule rules show
+  Needs Review rather than an unsupported Scheduled/Take Job Update judgement;
+  existing saved progress/payment statuses are preserved. Changing timezone resets
+  confirmation. The page remains bounded to the loaded 25 jobs, not every page.
+
+### System timezone investigation and remaining data limits
+
+`src/pages/SchedulePage.tsx` displays the browser's GMT offset (lines 640–641) and
+places saved `scheduled_time_start` values directly on its hours grid. Saved lead
+date/time fields have no timezone. Copilot's business timezone and the separate
+schedule-confirmation monitor configuration are not proof of an individual job's
+appointment timezone. The user's instruction to follow the existing system was
+investigated; **no authoritative all-job timezone was found**. Do not infer it from
+the operator's browser, customer state, ZIP or an unrelated AI setting. The operator
+must verify the saved convention before confirming a timezone; mixed conventions
+need a separately designed per-job timezone workflow, not a guessed conversion.
+
+The three malformed technician numbers remain blocked pending verified corrections:
+`LD-EFM7FS`, `LD-BLYIQ8`, `LD-SHALGR`. The new matching must not be described as
+recovering generic replies automatically or as verifying all real job outcomes.
+
+### Read-only evidence and efficiency review
+
+After the screenshots, a caller-independent, privileged diagnostic examined the same
+bounded first-page mirrored message workload under old/new pure matching functions
+locally (no provider call, assessment save or transcript output): 22 assessed jobs,
+914 per-job mirrored message events, **1 identified technician message before and
+after**. The new address aliases did not invent any additional live matches.
+The old extraction planner selected 22 jobs; the new planner selects 1 on that same
+input. This is **prospective extraction eligibility**, not measured production
+provider requests or invoice savings. The earlier 524 current-Quo review events and
+this 914-event mirror snapshot are different datasets, not before/after usage.
+Aggregate diagnostics alone cannot establish what an unanchored reply means.
+
+- UI/cache: bounded existing page, clock and query keys; no new timer, query or
+  global state. Evidence counts reuse loaded results. Confirmation does not alter
+  saved schedule values or query filters. Manual chat opening downloads nothing.
+- API/database: only optional JSON metadata added to the existing result and chat
+  setup. No table/column/type/RLS/index/RPC change and no new database read per check.
+  No SQL migration or write-based harness is needed. Authorization remains in the
+  existing UI/helper/Edge/caller-RLS/service-only advisory-save chain.
+- Provider/history: skip extraction that cannot possibly establish a technician
+  outcome; retain full current-history reads, delivered-request checks, independent
+  failures, audit saves, retry/backoff and evidence-hash reuse. Identity indexes
+  compile once per review; canonical matching retains the bounded text scan.
+- Realtime/background/storage: existing shared transport, recovery reads, hidden-tab
+  pause, cleanup and worker-free design unchanged. No uploads, cron or new feeds.
+- Donut: source audit reconfirmed no native board/job-assessment counterpart. Its
+  technician-wide intelligence is separate. No extension source/version/ZIP changes.
+  No dependency or generated database type changed.
+
+### Verification and release record
+
+Initial focused tests passed **118 tests across 8 files**; initial app/node
+typechecking passed. Final `npm run validate` passed: lint (zero errors / 28 existing
+warnings), app/node typechecks, **958 tests across 108 files**, and production build
+including unchanged Donut v1.7.0 source/ZIP integrity. No assertions/configuration
+were weakened or skipped. Existing Browserslist, Router future-flag, unrelated
+Quo-dashboard DOM nesting, mixed-import and bundle-size warnings remain. The board
+route is 41.65 kB JS (13.18 kB gzip), versus the prior 38.44 kB (12.25 kB gzip); CSS
+remains 3.82 kB (0.98 kB gzip). Browser verification passed: **23/23**
+Playwright operator-workflow tests, including the new zero-verified-outcome and
+timezone-gating cases at 1440px and 390px, with no horizontal overflow and
+attribution/chat-link assertions verified in both screenshots.
+Deployment used the existing eight files **plus
+`supabase/functions/_shared/processor-review-diagnostics.ts`** (nine files total),
+with JWT verification preserved and deployed content verified against the tested
+source. CRM publication and real signed-in/provider accuracy checks are
+separate from deployment/build success. No new live assessment was invoked here.
+
+## Open-board tracking follow-up (2026-10-22) — Edge v4 installed; CRM pending
+
+This section supersedes the on-demand-only and execution-status-only descriptions
+below. The earlier active-radar migration and Edge v3 deployment remain installed;
+**the follow-up backend is deployed; the CRM is not published by this task**. No new SQL migration,
+generated database type, grant or secret is required.
+
+### Behavior and safety
+
+- Automatic AI tracking is selected by default but starts only after the operator
+  explicitly confirms the displayed schedule timezone. It covers the **loaded page,
+  up to 25 jobs**, independent of page-local filters and the five-row viewport.
+  Changing timezone requires confirmation again. It is not an all-pages worker.
+- Hiding/unmounting the board stops starting jobs; the current request may finish.
+  Pausing tracking or Stop after current job preserves completed evidence. The
+  existing manual page/job checks and failed-only retry remain available.
+- Five-minute freshness is invalidated by changed saved job/chat metadata. The
+  existing 30-second clock plans reviews; transient failures back off at 1, 2, 4,
+  then 5 minutes. Nonretryable failures wait for changed setup or explicit recheck.
+  Caller/role changes remount the board and reset confirmation/retry state.
+- Missing technician-directory entries/links can use **one exact-number saved
+  conversation on Technician Communications**. No newest-chat/name guess is used;
+  conflicting/invalid links, wrong participants/lines and ambiguous mirrors remain
+  blocked. No directory, conversation link or customer record is repaired.
+- The read-only first-page audit found ten missing-link/directory failures with a
+  unique valid saved technician-line conversation. Three malformed saved numbers
+  (`LD-EFM7FS`, `LD-BLYIQ8`, `LD-SHALGR`) still require verified correction. Never
+  infer their missing digits. Do not treat the audit snapshot as permanent data.
+- Active reschedule/customer/approval workflows may receive advisory evidence
+  checks, but keep their saved workflow and explicit guidance. A date alone cannot
+  advance those workflows. Terminal jobs remain history-only and unreviewable.
+- Status labels distinguish verified AI progress/completion, saved lead status,
+  schedule rules, and AI checks with **no verified target-job update**. Generic
+  replies cannot identify one job among several. Full current-history verification,
+  delivered-request/acceptance/timing guards and manual Send Dose remain intact.
+  Mirror-only history cannot establish non-response.
+- UI/helper/Edge Admin/Processor gates, caller-token lead/status/chat reads,
+  service-only leases/revision-checked advisory save and atomic audit are unchanged.
+  No RLS/enums, approvals, lead statuses, schedules or outbound messages are changed.
+
+### Efficiency review and reproducible evidence
+
+- UI/hooks/cache: one bounded page, one existing clock, serial guarded reviews,
+  shared query keys and immediate per-job cache updates. No per-row timer. Lead,
+  technician-setup and page-conversation changes share a coalesced refresh; in-flight
+  bursts retain a trailing read. Reconnect and 30-second polling remain recovery.
+- API/database: page readiness adds two batched caller-scoped metadata reads (plus
+  additional 500-row pages if required), not two reads per job. Only required
+  columns are selected. Exact list totals/pagination/RLS remain unchanged; no new
+  indexes or speculative query tuning. No production-after query-plan claim.
+- Realtime: one shared board transport adds technician-setup changes; one shared
+  activity channel filters to loaded saved conversation UUIDs. Retired scopes cannot
+  invoke replacement callbacks; unmount releases consumers. No global message feed.
+- Provider/history: current history is still reread for identity and silence timing.
+  A target-job evidence hash reuses verified extraction when only another job's
+  message changes; it never reuses non-response timing without reading history.
+- Local synthetic comparisons (Windows, mocked Vitest backend): a 25-job page adds
+  **2 metadata reads** to the prior list path (previously zero), zero provider calls
+  or leases for listing. This is two batched reads, not 50 reads from a naive
+  two-lookups-per-job implementation. Two reviews with only another job's message
+  added use **2 current-history
+  reads / 1 AI extraction**, rather than 2 extractions. Ten unchanged 30-second
+  planning ticks start only one successful check before five-minute expiry.
+  Run `src/lib/processor-board-handler.test.ts`, `processor-chat.test.ts` and
+  `processor-auto.test.ts` to reproduce. These are request/resource tests, not
+  production usage or invoice savings; normalized billing/health evidence is absent.
+- Background jobs and storage: no cron/worker, uploads or release downloads added.
+  Donut has no native job board/job-specific assessment counterpart (source search
+  reconfirmed); technician-wide intelligence is separate. No extension source,
+  manifest, ZIP or release version changed; no Donut installation is needed.
+
+### Release and remaining verification
+
+With the user's explicit **Deploy and push branch** approval, Supabase MCP deployed
+`processor-board` **v4 ACTIVE** on `kxiqholnmhkwhdkhtopp`, with JWT verification kept
+enabled. All eight retrieved files match the tested LF-normalized source: the
+existing seven bundle files **plus `supabase/functions/_shared/processor-chat.ts`**.
+Six non-mutating checks passed: preflight 200; missing authorization, invalid JWT,
+API-key-only and anonymous-JWT requests 401; gateway-authenticated unsupported method
+405. An initial unauthenticated GET returned gateway 401 as expected once gateway
+authorization was considered; the anon-JWT retry verified the handler's 405.
+These are boot/authentication checks, not signed-in/provider accuracy verification.
+The previous v3 bundle is backed up outside the repository for approved rollback.
+No migration should be reapplied. Publish CRM separately after review.
+Rollback is the prior CRM and the previously deployed v3 function bundle; retain
+advisory/audit history. No data repair is required for rollback.
+
+Local verification: **950/950 unit tests across 107 files** and **21/21 isolated
+Chromium workflow tests** passed, including desktop/mobile automatic confirmation,
+fresh-result reuse, pause/setup handling, excluded roles and the existing viewport.
+App/node typechecks passed. Full lint passed with zero errors / 28 existing
+warnings; `git diff --check` passed. The first full-unit command hit its 240-second
+shell limit without a test failure; the 600-second-limit rerun finished in 282s.
+Tests/configuration were not weakened or skipped. The 1440px/390px automatic-check
+screenshots were inspected: controls, exact check times, source labels, saved status,
+technician identity and schedules are readable without horizontal page overflow.
+Production build passed, including unchanged Donut v1.7.0 source/ZIP integrity.
+Existing Browserslist, mixed-import and bundle-size warnings remain. The board route
+is 38.44 kB JS (12.25 kB gzip), versus 31.65 kB (10.13 kB gzip) in the prior release;
+CSS remains 3.82 kB (0.98 kB gzip). No SQL harness rerun was required: schema/RLS and
+migrations are unchanged. Native Deno typecheck was not run (Deno unavailable).
+
+Signed-in production/provider checks remain unverified, especially manually confirmed
+started/completed/non-response examples across several jobs in one real chat.
+No production AI invocation, data correction, secret/ingestion change or outbound
+message was performed. Only the approved function was deployed; CRM Publish remains
+the user's step after merging the release branch.
+
+Release branch: `feat/processor-board-live-tracking-2026-10-22`, based on merged
+Boostera `main` `6aedb99`. The user requested commit/push, but retains merging and
+publication. The original dirty workspace remains untouched. Preflight confirmed
+the project ACTIVE_HEALTHY; existing security/performance advisor findings remain
+outside this scoped release (including private/service-only RLS tables, function
+search paths, executable definer functions and query/index advisories). The
+15-minute preflight function log query returned no matching events, not proof of
+live workflow health. See [function search path guidance](https://supabase.com/docs/guides/database/database-linter?lint=0011_function_search_path_mutable)
+and [anonymous definer-function guidance](https://supabase.com/docs/guides/database/database-linter?lint=0028_anon_security_definer_function_executable).
+
+## Active radar requirements audit (2026-10-22) — database/Edge installed; CRM pending
+
+This section supersedes the older default-queue description below. The existing
+compact interface, viewport controls, permissions and advisory-only workflow remain.
+
+- Fixed server ordering **before pagination**: appointment date/time descending,
+  null schedules last, then job creation descending and ID for deterministic ties.
+  Both page selection and JSON aggregation use the same order. Newest appointments
+  appear first; old appointments remain reachable, not discarded.
+- A saved technician name **or** number is required for queue inclusion, including
+  history. Both absent/blank means unassigned and is excluded **before exact counts
+  and pagination**, not hidden client-side. A name-only assignment still needs its
+  number repaired before AI; a number-only assignment is not guessed from a name.
+- Assigned dated jobs stay on the active radar across saved status changes until
+  `paid`, `cancelled` or `job_done` (also excluding legacy `done`/`completed`). The
+  existing undated `scheduled` repair case remains. Needs Reschedule, cancellation
+  and payment approval requests remain visible but their workflows cannot be
+  advanced by an assessment. Only the existing eligible execution/payment states
+  permit checks; `job_done` is now history-only and not assessable.
+- Added a **Saved status · this page** filter, independent of advisory-action
+  filters. All saved statuses remains the default; counts/filters remain page-local.
+  No NSS category was invented: repository search, live saved statuses, visibility
+  settings and the four distinct `cs_tag` values contained no `NSS` entry. The user
+  also could not define NSS. A new NSS mapping requires a confirmed business meaning.
+- Every persisted check displays its **date, time and selected timezone**, not only
+  relative time or a hover title. Stale checks still say Previous check. New results
+  record `ai_used`: AI-reviewed rows explicitly say so, zero-matching-message checks
+  identify the saved-status/schedule rule, and older results honestly say AI usage
+  was not recorded. A policy-hash bump prevents reuse of pre-change backend results.
+- A complete chat with no new target-job signal no longer regresses saved In
+  Progress/Payment Pending/Partial Paid into Take Job Update. Incomplete history and
+  provider failure remain unavailable, never a successful AI check.
+- Existing four action rules, full paginated text history, exact job-identity and
+  quote verification, delivered-request/60-minute Send Dose safeguards, revision
+  checks, leases and atomic audit remain. No automatic lead mutation or message
+  sending was added. **AI checks remain on demand, not unattended monitoring.**
+  Calls/voicemails still need manual review; generic unanchored replies cannot be
+  safely attributed among several jobs in the same technician conversation.
+
+### Required release steps
+
+1. **Applied through Supabase MCP with explicit user approval on 2026-10-22** to
+   `kxiqholnmhkwhdkhtopp`: exact file
+   `supabase/migrations/20261022041621_processor_board_active_radar.sql`.
+   MCP recorded `20261022044310 / processor_board_active_radar`; retain the original
+   reviewed repository filename and do not repair remote migration history or
+   reapply this migration on this project. For another environment, review and
+   manually apply the file in its intended SQL Editor. It replaces only the existing
+   caller-token `SECURITY INVOKER` list RPC, preserving status visibility and lead
+   RLS. No table columns, API signatures, grants expansion or generated-type changes
+   are required. Do **not** run `db push`/`db reset` or reapply the original migration.
+2. **Deployed through Supabase MCP after separate explicit user approval on
+   2026-10-22:** `processor-board` **v3 ACTIVE**, JWT verification preserved (`true`).
+   All seven deployed files match the reviewed Git-normalized LF source: entrypoint,
+   `deno.json`, shared handler, job-status rules, readiness, history and technician
+   Quo-link parser. Preflight v2 already contained the earlier reliability fixes;
+   this release adds active-radar rules and explicit AI-use metadata. Function ID:
+   `6281626c-9181-4714-b8cf-8956ca98333f`. No other function was redeployed.
+3. Publish the CRM separately; verify signed-in Admin/Processor, denied roles,
+   reschedules, terminal transitions, technician unassignment/reassignment, several
+   jobs in one chat, and live-provider failures. Only the explicitly approved list
+   RPC migration was installed remotely: no lead/customer data writes, provider
+   invocations, messages or secret changes were performed. Only `processor-board`
+   was deployed after the user's additional explicit approval.
+4. Run `supabase/tests/153_processor_board_active_radar.sql` **only on an isolated
+   test database**; it writes synthetic records and is not production safe. The
+   runner below applies each migration twice and checks every PASS/FAIL. Existing
+   `150_processor_board.sql` authorization/lease/audit checks still run first.
+5. **Live database verification passed:** the updated read-only
+   `supabase/tests/151_processor_board_readonly.sql` returned **28 PASS** after
+   installation (18 original checks passed beforehand). It verifies caller-scoped
+   exact totals, newest-first page order, assigned-only active/history pages,
+   terminal exclusion and permitted/excluded roles. The exact
+   `supabase/tests/40_leads_rls_baseline.sql` was run before/after; all six role
+   matrices matched cell-for-cell. `pg_proc.prosrc` matches the migration body
+   exactly. The synthetic write-based 150/153 harnesses were not run on production.
+6. **Six non-mutating live Edge smoke checks passed:** preflight 200; missing user
+   authorization, invalid JWT, API-key-only and anon-JWT calls 401; unsupported
+   method 405. The anon-JWT rejection reaches the handler's `Not signed in.` check.
+   v3 logs in the checked 15-minute window contain those six expected HTTP results,
+   with no error-severity/runtime-failure entries. This verifies boot/authentication,
+   not a real signed-in assessment or Quo/OpenAI credentials. Existing server secrets
+   are reused; no new cron, unattended monitor, grants or client/API keys are needed.
+   The previous v2 source was saved outside the repository for approved rollback.
+
+```powershell
+node scripts/test-processor-board-db.mjs "C:\path\to\pglite-installation"
+npm test -- --maxWorkers=1 src/pages/ProcessorBoardPage.test.tsx src/lib/processor-board.test.ts src/lib/processor-board-handler.test.ts src/lib/processor-job-status.test.ts src/hooks/useProcessorBoard.test.tsx src/lib/processor-history.test.ts src/lib/processor-matching.test.ts
+npx playwright test --config playwright.operator-workflow.config.ts processor-board.spec.ts
+```
+
+Rollback: restore only the `list_processor_jobs` definition/grants from the original
+`20261015045700_processor_board_job_assessments.sql` (lines 72–107), redeploy the
+previous v2 function and restore the prior CRM. Retain advisory/audit history. There
+are no lead writes, schedules or data repairs to reverse.
+
+### Efficiency, diagnostics and verification boundaries
+
+- UI: bounded to the existing 25 rows; dates reuse the existing 30-second clock.
+  Saved-status filtering adds no timer, listener, query or provider call. Cache keys,
+  fresh skips, failed-only retry, reconnect/polling and the shared realtime bus are
+  unchanged. No additional job-history downloads, AI passes or background worker.
+- Database/API: exact counts precede the same 25-row evidence join. Assignment and
+  unfinished-job filtering occur server-side; creation time is used internally for
+  ties and removed from the JSON projection. No speculative index or RLS change.
+  Read-only production EXPLAIN of the proposed selection used the existing
+  `leads_scheduled_date_idx` and `idx_leads_status`, top-N sort (27 kB), 696 candidate
+  rows, no temp writes, 12.132ms execution. This privileged selection-only diagnostic
+  is **not** a caller-RLS RPC benchmark or a verified production improvement.
+- Before/after workload: Windows local Chromium, same synthetic six-job board,
+  mount/filter/drawer actions still require **one list request / zero assessments**;
+  the new saved-status filter has the same budget. Explicit repeated unchanged
+  checks retain one AI call for two current-history reads. No billing savings or
+  production-after performance/health claims; normalized billing evidence unavailable.
+- Production read-only diagnostics confirmed the installed RPC still sorts oldest
+  first. Last-24-hour logs returned 156 board HTTP 200s and no matching CPU-limit
+  events; this is not proof of correct job assessment. Security/performance advisors
+  retain unrelated findings (including private/service-only tables without browser
+  policies); no authorization was weakened to silence them. Relevant guidance:
+  [RLS without policies](https://supabase.com/docs/guides/database/database-linter?lint=0008_rls_enabled_no_policy),
+  [function search paths](https://supabase.com/docs/guides/database/database-linter?lint=0011_function_search_path_mutable),
+  [unindexed foreign keys](https://supabase.com/docs/guides/database/database-linter?lint=0001_unindexed_foreign_keys).
+- Donut source search found no native board/list RPC/job-level assessment action;
+  technician-wide intelligence remains a separate flow. No extension source,
+  manifest, release metadata or ZIP changed. Storage/uploads/downloads are not
+  affected. No extension release or manual installation is needed for this change.
+- Local SQL checks: **45 PASS** (24 original + 21 radar), migrations applied twice.
+  Initial focused Vitest run: **87 PASS**. Full lint: zero errors / 28 existing
+  warnings. Typechecking and `git diff --check` passed. Initial browser run: 17/18
+  passed; the first desktop case timed out in cold `page.goto` before workflow
+  assertions. The unchanged full browser rerun passed **18/18**, including desktop,
+  mobile, saved-status filtering, failure recovery and all four excluded roles.
+  First full-unit run (overlapping build/browser activity): **886 PASS / 2 FAIL**,
+  both in the unchanged `AppSidebar.test.tsx` (Admin timeout then missing link).
+  All Processor Board tests passed, including the final 15 contract tests. The full
+  standalone rerun passed **888/888 tests across 103 files**, including all four
+  sidebar tests. No tests/timeouts/configuration were weakened or unrelated sidebar
+  work edited.
+  Production build passed, including unchanged Donut v1.7.0 source/ZIP integrity;
+  existing Browserslist, mixed-import and bundle-size warnings remain. The board
+  route is 31.65 kB JS (10.13 kB gzip) and 3.82 kB CSS (0.98 kB gzip).
+  The 1440px and 390px checked-job screenshots were inspected: exact check date/time,
+  AI-source label, technician identity and schedule are visible without overflow.
+  Signed-in production/provider QA and native Deno check remain unverified.
+
+### Boostera release branch verification (2026-10-22)
+
+The user requested a new remote branch and will merge `main` themselves. Release
+branch `feat/processor-board-active-radar-2026-10-22` is based on Boostera `main`
+`f5a82cb`, not the older dirty development branch. Only 17 Processor Board files
+(including its isolated parity section) are included; unrelated original working
+changes are preserved. No dependency, extension source or release ZIP changed.
+
+The exact release worktree passed lint (zero errors / 28 existing warnings), app/
+node typechecks, **915 unit tests across 104 files**, build including Donut v1.7.0
+integrity, and all **18 network-isolated Processor Board browser tests**. The 45
+isolated SQL checks also passed from that worktree. These supersede the older
+workspace's 888-test count above; Boostera main includes additional existing tests.
+Existing Browserslist, mixed-import, large-bundle and optional react-leaflet
+prebundle warnings remain. Tests/configuration were not weakened or skipped.
+
+Database migration and Edge v3 are installed as recorded above. Merging the branch
+does not constitute signed-in/provider QA or CRM publication; those remain the
+user's separate release steps. No Donut installation is needed for this CRM-only
+board change.
+
+## Five-row scroll viewport (2026-10-19) — local only
+
+- **Rows in view** defaults to **Show 5**, with 10, 15 and 25 options beside the
+  page-status filter. This controls list height, **not** the server page size:
+  all matching jobs from the existing 25-job page remain mounted and reachable
+  by scrolling. The exact total, pagination, page-local status counts and AI
+  refresh scope are unchanged. A matching-job count and scroll hint distinguish
+  filtered matches from the footer's source-page range.
+- Desktop height measures through the selected last row, including wrapped
+  setup/failure explanations; no fixed row height, line clamping or data slicing
+  hides details. One scroll owner supports both axes, with opaque sticky headings.
+  Mobile cards share the selector and internal scrolling, capped at 70vh so the
+  list remains screen-sized. On smaller screens fewer than five cards can fit.
+- Each scroll area is labelled and keyboard-focusable. End/Page Down can reach
+  later jobs, including their evidence drawer. Filter/search/page/history/timezone
+  or row-limit changes reset to the top; ordinary refreshes preserve scroll.
+  Resize observation recalculates height for wrapping and viewport changes, and
+  every observer/fallback listener is cleaned up on unmount.
+- This is CRM-only: Donut still has no native board, and its sources/release/ZIP
+  remain unchanged. No SQL, RPC, function, types, lead permissions, approvals,
+  schedules, realtime transport or polling changed. No migration or function
+  deployment is required; CRM publication and real signed-in QA remain separate.
+
+### Efficiency and verification
+
+Affected layers: UI/rendering and scoped lazy-route CSS. At most 25 existing rows
+are inspected, using two geometry reads per mounted viewport measurement (not one
+per row), one ResizeObserver per viewport (desktop and mobile, at most two mounted),
+no new timer/scroll listener and no redundant identical height-style writes.
+The resize-listener fallback and observer cleanup are regression-tested. No
+observer is recreated for an unchanged-data refresh. Hooks/cache, API payloads,
+database queries/RLS/indexes, realtime, background jobs, storage/bandwidth outside
+these small assets, and the Donut counterpart are unchanged/not applicable.
+
+Reproducible comparison: same Windows local Vite build and network-isolated
+Chromium workload with six synthetic jobs. Before: all six desktop rows expanded
+the page. After: five visible rows, with the sixth reachable by internal keyboard
+scroll and Show 10 expanding all six. Both workloads retain **one list request,
+zero assessment requests** for mount, filtering, row-count changes and opening
+the drawer. A separate unit regression verifies that page AI refresh still checks
+**all six eligible jobs**, not only the five in view. No query/billing reduction
+is claimed. Route JS is **27.94 → 29.99 kB** (**8.99 → 9.61 kB gzip**); scoped CSS
+is **3.21 → 3.82 kB** (**0.80 → 0.98 kB gzip**). Production usage, normalized billing
+and health-after evidence remain unavailable.
+
+Focused tests: **42 passed**, including viewport measurement, unchanged-write
+avoidance, refresh scroll retention, scope reset, resize recovery and cleanup.
+All **16 network-isolated browser tests passed**, including actual five-row bounds,
+sticky headings after End, later-job review, selector expansion, filter reset and
+bounded mobile scrolling. Desktop/mobile screenshots were inspected. Full lint
+passed with zero errors/28 existing warnings; typecheck and build (including Donut
+v1.7.0 integrity) passed. Existing Browserslist/bundle warnings remain. The new
+full-unit-suite run is in the background and **pending**. The user authorized
+committing/pushing this follow-up to `boostera385-afk/marshmallow-crm`, branch
+`feat/processor-compact-board`, and will publish the CRM separately. No production
+mutation, migration application, backend deployment or CRM publication was
+performed by the agent for this follow-up.
+
+```sh
+npm test -- --maxWorkers=1 src/components/processor-board/ProcessorJobViewport.test.tsx src/pages/ProcessorBoardPage.test.tsx src/hooks/useProcessorBoard.test.tsx src/lib/processor-board.test.ts
+npx playwright test --config playwright.operator-workflow.config.ts processor-board.spec.ts
+```
+
+## Leads-style color and motion polish (2026-10-19) — local only
+
+- The compact queue now reuses the Leads page's rounded glass surface, a slim
+  blue/cyan gradient titlebar, inset search toolbar and highlighted AI button.
+  Page-local action chips have amber/blue/green/red tints, numeric count capsules
+  and a distinct selected ring. Advisory badges retain their existing labels and
+  palette. Rows/mobile cards add matching left-edge accents and subtle tints;
+  text labels remain present so color is never the only indicator.
+- Color is derived from the **displayed** advisory state, including Unavailable
+  after a failed check and Needs Review for incomplete jobs. It does not change
+  saved statuses, severity, schedules, approvals, backend outcomes or visibility.
+  Last-check timestamps remain above statuses on both screen sizes and the drawer.
+- One entrance animation uses the existing `pageVariants` (250ms); filters lift
+  1px on hover and row/review feedback uses short transitions. There are no idle
+  loops, staggered row mounts, animated layout measurements, per-row timers or
+  animations restarted by polling. OS reduced-motion preference skips the panel
+  entrance and disables board/drawer animation, transitions and hover movement.
+  Loading/progress text stays available even when spinner motion is disabled.
+- Styles live in `src/pages/ProcessorBoardPage.css`, scoped to the board and its
+  portalled drawer; shared CSS/components are unchanged. Light/dark text contrast,
+  keyboard filter toggling and mobile overflow are covered with synthetic data.
+  There is still no native Donut Processor Board (source search reconfirmed), so
+  no extension source, manifest, release metadata or ZIP change is required.
+
+### Efficiency review and local verification
+
+Affected: UI/rendering and a small lazy-route stylesheet. Reuses existing Framer
+Motion, theme/status tokens and the single UI clock, with no dependency change.
+Unchanged/not applicable: hooks/cache, API projections and calls, database queries/
+RLS/indexes, generated types, realtime/polling, background jobs, storage/uploads,
+and Donut downloads. No backend deployment or database migration is needed for
+this presentation change. The earlier reliability deployment remains separate.
+
+Reproducible comparison: Windows local Vite production builds plus the same
+network-isolated Chromium board tests. Relative to the preceding compact-view
+build, route JS is **26.89 → 27.94 kB** (**8.72 → 8.99 kB gzip**); the scoped lazy
+CSS is **3.21 kB / 0.80 kB gzip**. This is a small visual-asset increase, not a
+claimed bundle reduction. One mount/filter/hover/review-drawer workload still
+performs **one list request and zero assessments**, including six synthetic jobs
+in both themes and desktop-to-mobile resize. Existing explicit single review and
+failed-only retry/fresh-skip resource assertions still pass. No provider/billing
+or normalized production-after health evidence is available; no savings claimed.
+
+Reproduce with the focused Vitest and Playwright commands in the compact-view
+section below. **38 focused tests and all 14 network-isolated browser tests passed**;
+1366px light/dark and 390px screenshots were inspected. Full lint passed with
+zero errors/28 existing warnings; typecheck and production build passed, including
+unchanged Donut v1.7.0 ZIP integrity. Existing Browserslist/bundle warnings remain.
+The first full unit run had **802 passes and two failures** in the unchanged
+sidebar file (an Admin test timeout followed by a missing-link failure); all four
+sidebar tests passed in isolation. The subsequent full-suite rerun passed all
+**804 tests across 94 files**, including the sidebar file. No timeout,
+assertion, skip or configuration was weakened. No production mutation or CRM
+publication has been performed for this visual follow-up; real signed-in/provider
+QA remains separate. The user subsequently authorized code publication to
+`boostera385-afk/marshmallow-crm`, branch `feat/processor-compact-board`, credited
+to `kaash0542@gmail.com`. Pushing this branch does not merge or deploy the CRM.
+
+## Compact queue presentation (2026-10-19) — local only
+
+- Replaces the large hero and four standalone count cards with one compact table
+  panel and four keyboard-accessible toggle chips. Service and Area are separate
+  columns, with technician identity, job ID and saved status grouped under the
+  customer. Mobile retains labelled cards and now shows terms as well.
+- Each job's saved check time appears **above** its advisory status, also in the
+  drawer. A semantic time element exposes the exact timestamp in the selected
+  timezone. Relative times reuse the existing 30-second UI clock; there is no new
+  timer. Unchecked jobs say Not checked yet. Expired evidence, changed records,
+  changed timezone, invalidated history and failed retries show Previous check,
+  never a false fresh-success indicator. The header shows the latest persisted
+  check **on this page**, separately from the board-read time.
+- Setup/failure explanations remain visible. Expanded help explains timezone,
+  freshness, page-local filtering and manual call review. Existing exact totals,
+  25-job pagination, permissions, approval gates, schedules and review controls
+  are unchanged. No database, Edge Function or generated-type changes were made;
+  no migration application or function deployment is required for this layout.
+  The earlier reliability follow-up below remains a separate deployment item.
+- Donut has no native job board/job-assessment flow; its sources, v1.7.0 metadata
+  and ZIP remain unchanged. CRM publication and real signed-in/provider QA remain
+  separate steps, not outcomes of local mocked browser tests.
+
+### Efficiency and regression review
+
+Comparison: local Windows React/Vitest and network-isolated Chromium, synthetic
+scheduled job, the same existing list/review contract. Before: three top-level
+sections (hero, four large count cards, queue); after: one queue panel with four
+inline chips. This reduces presentation overhead, not queue data or requirements.
+Opening the page still makes **zero assessment requests**. Explicit review makes
+one assessment request; a failed review, successful retry and fresh page refresh
+still make **two**, not three. Reproduce with:
+
+```sh
+npm test -- --maxWorkers=1 src/pages/ProcessorBoardPage.test.tsx src/hooks/useProcessorBoard.test.tsx src/lib/processor-board.test.ts
+npx playwright test --config playwright.operator-workflow.config.ts processor-board.spec.ts
+```
+
+UI/rendering is the affected layer; timestamp calculation is bounded to the
+existing maximum 25 loaded jobs and reuses the UI clock. Hooks/cache, API payloads,
+database queries/RLS/indexes, realtime/subscriptions and polling are unchanged.
+Background jobs, storage/uploads and Donut downloads are not applicable. No new
+reads, writes or provider calls are introduced for the timestamps/chips. No
+production latency, normalized usage, billing or health-after evidence is
+available; no invoice savings are claimed. Regression coverage checks column
+order, exact/page counts, timestamp placement, stale/failure states, denied roles,
+setup recovery, retries and request counts at desktop/mobile widths.
+
+Final local validation: **803 tests across 94 files passed** with the full suite
+run alone, including all 22 page tests and the existing hook/resource tests.
+All **11 network-isolated browser tests** passed on the final source, and 1440px/
+390px screenshots were inspected; check times sit above statuses with no page
+overflow. Full lint passed with zero errors/28 existing warnings; changed-file
+lint, app/node typecheck, build (including unchanged Donut ZIP integrity) and
+`git diff --check` passed. Existing Browserslist/bundle warnings remain. The first
+browser run timed out during cold dev-server navigation; the complete rerun and
+final-source run both passed without changing timeouts or test configuration.
+An initial new unit assertion queried the background table while the modal had
+correctly hidden it from accessibility; the test now closes the modal before
+checking the row. No behavior assertion was removed or skipped. Real signed-in
+production/provider QA, CRM publication and the earlier backend reliability
+deployment remain unverified/unperformed; no production mutation was made.
+
 ## Reliability follow-up (2026-10-15) — awaiting deployment/publication
 
 The source changes below are **local only**. The installed migration is unchanged;

@@ -23,6 +23,7 @@ ShieldCheck,
   AlertTriangle,
   TrendingUp,
   Wrench,
+  Bell,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useNavigate } from "react-router-dom";
@@ -53,17 +54,22 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { motion } from "framer-motion";
 import { useEffect, useState, useRef } from "react";
 import { isQuotationMaster } from "@/lib/lead-tags";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
+import { useSharedQuery } from "@/hooks/useCrossTab";
 import { supabase } from "@/integrations/supabase/client";
+import { realtimeRelay, subscribeToTableChanges } from "@/lib/realtime";
+import type { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 import marshmallowLogo from "@/assets/marshmallow-logo.png.asset.json";
 import ChangePasswordDialog from "@/components/auth/ChangePasswordDialog";
 import { useUpdateCount } from "@/hooks/useCxUpdates";
+import { useNotificationUnreadCount } from "@/hooks/useNotificationInbox";
 
 const getNavItems = (role: string) => [
   { title: "All Leads", url: "/leads", icon: Users, navKey: "leads", group: "Work" },
   { title: "QUO Inbox", url: "/quo-monitor", icon: MessageSquare, navKey: "quo_monitor", group: "Work" },
   { title: "AI Assistance", url: "/ai-assistance", icon: Sparkles, navKey: "ai_assistance", group: "Work" },
   { title: "Schedule", url: "/schedule", icon: Calendar, navKey: "schedule", group: "Work" },
+  { title: "Notifications", url: "/notifications", icon: Bell, navKey: "notifications", group: "Work" },
   { title: "Processor Board", url: "/processor-board", icon: ClipboardCheck, navKey: "processor_board", group: "Work" },
   { title: "Map View", url: "/map-view", icon: MapIcon, navKey: "map_view", group: "Work" },
   { title: "Cancellation requests", url: "/lead-cancellation-requests", icon: ClipboardX, navKey: "cancellation_requests", group: "Review" },
@@ -75,7 +81,7 @@ const getNavItems = (role: string) => [
 { title: "Technicians", url: "/technicians", icon: Contact, navKey: "technicians", group: "Manage" },
     { title: "Area Insights", url: "/areas", icon: MapPin, navKey: "areas", group: "Manage" },
   { title: "Optimization", url: "/optimization", icon: TrendingUp, navKey: "optimization", group: "Manage" },
-  { title: "Analytics", url: "/analytics", icon: BarChart3, navKey: "analytics", group: "Insights" },
+  { title: "Analytics", url: "/analytics", icon: BarChart3, navKey: "analytics", anyOf: ["analytics", "cs_team_performance"], group: "Insights" },
   { title: "Activity Logs", url: "/activity-logs", icon: ScrollText, navKey: "activity_logs", group: "Insights" },
   ...(role === "cs_admin" ? [{ title: "Users", url: "/settings", icon: Shield, navKey: "settings", group: "Manage" }] : [{ title: "Settings", url: "/settings", icon: Settings, navKey: "settings", group: "Admin" }]),
 ];
@@ -95,6 +101,7 @@ export default function AppSidebar() {
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const cxCount = useUpdateCount("cx");
   const techCount = useUpdateCount("tech");
+  const notificationCount = useNotificationUnreadCount();
   // Leads already announced as Pending to Send, so one status change alerts exactly once.
   const announcedQuotePendingIds = useRef<Set<string>>(new Set());
 
@@ -128,7 +135,7 @@ export default function AppSidebar() {
 
   // Fetch pending cancellation requests count for the sidebar badge
   const canSeeCancellations = canAccess("cancellation_requests");
-  const { data: pendingCancellationCount = 0 } = useQuery({
+  const { data: pendingCancellationCount = 0 } = useSharedQuery({
     queryKey: ["pending-cancellations-count"],
     enabled: canSeeCancellations,
     queryFn: async () => {
@@ -143,11 +150,11 @@ export default function AppSidebar() {
       }
       return count || 0;
     },
-    refetchInterval: 15000,
+    sharedPoll: { intervalMs: 15000, realtimeBacked: true },
   });
 
   // Hidden badges do not need a query or a polling timer.
-  const { data: pendingPaymentCount = 0 } = useQuery({
+  const { data: pendingPaymentCount = 0 } = useSharedQuery({
     queryKey: ["pending-payment-requests-count"],
     enabled: canAccess("payment_requests"),
     queryFn: async () => {
@@ -160,11 +167,11 @@ export default function AppSidebar() {
       }
       return count || 0;
     },
-    refetchInterval: 30000,
+    sharedPoll: { intervalMs: 30000, realtimeBacked: true },
   });
 
   const canSeeQuoteApproval = canAccess("quote_approval_requests");
-  const { data: pendingQuoteApprovalCount = 0 } = useQuery({
+  const { data: pendingQuoteApprovalCount = 0 } = useSharedQuery({
     queryKey: ["pending-quote-approval-count"],
     enabled: canSeeQuoteApproval,
     queryFn: async () => {
@@ -178,10 +185,10 @@ export default function AppSidebar() {
       }
       return count || 0;
     },
-    refetchInterval: 30000,
+    sharedPoll: { intervalMs: 30000, realtimeBacked: true },
   });
 
-  const { data: pendingQuoteCount = 0 } = useQuery({
+  const { data: pendingQuoteCount = 0 } = useSharedQuery({
     queryKey: ["pending-quote-requests-count"],
     enabled: canAccess("quote_pending_requests"),
     queryFn: async () => {
@@ -195,7 +202,7 @@ export default function AppSidebar() {
       }
       return count || 0;
     },
-    refetchInterval: 30000,
+    sharedPoll: { intervalMs: 30000 },
   });
 
   // Pending urgent review requests. CS Admin and Admin only, matching the queue
@@ -203,7 +210,7 @@ export default function AppSidebar() {
   // rather than counting the table directly, so the badge cannot disagree with
   // what is actually reviewable.
   const canSeeUrgentReview = role === "admin" || role === "cs_admin";
-  const { data: pendingUrgentReviewCount = 0 } = useQuery({
+  const { data: pendingUrgentReviewCount = 0 } = useSharedQuery({
     queryKey: ["pending-urgent-review-count"],
     enabled: canSeeUrgentReview,
     queryFn: async () => {
@@ -216,14 +223,14 @@ export default function AppSidebar() {
       }
       return (data as unknown[] | null)?.length ?? 0;
     },
-    refetchInterval: 30000,
+    sharedPoll: { intervalMs: 30000 },
   });
 
   // AI Assistance missed-lead count (Admin + CS Admin only). Uses the same
   // SECURITY DEFINER function the page counts through, with the default 24h
   // window, so the badge matches the list a CS Admin opens at shift start.
   const canSeeAiAssistance = role === "admin" || role === "cs_admin" || role === "customer_service";
-  const { data: missedFollowupCount = 0 } = useQuery({
+  const { data: missedFollowupCount = 0 } = useSharedQuery({
     queryKey: ["cs-missed-followup-count"],
     enabled: canSeeAiAssistance,
     queryFn: async () => {
@@ -238,7 +245,7 @@ export default function AppSidebar() {
       }
       return typeof data === "number" ? data : 0;
     },
-    refetchInterval: 30000,
+    sharedPoll: { intervalMs: 30000 },
   });
 
   // "Need Attention" leads: urgent jobs whose schedule is due today or overdue.
@@ -246,7 +253,7 @@ export default function AppSidebar() {
   // client-side (same helper the lead card uses, so the count matches the tab).
   // Only Admin / CS / CS Admin see this tab; CS is scoped to its own leads.
   const canSeeNeedAttention = role === "admin" || role === "customer_service" || role === "cs_admin";
-  const { data: needAttentionCount = 0 } = useQuery({
+  const { data: needAttentionCount = 0 } = useSharedQuery({
     queryKey: ["need-attention-count", role, profile?.id],
     enabled: canSeeNeedAttention,
     queryFn: async () => {
@@ -269,62 +276,31 @@ export default function AppSidebar() {
         return 0;
       }
     },
-    refetchInterval: 30000,
+    sharedPoll: { intervalMs: 30000 },
   });
 
   // Realtime subscription for instant sidebar updates when a cancellation is requested/resolved
   useEffect(() => {
     if (!canSeeCancellations) return;
-    const channel = supabase
-      .channel("lead-cancellations-sidebar-realtime")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "lead_cancellation_requests" },
-        () => {
-          queryClient.invalidateQueries({ queryKey: ["pending-cancellations-count"] });
-        }
-      )
-      .subscribe();
-
-    return () => {
-      void supabase.removeChannel(channel);
-    };
+    // Shared with the Cancellation Requests page and the user's other tabs.
+    return subscribeToTableChanges("lead_cancellation_requests", () => {
+      queryClient.invalidateQueries({ queryKey: ["pending-cancellations-count"] });
+    });
   }, [canSeeCancellations, queryClient]);
 
   // Realtime subscription for payment request badge
   useEffect(() => {
     if (role !== "admin") return;
-    const channel = supabase
-      .channel("lead-payment-requests-sidebar-realtime")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "lead_payment_requests" },
-        () => {
-          queryClient.invalidateQueries({ queryKey: ["pending-payment-requests-count"] });
-        }
-      )
-      .subscribe();
-    return () => {
-      void supabase.removeChannel(channel);
-    };
+    return subscribeToTableChanges("lead_payment_requests", () => {
+      queryClient.invalidateQueries({ queryKey: ["pending-payment-requests-count"] });
+    });
   }, [queryClient, role]);
 
   useEffect(() => {
     if (!canSeeQuoteApproval) return;
-    const channel = supabase
-      .channel("quote-approval-sidebar-realtime")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "lead_quote_approval_requests" },
-        () => {
-          queryClient.invalidateQueries({ queryKey: ["pending-quote-approval-count"] });
-        },
-      )
-      .subscribe();
-
-    return () => {
-      void supabase.removeChannel(channel);
-    };
+    return subscribeToTableChanges("lead_quote_approval_requests", () => {
+      queryClient.invalidateQueries({ queryKey: ["pending-quote-approval-count"] });
+    });
   }, [canSeeQuoteApproval, queryClient]);
 
   // Realtime subscription for quote pending requests badge and notification
@@ -358,39 +334,31 @@ export default function AppSidebar() {
       void import("@/lib/notification-sound").then(({ playUrgentAlertSound }) => playUrgentAlertSound());
     };
 
-    const channel = supabase
-      .channel("quote-pending-sidebar-realtime")
-      // Server-side filter: only rows entering "pending_to_send" are delivered,
-      // instead of every lead change. Cuts realtime message volume drastically.
-      .on(
-        "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "leads", filter: "status=eq.pending_to_send" },
-        (payload) => announceQuotePending(payload.new as { id?: string; status?: string } | undefined),
-      )
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "leads", filter: "status=eq.pending_to_send" },
-        (payload) => announceQuotePending(payload.new as { id?: string; status?: string } | undefined),
-      )
-      .subscribe();
-
-    return () => {
-      void supabase.removeChannel(channel);
-    };
+    // Server-side filter: only rows entering "pending_to_send" are delivered,
+    // instead of every lead change. One subscription per browser, not per tab;
+    // each tab still announces (once per lead per tab, as before).
+    return realtimeRelay().subscribe(
+      {
+        key: "leads:pending_to_send",
+        healthName: "leads:pending_to_send",
+        bindings: [
+          { event: "UPDATE", table: "leads", filter: "status=eq.pending_to_send" },
+          { event: "INSERT", table: "leads", filter: "status=eq.pending_to_send" },
+        ],
+      },
+      (payload) => announceQuotePending((payload as { new?: { id?: string; status?: string; customer_name?: string | null } }).new),
+    );
   }, [queryClient, role, profile?.is_quotation_master, navigate]);
 
     // Global Leads Notifications (e.g. Activate Customer)
   useEffect(() => {
     if (!profile) return;
 
-    const channel = supabase
-      .channel("global-leads-notifications")
-      // Only "activate_customer" rows are delivered — the handler ignores every
-      // other status anyway, so this is a pure realtime-cost reduction.
-      .on(
-        "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "leads", filter: "status=eq.activate_customer" },
-        (payload) => {
+    // Only "activate_customer" rows are delivered — the handler ignores every
+    // other status anyway — through one subscription per browser.
+    return subscribeToTableChanges<RealtimePostgresChangesPayload<{ id?: string; status?: string; customer_name?: string | null; created_by?: string }>>(
+      "leads",
+      (payload) => {
           const newRow = payload.new as { id?: string; status?: string; customer_name?: string | null; created_by?: string } | undefined;
           const oldRow = payload.old as { status?: string } | undefined;
 
@@ -409,16 +377,12 @@ export default function AppSidebar() {
               });
             }
           }
-        }
-      )
-      .subscribe();
-
-    return () => {
-      void supabase.removeChannel(channel);
-    };
+      },
+      { event: "UPDATE", filter: "status=eq.activate_customer" },
+    );
   }, [role, profile?.id, navigate]);
 
-  const visibleItems = getNavItems(role || "").filter((item) => canAccess(item.navKey));
+  const visibleItems = getNavItems(role || "").filter((item) => ("anyOf" in item && item.anyOf ? item.anyOf : [item.navKey]).some(canAccess));
   // "Need Attention" is a virtual Review item (Admin/CS/CS Admin), rendered with
   // its own blinking dot + count under the Review header rather than a real route.
   const needAttentionItem =
@@ -563,6 +527,7 @@ export default function AppSidebar() {
                               />
                               {item.navKey === "cx_updates" && collapsed && (cxCount.data ?? 0) > 0 && <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-primary" />}
                               {item.navKey === "tech_updates" && collapsed && (techCount.data ?? 0) > 0 && <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-amber-500" />}
+                              {item.navKey === "notifications" && (notificationCount.data ?? 0) > 0 && <span aria-label={`${notificationCount.data} unread notifications`} className="absolute -right-2 -top-2 rounded-full bg-primary px-1 text-[9px] font-bold text-primary-foreground">{notificationCount.data}</span>}
                               {item.navKey === "cancellation_requests" && pendingCancellationCount > 0 && collapsed && (
                                 <span className="absolute -top-1.5 -right-1.5 flex h-2 w-2 z-20">
                                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>

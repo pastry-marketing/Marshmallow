@@ -28,14 +28,17 @@ import { getChangeableStatuses, canChangeStatus } from "@/lib/constants";
 import { useDuplicatePhoneCheck } from "@/hooks/useDuplicatePhoneCheck";
 import { formatUSPhone, hasContactNumber } from "@/lib/phone";
 import { logActivity } from "@/lib/activity";
-import { dispatchLeadStatusNotification } from "@/lib/lead-notifications";
 import { showsUrgentCheck } from "@/lib/urgent-verification";
 import { optimizeImageForUpload } from "@/lib/image-upload";
 import { requestQuoteApproval } from "@/lib/quote-approval-requests";
+import QuoteBreakdownFields from "./QuoteBreakdownFields";
+import { termsAllowMaterials, termsRecordAmount, validateDiagnosticFee, validateLaborPercent, validateQuoteBreakdown, type QuoteTerms } from "@/lib/quote-breakdown";
+import TechnicianShareFields from "./TechnicianShareFields";
 import { motion, AnimatePresence } from "framer-motion";
 import NumberNameCombobox from "./NumberNameCombobox";
 import MultiDateTimePicker from "./MultiDateTimePicker";
 import { geocodeAndPersistLeadAddress } from "@/lib/lead-address-geocoding";
+import { DateInput } from "@/components/ui/date-input";
 
 interface Props {
   open: boolean;
@@ -82,11 +85,17 @@ const initialFormState = {
   reference_name: "",
   tech_name: "",
   tech_number: "",
-  terms: "" as "" | "free_estimate" | "quoted",
+  terms: "" as "" | QuoteTerms,
   labor_amount: "",
   material_amount: "",
+  materials_included: false,
   for_you_amount: "",
   for_us_amount: "",
+  diagnostic_fee_amount: "",
+  for_you_labor_percent: "",
+  for_us_labor_percent: "",
+  for_you_diagnostic_amount: "",
+  for_us_diagnostic_amount: "",
   cs_notes: "",
   processor_notes: "",
   general_notes: "",
@@ -248,6 +257,12 @@ const AddLeadDialog = ({ open, onOpenChange, onSuccess, initialData, onUrgentChe
       return;
     }
 
+    const quoteError = validateQuoteBreakdown({ terms: form.terms, laborAmount: form.labor_amount, materialAmount: form.material_amount, includesMaterials: form.materials_included });
+    if (quoteError) { toast.error(quoteError); return; }
+    const feeError = validateDiagnosticFee(form.diagnostic_fee_amount)
+      || validateLaborPercent(form.for_you_labor_percent) || validateLaborPercent(form.for_us_labor_percent)
+      || validateDiagnosticFee(form.for_you_diagnostic_amount) || validateDiagnosticFee(form.for_us_diagnostic_amount);
+    if (feeError) { toast.error(feeError); return; }
     setLoading(true);
 
     const jobId = generateJobId();
@@ -304,10 +319,15 @@ const AddLeadDialog = ({ open, onOpenChange, onSuccess, initialData, onUrgentChe
       tech_name: form.tech_name || null,
       tech_number: form.tech_number || null,
       terms: form.terms || null,
-      labor_amount: form.labor_amount ? parseFloat(form.labor_amount) : null,
-      material_amount: form.material_amount ? parseFloat(form.material_amount) : null,
+      labor_amount: termsRecordAmount(form.terms) && form.labor_amount ? parseFloat(form.labor_amount) : null,
+      material_amount: termsAllowMaterials(form.terms) && form.materials_included && form.material_amount ? parseFloat(form.material_amount) : null,
       for_you_amount: form.for_you_amount ? parseFloat(form.for_you_amount) : null,
       for_us_amount: form.for_us_amount ? parseFloat(form.for_us_amount) : null,
+      diagnostic_fee_amount: form.diagnostic_fee_amount ? parseFloat(form.diagnostic_fee_amount) : null,
+      for_you_labor_percent: form.for_you_labor_percent ? parseFloat(form.for_you_labor_percent) : null,
+      for_us_labor_percent: form.for_us_labor_percent ? parseFloat(form.for_us_labor_percent) : null,
+      for_you_diagnostic_amount: form.for_you_diagnostic_amount ? parseFloat(form.for_you_diagnostic_amount) : null,
+      for_us_diagnostic_amount: form.for_us_diagnostic_amount ? parseFloat(form.for_us_diagnostic_amount) : null,
     };
 
     const { data, error } = await supabase.from("leads").insert(insertData).select().single();
@@ -399,12 +419,7 @@ const AddLeadDialog = ({ open, onOpenChange, onSuccess, initialData, onUrgentChe
         await supabase.from("lead_notes").insert(noteInserts);
       }
 
-      await dispatchLeadStatusNotification({
-        leadId: data.id,
-        leadName: form.customer_name,
-        status: createdStatus,
-        isNewLead: true,
-      });
+      // Status alerts are sent by the database (leads_notify_change).
       await logActivity(user.id, "created", "lead", data.id, {
         customer_name: form.customer_name,
         status: createdStatus,
@@ -426,7 +441,7 @@ const AddLeadDialog = ({ open, onOpenChange, onSuccess, initialData, onUrgentChe
     <div className="space-y-1.5">
       <Label className={labelClass}>{label}</Label>
       <div className="flex items-center gap-1.5">
-        <Select value={form[`${prefix}_hour` as keyof typeof form]} onValueChange={(v) => update(`${prefix}_hour`, v)}>
+        <Select value={form[`${prefix}_hour`]} onValueChange={(v) => update(`${prefix}_hour`, v)}>
           <SelectTrigger className="h-10 w-[66px] rounded-xl border-border/60 bg-background shadow-sm">
             <SelectValue />
           </SelectTrigger>
@@ -442,7 +457,7 @@ const AddLeadDialog = ({ open, onOpenChange, onSuccess, initialData, onUrgentChe
         <span className="text-muted-foreground/50">:</span>
 
         <Select
-          value={form[`${prefix}_minute` as keyof typeof form]}
+          value={form[`${prefix}_minute`]}
           onValueChange={(v) => update(`${prefix}_minute`, v)}
         >
           <SelectTrigger className="h-10 w-[66px] rounded-xl border-border/60 bg-background shadow-sm">
@@ -457,7 +472,7 @@ const AddLeadDialog = ({ open, onOpenChange, onSuccess, initialData, onUrgentChe
           </SelectContent>
         </Select>
 
-        <Select value={form[`${prefix}_ampm` as keyof typeof form]} onValueChange={(v) => update(`${prefix}_ampm`, v)}>
+        <Select value={form[`${prefix}_ampm`]} onValueChange={(v) => update(`${prefix}_ampm`, v)}>
           <SelectTrigger className="h-10 w-[70px] rounded-xl border-border/60 bg-background shadow-sm">
             <SelectValue />
           </SelectTrigger>
@@ -678,11 +693,11 @@ const AddLeadDialog = ({ open, onOpenChange, onSuccess, initialData, onUrgentChe
                   </div>
 
                   <div className="space-y-1.5">
-                    <Label className={labelClass}>Quote</Label>
+                    <Label className={labelClass}>Quote Notes</Label>
                     <Input
                       value={form.quote}
                       onChange={(e) => update("quote", e.target.value)}
-                      placeholder="Quote amount or details"
+                      placeholder="Additional quote details (optional)"
                       className={fieldClass}
                     />
                   </div>
@@ -732,7 +747,12 @@ const AddLeadDialog = ({ open, onOpenChange, onSuccess, initialData, onUrgentChe
             ),
           })}
 
-          {!isCS &&
+          <QuoteBreakdownFields value={{ terms: form.terms, laborAmount: form.labor_amount, materialAmount: form.material_amount, includesMaterials: form.materials_included }} onChange={(value) => {
+            setShouldResetOnClose(false);
+            setForm((previous) => ({ ...previous, terms: value.terms, labor_amount: value.laborAmount, material_amount: value.materialAmount, materials_included: value.includesMaterials }));
+          }} />
+
+          {!createsAsCs &&
             renderCollapsible({
               openState: processorOpen,
               setOpenState: setProcessorOpen,
@@ -764,21 +784,10 @@ const AddLeadDialog = ({ open, onOpenChange, onSuccess, initialData, onUrgentChe
                     </div>
                   </div>
 
-                  <div className="space-y-1.5">
-                    <Label className={labelClass}>Terms</Label>
-                    <Select value={form.terms} onValueChange={(v) => update("terms", v)}>
-                      <SelectTrigger className={fieldClass}>
-                        <SelectValue placeholder="Select terms..." />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="free_estimate">Free Estimate Visit</SelectItem>
-                        <SelectItem value="quoted">Quoted</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
 
+                  {/* For You / For Us apply to every term (2026-11-16), not only Quoted. */}
                   <AnimatePresence initial={false}>
-                    {form.terms === "quoted" && (
+                    {(
                       <motion.div
                         initial={{ opacity: 0, y: -6, height: 0 }}
                         animate={{ opacity: 1, y: 0, height: "auto" }}
@@ -788,57 +797,19 @@ const AddLeadDialog = ({ open, onOpenChange, onSuccess, initialData, onUrgentChe
                       >
                         <div className="rounded-2xl border border-border/50 bg-muted/[0.18] p-4">
                           <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-foreground/60">
-                            Quoted Details
+                            Internal Technician Share
                           </p>
 
-                          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                            <div className="space-y-1.5">
-                              <Label className={labelClass}>Customer Labor ($)</Label>
-                              <Input
-                                type="number"
-                                step="0.01"
-                                value={form.labor_amount}
-                                onChange={(e) => update("labor_amount", e.target.value)}
-                                placeholder="0.00"
-                                className={fieldClass}
-                              />
-                            </div>
-
-                            <div className="space-y-1.5">
-                              <Label className={labelClass}>Materials ($)</Label>
-                              <Input
-                                type="number"
-                                step="0.01"
-                                value={form.material_amount}
-                                onChange={(e) => update("material_amount", e.target.value)}
-                                placeholder="0.00"
-                                className={fieldClass}
-                              />
-                            </div>
-
-                            <div className="space-y-1.5">
-                              <Label className={labelClass}>For You ($ incl. material)</Label>
-                              <Input
-                                type="number"
-                                step="0.01"
-                                value={form.for_you_amount}
-                                onChange={(e) => update("for_you_amount", e.target.value)}
-                                placeholder="0.00"
-                                className={fieldClass}
-                              />
-                            </div>
-
-                            <div className="space-y-1.5">
-                              <Label className={labelClass}>For Us ($ from labor)</Label>
-                              <Input
-                                type="number"
-                                step="0.01"
-                                value={form.for_us_amount}
-                                onChange={(e) => update("for_us_amount", e.target.value)}
-                                placeholder="0.00"
-                                className={fieldClass}
-                              />
-                            </div>
+                          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                            <TechnicianShareFields
+                              idPrefix="add-lead"
+                              terms={form.terms}
+                              materialsIncluded={form.materials_included}
+                              values={form}
+                              onChange={(field, value) => update(field, value)}
+                              labelClassName={labelClass}
+                              inputClassName={fieldClass}
+                            />
                           </div>
                         </div>
                       </motion.div>
@@ -890,10 +861,10 @@ const AddLeadDialog = ({ open, onOpenChange, onSuccess, initialData, onUrgentChe
 
                 <div className="space-y-1.5">
                   <Label className={labelClass}>Job Scheduled For</Label>
-                  <Input
-                    type="date"
+                  <DateInput
+                    aria-label="Job Scheduled For"
                     value={form.scheduled_date}
-                    onChange={(e) => update("scheduled_date", e.target.value)}
+                    onChange={(value) => update("scheduled_date", value)}
                     className={fieldClass}
                   />
                 </div>

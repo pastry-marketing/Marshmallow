@@ -1,5 +1,8 @@
+import { redactLeadForOperator, withOperatorLocation, isLocationOnlyOperator } from "@/lib/operator-privacy";
+import { fetchOperatorSafeLeads } from "@/lib/operator-safe-leads";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { selectWithAiTagColumn } from "@/lib/lead-optional-columns";
 import * as XLSX from "xlsx";
 import { useDeferredValue } from "react";
 import { useCallback } from "react";
@@ -10,6 +13,7 @@ import { extractCity, extractState } from "@/lib/address-utils";
 import { buildNearbyUrgentMap, isUrgentLead } from "@/lib/lead-proximity";
 import { preloadZipDataset } from "@/lib/zipCentroids";
 import { useAllowedStatuses } from "@/hooks/useAllowedStatuses";
+import { useVisiblePoll } from "@/hooks/useVisiblePoll";
 import { normalizePhoneE164 } from "@/lib/phone";
 import { openLeadFromClick } from "@/lib/lead-navigation";
 import { Button } from "@/components/ui/button";
@@ -27,13 +31,28 @@ import { Calendar } from "@/components/ui/calendar";
 import { type DateRange } from "react-day-picker";
 import { ScheduleDateFilter } from "@/components/leads/ScheduleDateFilter";
 import { doesLeadMatchScheduleDateRange, leadNeedsAttention } from "@/lib/schedule-date-filter";
-import { readLeadsCache, writeLeadsCache } from "@/lib/leadsCache";
+import { readLeadsCacheEntry, writeLeadsCache } from "@/lib/leadsCache";
+import { subscribeToLeadChanges, subscribeToTableChanges } from "@/lib/realtime";
+import { useRealtimeReconnect } from "@/lib/realtime-health";
+import { isBackgroundPollPaused, isServerLoadRaised } from "@/lib/overload-guard";
+import {
+  LEADS_DELTA_LIMIT,
+  deltaSince,
+  getLastFullLoad,
+  laterCursor,
+  leadsCursor,
+  markFullLoad,
+  markVisibilityCheck,
+  needsVisibilityCheck,
+  removeHiddenLeads,
+  mergeLeadChanges,
+  needsFullReconcile,
+} from "@/lib/leads-sync";
 import { LEADS_INDEX_COLUMNS } from "@/lib/leads-index-columns";
 import { Plus, Search, Download, Share2, X, SlidersHorizontal, BarChart3, Puzzle, FileText, Calendar as CalendarIcon, LayoutGrid, List, MapPin, Copy, RefreshCw } from "lucide-react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { useNotepad } from "@/contexts/NotepadContext";
 import LeadCard from "@/components/leads/LeadCard";
-import OprLeadCard from "@/components/leads/OprLeadCard";
 import LeadTable from "@/components/leads/LeadTable";
 import type { LeadCancellationRequest } from "@/types";
 import AddLeadDialog from "@/components/leads/AddLeadDialog";
@@ -51,6 +70,8 @@ import { heroTitle, premiumEase, cardGridContainer, cardGridItem } from "@/lib/m
 import { formatDistanceToNow } from "date-fns";
 import { urgentAiStatusClass } from "@/lib/urgent-ai-status";
 
+import { formatDateTime } from "@/lib/date-time-format";
+import { formatClockTime } from "@/lib/time-value";
 const PAGE_SIZES = [20, 40, 60, 100];
 
 interface ProfileRow {
@@ -77,17 +98,20 @@ interface LeadNoteExportRow {
 // list payload small instead of pulling that blob for every lead.
 // NOTE: if a new leads column needs to appear on the card/list, add it here.
 const LEAD_LIST_COLUMNS =
-  "address, amount, assigned_cs, booked_at, cancellation_reason, city, coverage_area_label, coverage_level, coverage_tech_count, created_at, created_by, created_by_name, cs_notes, cs_tag, customer_email, customer_landline, customer_name, customer_phone, customer_schedule_requirements, direction, expected_completion_date, for_us_amount, for_you_amount, general_notes, half_address, id, job_id, labor_amount, last_edited_at, last_edited_by, last_edited_by_name, latitude, longitude, material_amount, number_name, payment_amount, payment_screenshot_url, processor_notes, quote, quote_requested_by, reference_name, scheduled_date, scheduled_time_end, scheduled_time_start, service_details, service_type, show_quote_to_opr, source_url, state, status, tech_name, tech_number, terms, updated_at, urgent_at, zip_code";
+  "address, amount, assigned_cs, booked_at, cancellation_reason, city, coverage_area_label, coverage_level, coverage_tech_count, created_at, created_by, created_by_name, cs_notes, cs_tag, customer_email, customer_landline, customer_name, customer_phone, customer_schedule_requirements, diagnostic_fee_amount, direction, expected_completion_date, for_us_amount, for_us_diagnostic_amount, for_us_labor_percent, for_you_amount, for_you_diagnostic_amount, for_you_labor_percent, general_notes, half_address, id, job_id, labor_amount, last_edited_at, last_edited_by, last_edited_by_name, latitude, longitude, material_amount, number_name, payment_amount, payment_screenshot_url, processor_notes, quote, quote_requested_by, reference_name, scheduled_date, scheduled_time_end, scheduled_time_start, service_details, service_type, show_quote_to_opr, source_url, state, status, tech_name, tech_number, terms, updated_at, urgent_at, zip_code";
 
 // Only the few columns the Urgent-leads overview table shows (plus zip/city for
 // the "Urgent in area" proximity count) — kept tiny so its frequent live refresh
 // stays a featherweight, filtered (status=urgent_job) indexed read.
-const URGENT_TABLE_COLUMNS = "id, customer_name, customer_phone, service_type, city, state, address, zip_code, urgent_at, created_at, customer_schedule_requirements, terms";
-// How often to refresh the urgent overview while the page is visible. Small,
-// because it only reads the tiny urgent subset, not the whole leads table.
-const URGENT_TABLE_POLL_MS = 5000;
+const URGENT_TABLE_COLUMNS = "id, job_id, customer_name, customer_phone, service_type, city, state, address, zip_code, urgent_at, created_at, customer_schedule_requirements, terms";
+// How often to refresh the urgent overview (and its "needs CX reply" check)
+// while the page is visible. New urgent leads still land instantly through the
+// leads realtime channel; this poll catches leads leaving urgent, AI status and
+// customer replies. 15s (was 5s) cuts this page's steady database load by about
+// two thirds on the shared Micro instance.
+const URGENT_TABLE_POLL_MS = 15000;
 
-type UrgentRow = Pick<Lead, "id" | "customer_name" | "customer_phone" | "service_type" | "city" | "state" | "address" | "zip_code" | "urgent_at" | "created_at" | "customer_schedule_requirements" | "terms"> & { lead_ai_statuses?: { status: string; checked_at?: string } | null };
+type UrgentRow = Pick<Lead, "id" | "job_id" | "customer_name" | "customer_phone" | "service_type" | "city" | "state" | "address" | "zip_code" | "urgent_at" | "created_at" | "customer_schedule_requirements" | "terms" | "location_label"> & { lead_ai_statuses?: { status: string; checked_at?: string } | null };
 
 function CopyableCell({ text, title, className, defaultWidth = true, emptyClassName = "text-muted-foreground", align = "left", truncate = true }: { text: string; title?: string; className?: string; defaultWidth?: boolean; emptyClassName?: string; align?: "left" | "right"; truncate?: boolean }) {
   if (!text || text === "—") return <td className={`px-2 py-2 ${className || ""}`}><span className={emptyClassName}>—</span></td>;
@@ -249,7 +273,9 @@ export default function LeadsPage() {
   const safeStatusFilter =
     rawStatusFilter === "all" ||
     allowedStatuses.has(rawStatusFilter) ||
-    (isOperatorRole(role) && leads.some((l) => Boolean(l.cs_tag) && l.status === rawStatusFilter))
+    // opr_admin only: a tagged lead they own can still move the status filter.
+    // A plain opr's query never returns a tagged lead at all (hold rule, 2026-11-13).
+    (role === "opr_admin" && leads.some((l) => Boolean(l.cs_tag) && l.status === rawStatusFilter))
       ? rawStatusFilter
       : "all";
 
@@ -291,12 +317,38 @@ export default function LeadsPage() {
   // Guards against stale/overlapping loads: each call bumps this, and a load
   // abandons its remaining work if a newer load has started since.
   const leadsLoadGenRef = useRef(0);
+  // Newest updated_at in the list: the "changed since" point for delta reads.
+  const leadsCursorRef = useRef<string | null>(null);
 
   const fetchLeads = useCallback(async (isBackground = false) => {
     if (!user || !role) return;
 
     const gen = ++leadsLoadGenRef.current;
+    const startedAt = Date.now();
     if (!isBackground) setLoading(true);
+
+    // A plain Operator cannot read `leads` directly (RESTRICTIVE policy, see
+    // migration 20261216000000) — the server-side safe projection already
+    // returns their complete, small visible set in one call, so the paged
+    // index read below does not apply to this role.
+    if (isLocationOnlyOperator(role)) {
+      try {
+        const full = await fetchOperatorSafeLeads();
+        if (gen !== leadsLoadGenRef.current) return;
+        setLeads(full);
+        if (!isBackground) setLoading(false);
+        leadsCursorRef.current = leadsCursor(full);
+        markFullLoad(`${role}:${user.id}`, startedAt);
+        markVisibilityCheck(`${role}:${user.id}`, startedAt);
+        void writeLeadsCache(`${role}:${user.id}`, full, startedAt);
+      } catch (err) {
+        if (gen !== leadsLoadGenRef.current) return;
+        toast.error(err instanceof Error ? err.message : "Failed to load leads");
+        setLeads([]);
+        if (!isBackground) setLoading(false);
+      }
+      return;
+    }
 
     // Page through the WHOLE table — PostgREST caps a single response at 1000
     // rows, so we keep fetching pages until one comes back short. Every lead is
@@ -329,8 +381,12 @@ export default function LeadsPage() {
       const full = Array.from(acc.values());
       setLeads(full);
       if (!isBackground) setLoading(false);
+      // The list was replaced wholesale, so its cursor is exactly this set's.
+      leadsCursorRef.current = leadsCursor(full);
+      markFullLoad(`${role}:${user.id}`, startedAt);
+      markVisibilityCheck(`${role}:${user.id}`, startedAt);
       // Persist the complete set so the next visit paints instantly from cache.
-      void writeLeadsCache(`${role}:${user.id}`, full);
+      void writeLeadsCache(`${role}:${user.id}`, full, startedAt);
     } catch (err) {
       if (gen !== leadsLoadGenRef.current) return;
       toast.error(err instanceof Error ? err.message : "Failed to load leads");
@@ -338,6 +394,89 @@ export default function LeadsPage() {
       if (!isBackground) setLoading(false);
     }
   }, [role, user]);
+
+  /**
+   * Bring the list up to date by reading only the leads that changed since the
+   * cursor (~2 ms) instead of every lead (6 × 1,000-row pages). Falls back to a
+   * complete load when there is no cursor yet, when the last complete load is
+   * older than LEADS_FULL_RECONCILE_MS, or when too much changed at once.
+   * See src/lib/leads-sync.ts.
+   */
+  const fetchLeadChanges = useCallback(async () => {
+    if (!user || !role) return;
+    // The Operator-safe set is small and already complete each call; no delta
+    // cursor is worth maintaining for it.
+    if (isLocationOnlyOperator(role)) {
+      await fetchLeads(true);
+      return;
+    }
+    const cursor = leadsCursorRef.current;
+    if (!cursor || needsFullReconcile(getLastFullLoad(`${role}:${user.id}`), Date.now(), isServerLoadRaised())) {
+      await fetchLeads(true);
+      return;
+    }
+
+    // A complete load started after this one supersedes it (it does not bump the
+    // generation itself, so overlapping deltas are harmless merges).
+    const gen = leadsLoadGenRef.current;
+    let query = supabase
+      .from("leads")
+      .select(LEADS_INDEX_COLUMNS)
+      .gt("updated_at", deltaSince(cursor))
+      .order("updated_at", { ascending: true })
+      .order("id", { ascending: true })
+      .limit(LEADS_DELTA_LIMIT);
+    // CS can see only own created leads, exactly as in the complete load.
+    if (role === "customer_service") {
+      query = query.eq("created_by", user.id);
+    }
+    const { data, error } = await query;
+    if (gen !== leadsLoadGenRef.current) return;
+    if (error) {
+      // Keep the list the user is looking at; the next refresh retries.
+      console.warn("Lead changes could not be loaded", error.message);
+      return;
+    }
+    const rows = (data ?? []) as unknown as Lead[];
+    if (rows.length >= LEADS_DELTA_LIMIT) {
+      await fetchLeads(true);
+      return;
+    }
+    leadsCursorRef.current = laterCursor(leadsCursorRef.current, leadsCursor(rows));
+    if (rows.length > 0) setLeads((prev) => mergeLeadChanges(prev, rows));
+
+    // A lead that left this user's view (e.g. marked Paid for a CS Admin) is not
+    // in a delta and realtime does not deliver it. Every few minutes read just
+    // the ids the user can still see (no customer data) and drop the rest.
+    const scope = `${role}:${user.id}`;
+    if (!needsVisibilityCheck(scope) || isServerLoadRaised()) return;
+    const checkStartedAt = Date.now();
+    markVisibilityCheck(scope, checkStartedAt); // one check at a time, even if this one fails
+    const PAGE = 1000;
+    const visible = new Set<string>();
+    for (let page = 0; ; page++) {
+      let idQuery = supabase
+        .from("leads")
+        .select("id")
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: false })
+        .range(page * PAGE, page * PAGE + PAGE - 1);
+      if (role === "customer_service") {
+        idQuery = idQuery.eq("created_by", user.id);
+      }
+      const { data: idRows, error: idError } = await idQuery;
+      if (gen !== leadsLoadGenRef.current) return;
+      if (idError) {
+        // Never remove anything on a partial answer; the next check retries.
+        console.warn("Lead visibility check failed", idError.message);
+        return;
+      }
+      const batch = (idRows ?? []) as { id: string }[];
+      for (const r of batch) if (r?.id) visible.add(r.id);
+      if (batch.length < PAGE) break;
+    }
+    setLeads((prev) => removeHiddenLeads(prev, visible, checkStartedAt));
+  }, [fetchLeads, role, user]);
 
   const fetchSharedLeads = useCallback(async () => {
     if (!user || role !== "customer_service") return;
@@ -360,11 +499,11 @@ export default function LeadsPage() {
 
     const leadIds = (shares as LeadShareRow[]).map((share) => share.lead_id);
 
-    const { data: leadsData, error: leadsError } = await supabase
+    const { data: leadsData, error: leadsError } = await selectWithAiTagColumn(LEAD_LIST_COLUMNS, (columns) => supabase
       .from("leads")
-      .select(LEAD_LIST_COLUMNS)
+      .select(columns)
       .in("id", leadIds)
-      .order("created_at", { ascending: false });
+      .order("created_at", { ascending: false }));
 
     if (leadsError) {
       toast.error(leadsError.message);
@@ -384,13 +523,19 @@ export default function LeadsPage() {
     // first load (empty cache) shows the loading state. The cache always holds
     // the whole list, so counts from it are complete — never capped.
     void (async () => {
-      const cached = await readLeadsCache(`${role}:${user.id}`);
+      const scope = `${role}:${user.id}`;
+      const cached = await readLeadsCacheEntry(scope);
       if (cancelled) return;
-      if (cached && cached.length > 0) {
-        setLeads(cached);
+      if (cached && cached.leads.length > 0) {
+        setLeads(cached.leads);
         setLoading(false);
-        void fetchLeads(true); // refresh quietly in the background
+        // Continue from the cached set: only what changed since it was saved is
+        // read, unless it is too old (or predates the cursor), which reloads all.
+        leadsCursorRef.current = leadsCursor(cached.leads);
+        markFullLoad(scope, cached.savedAt);
+        void fetchLeadChanges();
       } else {
+        leadsCursorRef.current = null;
         void fetchLeads(false); // first load — show the loading state
       }
     })();
@@ -406,26 +551,32 @@ export default function LeadsPage() {
     return () => {
       cancelled = true;
     };
-  }, [fetchLeads, fetchProfiles, fetchSharedLeads, role, user]);
+  }, [fetchLeadChanges, fetchLeads, fetchProfiles, fetchSharedLeads, role, user]);
 
   // Safety-net polling. The realtime subscription above already merges every
-  // INSERT/UPDATE/DELETE surgically, so a full refetch is only a fallback for
-  // missed events (e.g. RLS-blocked realtime). Instead of re-downloading every
-  // lead every 15s in every open tab — including hidden ones — poll only while
-  // the tab is visible, and far less often, plus refresh once when the user
-  // returns to the tab so it's immediately up to date.
+  // INSERT/UPDATE/DELETE surgically, so this is only a fallback for missed
+  // events (e.g. RLS-blocked realtime). It reads just the leads changed since
+  // the last read (fetchLeadChanges), only while the tab is visible, plus once
+  // when the user returns to the tab so it's immediately up to date.
   useEffect(() => {
     if (!user || !role) return;
 
     const refresh = () => {
       if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
-      void fetchLeads(true);
+      void fetchLeadChanges();
       if (role === "customer_service") {
         void fetchSharedLeads();
       }
     };
 
-    const intervalId = setInterval(refresh, 60000);
+    // Timer turns skip while the server is overloaded; returning to the tab still refreshes.
+    // A plain Operator has no realtime channel at all (see the subscription
+    // effect above), so this is their only refresh path and runs much more
+    // often — their visible set is tiny (untagged urgent leads only).
+    const intervalId = setInterval(
+      () => { if (!isBackgroundPollPaused()) refresh(); },
+      isLocationOnlyOperator(role) ? 15000 : 60000,
+    );
     const onVisibility = () => {
       if (document.visibilityState === "visible") refresh();
     };
@@ -435,10 +586,14 @@ export default function LeadsPage() {
       clearInterval(intervalId);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [fetchLeads, fetchSharedLeads, user, role]);
+  }, [fetchLeadChanges, fetchSharedLeads, user, role]);
 
 
 
+
+  // Realtime recovered after a failure: events may have been missed, including
+  // leads that left this user's view, so re-read the complete list once.
+  useRealtimeReconnect(() => { void fetchLeads(true); }, Boolean(user && role));
 
   // Bridge so a realtime urgent change refreshes the overview table instantly.
   // A ref keeps the channel subscription stable (no re-subscribe on identity change).
@@ -447,16 +602,13 @@ export default function LeadsPage() {
   // Realtime subscription for leads table updates & Activate Customer chime
   useEffect(() => {
     if (!user || !role) return;
+    // A plain Operator's RESTRICTIVE policy on `leads` also blocks realtime's
+    // RLS check, so this channel would never deliver anything for them —
+    // polling (fetchLeadChanges, below) is their refresh path instead.
+    if (isLocationOnlyOperator(role)) return;
 
-    const channel = supabase
-      .channel("leads-realtime-page")
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "leads",
-        },
+    // Shared per-tab leads channel (src/lib/realtime.ts): same events, instantly.
+    const unsubscribe = subscribeToLeadChanges(
         (payload) => {
           const newRow = payload.new as Lead | undefined;
           const oldRow = payload.old as Lead | undefined;
@@ -505,30 +657,20 @@ export default function LeadsPage() {
               refreshUrgentRef.current?.();
             }
         }
-      )
-      .subscribe();
+      );
 
-    return () => {
-      void supabase.removeChannel(channel);
-    };
+    return unsubscribe;
   }, [role, user]);
 
   // Quote approval decisions do not always touch the lead row (a decline leaves
   // it untouched), so the badge listens to the request table itself.
   useEffect(() => {
     if (!user || !role) return;
-    const channel = supabase
-      .channel("leads-page-quote-approvals")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "lead_quote_approval_requests" },
-        () => setQuoteApprovalVersion((v) => v + 1),
-      )
-      .subscribe();
-
-    return () => {
-      void supabase.removeChannel(channel);
-    };
+    // Shared with the sidebar badge and the user's other tabs (one subscription per browser).
+    return subscribeToTableChanges(
+      "lead_quote_approval_requests",
+      () => setQuoteApprovalVersion((v) => v + 1),
+    );
   }, [role, user]);
 
   const visibleMyLeads = useMemo(() => filterLeads([...leads]), [leads, filterLeads]);
@@ -604,7 +746,7 @@ export default function LeadsPage() {
   const statusExportOptions = useMemo(
     () =>
       ALL_LEAD_STATUSES.filter(
-        (s) => allowedStatuses.has(s) || (isOperatorRole(role) && leads.some((l) => Boolean(l.cs_tag) && l.status === s)),
+        (s) => allowedStatuses.has(s) || (role === "opr_admin" && leads.some((l) => Boolean(l.cs_tag) && l.status === s)),
       ).map((s) => ({ value: s, label: STATUS_LABELS[s] })),
     [allowedStatuses, role, leads],
   );
@@ -638,12 +780,21 @@ export default function LeadsPage() {
   const [pageRowsLoading, setPageRowsLoading] = useState(false);
 
   const loadPagedLeadRows = useCallback(async (ids: string[]) => {
+    // The Operator-safe set already carries every column the card needs
+    // (fetchLeads/fetchLeadChanges above) — no second fetch, and no direct
+    // `leads` read, which this role's RESTRICTIVE policy would deny anyway.
+    if (isLocationOnlyOperator(role)) {
+      const map: Record<string, Lead> = {};
+      for (const lead of leads) if (ids.includes(lead.id)) map[lead.id] = lead;
+      setPageRows(map);
+      return;
+    }
     setPageRowsLoading(true);
     try {
-      const { data, error } = await supabase
+      const { data, error } = await selectWithAiTagColumn(withOperatorLocation(LEAD_LIST_COLUMNS, role), (columns) => supabase
         .from("leads")
-        .select(LEAD_LIST_COLUMNS)
-        .in("id", ids);
+        .select(columns)
+        .in("id", ids));
       if (error) throw error;
       const map: Record<string, Lead> = {};
       for (const row of (data ?? []) as unknown as Lead[]) {
@@ -656,7 +807,7 @@ export default function LeadsPage() {
     } finally {
       setPageRowsLoading(false);
     }
-  }, []);
+  }, [role, leads]);
 
   // Re-hydrate on page change, keeping the previous rows in state so pagination
   // never paints a half-loaded card.
@@ -854,9 +1005,35 @@ export default function LeadsPage() {
 
   const refreshUrgentTable = useCallback(async () => {
     if (!user || !role) return;
+
+    // A plain Operator cannot read `leads` directly, and their main list
+    // (fetchLeads/fetchLeadChanges above) is already exactly this urgent/
+    // untagged set via get_operator_safe_leads(), with every hidden column
+    // already null — reuse it instead of a second query. No AI-status badge
+    // (lead_ai_statuses) for this role; it is a display-only triage aid, not
+    // business-critical, and not worth a second round trip for.
+    if (isLocationOnlyOperator(role)) {
+      const next: UrgentRow[] = leads
+        .filter((l) => l.status === "urgent_job")
+        .sort((a, b) => (b.urgent_at ?? "").localeCompare(a.urgent_at ?? "") || (b.created_at ?? "").localeCompare(a.created_at ?? ""))
+        .map((l) => ({
+          id: l.id, job_id: l.job_id, customer_name: l.customer_name, customer_phone: l.customer_phone,
+          service_type: l.service_type, city: l.city, state: l.state, address: l.address, zip_code: l.zip_code,
+          urgent_at: l.urgent_at, created_at: l.created_at, customer_schedule_requirements: l.customer_schedule_requirements,
+          terms: l.terms, location_label: l.location_label,
+        }));
+      setUrgentTableLeads((prev) => {
+        if (prev.length === next.length && prev.every((p, i) => p.id === next[i].id && p.urgent_at === next[i].urgent_at && p.terms === next[i].terms)) {
+          return prev;
+        }
+        return next;
+      });
+      return;
+    }
+
     let q = supabase
       .from("leads")
-      .select(URGENT_TABLE_COLUMNS + ", lead_ai_statuses(status, checked_at)")
+      .select(withOperatorLocation(URGENT_TABLE_COLUMNS, role) + ", lead_ai_statuses(status, checked_at)")
       .eq("status", "urgent_job")
       .order("urgent_at", { ascending: false, nullsFirst: false })
       .order("created_at", { ascending: false })
@@ -864,6 +1041,8 @@ export default function LeadsPage() {
     if (role === "customer_service") q = q.eq("created_by", user.id);
     const { data, error } = await q;
     if (error) return; // keep the last good list on a transient error
+    // Raw rows: the customer number is still needed for the hidden reply check.
+    // Both urgent tables redact for Operators where they render.
     const next = (data ?? []) as unknown as UrgentRow[];
     setUrgentTableLeads((prev) => {
       // Keep the same array reference when nothing changed, so a quiet poll
@@ -876,7 +1055,7 @@ export default function LeadsPage() {
       }
       return next;
     });
-  }, [user, role]);
+  }, [user, role, leads]);
   refreshUrgentRef.current = refreshUrgentTable;
 
   // Most recent AI-status check across the urgent leads — shown as a freshness
@@ -892,23 +1071,7 @@ export default function LeadsPage() {
     return latest ? new Date(latest) : null;
   }, [urgentTableLeads]);
 
-  useEffect(() => {
-    if (!user || !role) return;
-    void refreshUrgentTable();
-    const tick = () => {
-      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
-      void refreshUrgentTable();
-    };
-    const id = setInterval(tick, URGENT_TABLE_POLL_MS);
-    const onVisible = () => {
-      if (document.visibilityState === "visible") void refreshUrgentTable();
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      clearInterval(id);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [user, role, refreshUrgentTable]);
+  useVisiblePoll(refreshUrgentTable, URGENT_TABLE_POLL_MS, { enabled: Boolean(user && role) });
 
   // "Urgent in area" counts, computed from the fresh urgent subset (all rows are
   // urgent, so tag them for the proximity helper). Recomputes once ZIP centroids
@@ -921,6 +1084,9 @@ export default function LeadsPage() {
 
   const [urgentNeedsCxReply, setUrgentNeedsCxReply] = useState<UrgentRow[]>([]);
 
+  // A plain Operator's rows always have customer_phone = null (see
+  // get_operator_safe_leads()), so the `continue` below naturally skips every
+  // one of them — this indicator is unavailable for that role, not broken.
     const checkCxReplies = useCallback(async () => {
     if (urgentTableLeads.length === 0) {
       setUrgentNeedsCxReply([]);
@@ -970,22 +1136,8 @@ export default function LeadsPage() {
     setUrgentNeedsCxReply(urgentTableLeads.filter(l => needsReplyIds.has(l.id)));
   }, [urgentTableLeads]);
 
-  useEffect(() => {
-    void checkCxReplies();
-    const tick = () => {
-      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
-      void checkCxReplies();
-    };
-    const id = setInterval(tick, 5000);
-    const onVisible = () => {
-      if (document.visibilityState === "visible") void checkCxReplies();
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      clearInterval(id);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [checkCxReplies]);
+  // Re-checked at once whenever the urgent list changes, then on the same cadence.
+  useVisiblePoll(checkCxReplies, URGENT_TABLE_POLL_MS);
 
 
   const hasActiveFilters = Boolean(search) || safeStatusFilter !== "all" || Boolean(scheduleDateRange?.from);
@@ -1009,10 +1161,10 @@ export default function LeadsPage() {
         const CHUNK = 500;
         for (let i = 0; i < baseLeads.length; i += CHUNK) {
           const chunkIds = baseLeads.slice(i, i + CHUNK).map((l) => l.id);
-          const { data, error } = await supabase
+          const { data, error } = await selectWithAiTagColumn(LEAD_LIST_COLUMNS, (columns) => supabase
             .from("leads")
-            .select(LEAD_LIST_COLUMNS)
-            .in("id", chunkIds);
+            .select(columns)
+            .in("id", chunkIds));
           if (error) throw error;
           for (const row of (data ?? []) as unknown as Lead[]) {
             if (row?.id) full.set(row.id, row);
@@ -1118,7 +1270,7 @@ export default function LeadsPage() {
           if (!noteSummaryByLead[note.lead_id]) {
             noteSummaryByLead[note.lead_id] = { general: "", cs: "", processor: "" };
           }
-          noteSummaryByLead[note.lead_id][key as keyof typeof noteSummaryByLead[string]] += `[${new Date(note.created_at || "").toLocaleString()}] ${note.user_name || "Unknown"}: ${note.content}\n\n`;
+          noteSummaryByLead[note.lead_id][key as keyof typeof noteSummaryByLead[string]] += `[${formatDateTime(note.created_at || "")}] ${note.user_name || "Unknown"}: ${note.content}\n\n`;
         });
 
         historyRows.forEach((log) => {
@@ -1141,7 +1293,7 @@ export default function LeadsPage() {
             actionText = "created the lead";
           }
           
-          historyByLead[log.target_id] += `[${new Date(log.created_at || "").toLocaleString()}] ${log.user_name || "Unknown"} ${actionText}\n`;
+          historyByLead[log.target_id] += `[${formatDateTime(log.created_at || "")}] ${log.user_name || "Unknown"} ${actionText}\n`;
         });
 
       const exportRows = leadIdsToExport.map((id) => {
@@ -1154,7 +1306,7 @@ export default function LeadsPage() {
           "Customer Phone": lead?.customer_phone,
             "Customer Landline": lead?.customer_landline || "",
             "Customer Address": lead?.address,
-            "Date Created": lead?.created_at ? new Date(lead.created_at).toLocaleString() : "",
+            "Date Created": lead?.created_at ? formatDateTime(lead.created_at) : "",
             "Direction": lead?.direction || "",
             "Number Name": lead?.number_name || "",
             "Source URL": lead?.source_url || "",
@@ -1163,21 +1315,26 @@ export default function LeadsPage() {
             "Labor Amount": lead?.labor_amount || "",
             "Material Amount": lead?.material_amount || "",
             "For You Amount": lead?.for_you_amount || "",
+            "Diagnostic Fee Amount": lead?.diagnostic_fee_amount ?? "",
+            "For You % of Labor": lead?.for_you_labor_percent ?? "",
+            "For Us % of Labor": lead?.for_us_labor_percent ?? "",
+            "For You $ from Diagnostic": lead?.for_you_diagnostic_amount ?? "",
+            "For Us $ from Diagnostic": lead?.for_us_diagnostic_amount ?? "",
             "For Us Amount": lead?.for_us_amount || "",
             "Scheduled Date": lead?.scheduled_date || "",
-            "Last Edited At": lead?.last_edited_at ? new Date(lead.last_edited_at).toLocaleString() : "",
+            "Last Edited At": lead?.last_edited_at ? formatDateTime(lead.last_edited_at) : "",
             "System ID": lead?.id || "",
             "Customer Email": lead?.customer_email || "",
             "City": lead?.city || "",
             "State": lead?.state || "",
             "Zip Code": lead?.zip_code || "",
             "Half Address": lead?.half_address || "",
-            "Scheduled Time Start": lead?.scheduled_time_start || "",
-            "Scheduled Time End": lead?.scheduled_time_end || "",
+            "Scheduled Time Start": formatClockTime(lead?.scheduled_time_start),
+            "Scheduled Time End": formatClockTime(lead?.scheduled_time_end),
             "Expected Completion Date": lead?.expected_completion_date || "",
-            "Booked At": lead?.booked_at ? new Date(lead.booked_at).toLocaleString() : "",
-            "Urgent At": lead?.urgent_at ? new Date(lead.urgent_at).toLocaleString() : "",
-            "Updated At": lead?.updated_at ? new Date(lead.updated_at).toLocaleString() : "",
+            "Booked At": lead?.booked_at ? formatDateTime(lead.booked_at) : "",
+            "Urgent At": lead?.urgent_at ? formatDateTime(lead.urgent_at) : "",
+            "Updated At": lead?.updated_at ? formatDateTime(lead.updated_at) : "",
             "Last Edited By": lead?.last_edited_by_name || lead?.editor_name || lead?.last_edited_by || "",
             "Assigned CS": lead?.assigned_cs || "",
             "Quote Requested By": lead?.quote_requested_by || "",
@@ -1193,7 +1350,7 @@ export default function LeadsPage() {
           Service: lead?.service_type || "",
           "Service Details": lead?.service_details || "",
           Quote: lead?.quote || "",
-          Terms: lead?.terms === "free_estimate" ? "Free Estimate" : lead?.terms === "quoted" ? "Quote" : "",
+          Terms: lead?.terms === "free_estimate" ? "Free Estimate" : lead?.terms === "quoted" ? "Quote" : lead?.terms === "diagnostic_service_call" ? "Diagnostic/Service Call" : "",
           "General Notes": noteSummaryByLead[id]?.general || "",
           "CS Notes": noteSummaryByLead[id]?.cs || "",
           "Processor Notes": noteSummaryByLead[id]?.processor || "",
@@ -1224,12 +1381,14 @@ export default function LeadsPage() {
     setSharedLeads((prev) => prev.filter((l) => l.id !== leadId));
   }, []);
 
+  // After a save, read just what changed: the edited or new lead appears at once,
+  // without a loading state or re-reading every lead.
   const handleRefresh = useCallback(async () => {
-    await fetchLeads();
+    await fetchLeadChanges();
     if (role === "customer_service") {
       await fetchSharedLeads();
     }
-  }, [fetchLeads, fetchSharedLeads, role]);
+  }, [fetchLeadChanges, fetchSharedLeads, role]);
 
   return (
     <div className="mx-auto max-w-[1600px] space-y-3">
@@ -1348,10 +1507,7 @@ export default function LeadsPage() {
               open={showAddDialog}
               onOpenChange={setShowAddDialog}
               onSuccess={() => {
-                fetchLeads();
-                if (role === "customer_service") {
-                  fetchSharedLeads();
-                }
+                void handleRefresh();
               }}
               onUrgentCheckCreated={setUrgentCheckFor}
             />
@@ -1361,10 +1517,7 @@ export default function LeadsPage() {
               onOpenChange={(next) => { if (!next) setUrgentCheckFor(null); }}
               leadId={urgentCheckFor?.leadId ?? ""}
             onProceed={() => {
-                fetchLeads();
-                if (role === "customer_service") {
-                  fetchSharedLeads();
-                }
+                void handleRefresh();
               }}
             />
 
@@ -1426,14 +1579,14 @@ export default function LeadsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {urgentNeedsCxReply.map((l) => (
+                    {urgentNeedsCxReply.map((row) => redactLeadForOperator(row, role)).map((l) => (
                       <tr
                         key={l.id}
                         onClick={(event) => openLeadFromClick(event, l.id, navigate)}
                         className="cursor-pointer border-t border-border/40 transition-colors hover:bg-muted/40"
                         title="Open lead"
                       >
-                        <CopyableCell text={l.customer_name || "—"} defaultWidth={false} className="font-medium text-foreground" />
+                        <CopyableCell text={l.customer_name || l.job_id || "—"} defaultWidth={false} className="font-medium text-foreground" />
                         <CopyableCell text={l.service_type || "—"} defaultWidth={false} className="text-muted-foreground" />
                         <CopyableCell text={l.address || "—"} defaultWidth={false} className="text-muted-foreground" />
                       </tr>
@@ -1461,7 +1614,7 @@ export default function LeadsPage() {
           </div>
           <div className="flex items-center gap-3">
             {aiStatusLastChecked && (
-              <span className="hidden text-[11px] text-muted-foreground sm:inline" title={aiStatusLastChecked.toLocaleString()}>
+              <span className="hidden text-[11px] text-muted-foreground sm:inline" title={formatDateTime(aiStatusLastChecked)}>
                 Updated {formatDistanceToNow(aiStatusLastChecked, { addSuffix: true })}
               </span>
             )}
@@ -1512,7 +1665,7 @@ export default function LeadsPage() {
                 </tr>
               </thead>
               <tbody>
-                {urgentTableLeads.map((l) => {
+                {urgentTableLeads.map((row) => redactLeadForOperator(row, role)).map((l) => {
                   const c = l.city || extractCity(l.address);
                   const s = l.state || extractState(l.address);
                   const areaText = [c, s].filter((x) => x && x !== "Unknown").join(", ") || "—";
@@ -1528,7 +1681,7 @@ export default function LeadsPage() {
                       className="cursor-pointer border-t border-border/40 transition-colors hover:bg-muted/40"
                       title="Open lead"
                     >
-                      <CopyableCell text={l.customer_name || "—"} defaultWidth={false} className="font-medium text-foreground" />
+                      <CopyableCell text={l.customer_name || l.job_id || "—"} defaultWidth={false} className="font-medium text-foreground" />
                       <CopyableCell text={l.service_type || "—"} defaultWidth={false} className="text-muted-foreground" />
                       <td className="px-2 py-2 text-[11px] font-medium whitespace-nowrap">
                         {l.lead_ai_statuses?.status ? (
@@ -1548,7 +1701,7 @@ export default function LeadsPage() {
                           truncate={false} 
                         />
                       <td className="whitespace-nowrap px-2 py-2 text-foreground">
-                        {l.terms === "free_estimate" ? "Free Estimate" : l.terms === "quoted" ? "Quoted" : <span className="text-muted-foreground">—</span>}
+                        {l.terms === "free_estimate" ? "Free Estimate" : l.terms === "quoted" ? "Quoted" : l.terms === "diagnostic_service_call" ? "Diagnostic/Service Call" : <span className="text-muted-foreground">—</span>}
                       </td>
                       <td className="whitespace-nowrap px-2 py-2 text-right text-muted-foreground">
                         {dateStr}
@@ -1655,7 +1808,7 @@ export default function LeadsPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Statuses</SelectItem>
-                {ALL_LEAD_STATUSES.filter((s) => allowedStatuses.has(s) || (isOperatorRole(role) && leads.some((l) => Boolean(l.cs_tag) && l.status === s))).map((s) => (
+                {ALL_LEAD_STATUSES.filter((s) => allowedStatuses.has(s) || (role === "opr_admin" && leads.some((l) => Boolean(l.cs_tag) && l.status === s))).map((s) => (
                   <SelectItem key={s} value={s}>
                     <span className="flex items-center gap-2">
                       <span className={`h-1.5 w-1.5 rounded-full ${STATUS_DOT_COLORS[s]}`} />
@@ -1726,7 +1879,10 @@ export default function LeadsPage() {
         </div>
       </motion.div>
 
-      {loading || (paged.length > 0 && !pageRowsReady) ? (
+      {/* Wait for the card metadata batch before mounting cards; undefined props
+          start each card's individual fallback reads. A failed batch explicitly
+          enables that fallback. Table view does not consume card metadata. */}
+      {loading || (paged.length > 0 && (!pageRowsReady || (viewMode === "grid" && !pagedMetadataReady))) ? (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {[1, 2, 3, 4, 5, 6].map((i) => (
             <div key={i} className="h-56 rounded-xl skeleton-shimmer border border-border/30" />

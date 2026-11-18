@@ -2,11 +2,13 @@ import { useEffect, useState } from "react";
 import { Bell, Check, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import type { Lead } from "@/types";
 import { copyTextToClipboard } from "@/lib/lead-copy";
-import { DEFAULT_MESSAGE_TEMPLATES, renderLeadTemplate, useMessageTemplate } from "@/lib/message-templates";
+import { DEFAULT_MESSAGE_TEMPLATES, renderLeadTemplate } from "@/lib/message-templates";
 import { cn } from "@/lib/utils";
 
 interface ReminderButtonProps {
@@ -17,16 +19,17 @@ interface ReminderButtonProps {
 export default function ReminderButton({ lead, className }: ReminderButtonProps) {
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState("");
+  // Typed by hand each time, like the technician message's Customer #.
+  const [customerNumber, setCustomerNumber] = useState("");
   const [copied, setCopied] = useState(false);
-  const { data: template = DEFAULT_MESSAGE_TEMPLATES.technician_reminder } =
-    useMessageTemplate("technician_reminder");
+  const template = DEFAULT_MESSAGE_TEMPLATES.technician_reminder;
 
   useEffect(() => {
     if (open) {
-      setMessage(renderLeadTemplate(template, lead));
+      setMessage(renderLeadTemplate(template, lead, { customer_number: customerNumber }));
       setCopied(false);
     }
-  }, [lead, open, template]);
+  }, [lead, open, template, customerNumber]);
 
   const handleCopy = async () => {
     await copyTextToClipboard(message);
@@ -53,7 +56,21 @@ export default function ReminderButton({ lead, className }: ReminderButtonProps)
           <DialogHeader>
             <DialogTitle>Reminder message</DialogTitle>
           </DialogHeader>
-          <Textarea value={message} onChange={(event) => setMessage(event.target.value)} rows={10} />
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="reminder-customer-number" className="text-[11px] font-medium text-muted-foreground/60">Customer # (manual)</Label>
+              <Input
+                id="reminder-customer-number"
+                value={customerNumber}
+                onChange={(event) => setCustomerNumber(event.target.value)}
+                placeholder="Enter customer number..."
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="reminder-preview" className="text-[11px] font-medium text-muted-foreground/60">Preview message</Label>
+              <Textarea id="reminder-preview" value={message} onChange={(event) => setMessage(event.target.value)} rows={10} />
+            </div>
+          </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setOpen(false)}>
               Close

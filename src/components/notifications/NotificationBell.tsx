@@ -8,18 +8,25 @@ import { useNavigate } from 'react-router-dom';
 import { formatDistanceToNow } from 'date-fns';
 import { toast } from 'sonner';
 import { playAssignmentSound } from '@/lib/notification-sound';
-import { isOperatorRole } from '@/lib/access';
+import { isOperatorRole, canAccessNotifications } from '@/lib/access';
 import { useHoldInbox } from '@/hooks/useOperatorWorkflow';
-import { acknowledgeHoldAlert, acknowledgeHoldInbox, HOLD_REASON_LABELS, type HoldAlert } from '@/lib/operator-workflow';
+import { HOLD_REASON_LABELS } from '@/lib/operator-workflow';
+import { useHoldAlertActions } from '@/hooks/useHoldAlertActions';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import HoldJobCard from './HoldJobCard';
-import { subscribeToNotifications } from '@/lib/realtime';
-import { useCoalescedRefresh } from '@/hooks/useCoalescedRefresh';
+import { subscribeToNotifications, realtimeBus } from '@/lib/realtime';
+import { useSharedRefresh } from '@/hooks/useCrossTab';
 import { cxNotificationHref } from '@/lib/cx-update-requests';
+import { openInboxNotification } from '@/lib/workflow-inbox';
+import { useQueryClient } from '@tanstack/react-query';
+import { notificationUnreadKey } from '@/hooks/useNotificationInbox';
+import { activeNotificationSince } from '@/lib/notification-window';
+import { useRealtimeAwareInterval, useRealtimeReconnect } from '@/lib/realtime-health';
 
 const NOTIFICATION_POLL_INTERVAL_MS = 15 * 1000;
 const MAX_REMEMBERED_CANCELLATION_POPUPS = 200;
 const NOTIFICATION_LIMIT = 20;
+const EMPTY_NOTIFICATIONS: Notification[] = [];
 
 const popupStorageKey = (kind: string, userId: string) => `shown-${kind}-popups:${userId}`;
 
@@ -43,6 +50,11 @@ const saveShownPopupIds = (kind: string, userId: string, ids: Set<string>) => {
 
 const isCancellationRequestNotification = (notification: Notification) =>
   notification.title.toLowerCase().includes('cancellation request');
+
+interface BellRead {
+  rows: Notification[] | null;
+  count: number | null;
+}
 
 interface Notification {
   id: string;
@@ -78,18 +90,26 @@ const hasOperatorLeadAssignment = async (userId: string, leadId: string | null |
 
 export default function NotificationBell() {
   const { user, role } = useAuth();
+  const scope = `${user?.id}:${role}`;
+  const currentScope = useRef(scope);
+  currentScope.current = scope;
   const navigate = useNavigate();
-  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const queryClient = useQueryClient();
+  const [notificationState, setNotificationState] = useState<{ scope: string; rows: Notification[] }>({ scope, rows: [] });
+  const notifications = notificationState.scope === scope ? notificationState.rows : EMPTY_NOTIFICATIONS;
   // Counted separately from the displayed page: the list is capped at NOTIFICATION_LIMIT rows
   // regardless of read state, so counting unread within it hid older unread notifications.
   const [regularUnreadCount, setUnreadCount] = useState(0);
+  const [countScope, setCountScope] = useState(scope);
   const holdInbox = useHoldInbox();
   const refetchHoldInbox = holdInbox.refetch;
   const holdAlerts = isOperatorRole(role) ? holdInbox.data?.alerts ?? [] : [];
-  const unreadCount = regularUnreadCount + (isOperatorRole(role) ? holdInbox.data?.unread_count ?? 0 : 0);
+  const unreadCount = (countScope === scope ? regularUnreadCount : 0) + (isOperatorRole(role) ? holdInbox.data?.unread_count ?? 0 : 0);
   const [selectedHoldId, setSelectedHoldId] = useState<string | null>(null);
   const selectedHold = holdAlerts.find((alert) => alert.id === selectedHoldId);
-  const [acknowledgingHold, setAcknowledgingHold] = useState(false);
+  const holdActions = useHoldAlertActions();
+  const [markingAllRead, setMarkingAllRead] = useState(false);
+  const markAllLock = useRef(false);
   const [open, setOpen] = useState(false);
   const shownCancellationPopups = useRef(new Set<string>());
 
@@ -111,17 +131,19 @@ export default function NotificationBell() {
       : query.is('lead_id', null);
   };
 
-  const loadNotifications = useCallback(async (isCurrent: () => boolean) => {
-    if (!user) return;
-
+  // One tab per browser reads (and polls); other tabs receive the same page and count.
+  const readNotifications = useCallback(async (): Promise<BellRead> => {
+    if (!user) return { rows: [], count: null };
+    // Bell and badge show the last 3 days (never before the account existed).
+    const since = activeNotificationSince(user.created_at);
     const assignedLeadIdList = await operatorLeadScope();
-    if (!isCurrent()) return;
 
     const listQuery = applyOperatorScope(
       supabase
         .from('notifications')
         .select('id, title, message, lead_id, read, created_at')
         .eq('user_id', user.id)
+        .gte('created_at', since)
         .order('created_at', { ascending: false })
         .limit(NOTIFICATION_LIMIT),
       assignedLeadIdList,
@@ -133,17 +155,30 @@ export default function NotificationBell() {
         .from('notifications')
         .select('id', { count: 'exact', head: true })
         .eq('user_id', user.id)
-        .eq('read', false),
+        .eq('read', false)
+        .gte('created_at', since),
       assignedLeadIdList,
     );
 
     const [listResult, countResult] = await Promise.all([listQuery, countQuery]);
-    if (!isCurrent()) return;
-
-    if (listResult.data) setNotifications(listResult.data as Notification[]);
-    if (typeof countResult.count === 'number') setUnreadCount(countResult.count);
+    return {
+      rows: listResult.data ? (listResult.data as Notification[]) : null,
+      count: typeof countResult.count === 'number' ? countResult.count : null,
+    };
   }, [operatorLeadScope, user]);
-  const fetchNotifications = useCoalescedRefresh(loadNotifications);
+
+  const applyNotifications = useCallback(({ rows, count }: BellRead) => {
+    if (rows) setNotificationState({ scope, rows });
+    if (typeof count === 'number' && user) {
+      setUnreadCount(count); setCountScope(scope);
+      queryClient.setQueryData(notificationUnreadKey(user.id, role), count);
+    }
+  }, [user, scope, role, queryClient]);
+  const { refresh: fetchNotifications, isOwner: pollsHere } = useSharedRefresh(
+    user ? `notifications:bell:${scope}` : null,
+    readNotifications,
+    applyNotifications,
+  );
 
   useEffect(() => {
     shownCancellationPopups.current = user ? loadShownPopupIds('cancellation', user.id) : new Set<string>();
@@ -151,6 +186,9 @@ export default function NotificationBell() {
 
   useEffect(() => {
     void fetchNotifications();
+    const refresh = () => { void fetchNotifications(); };
+    realtimeBus.addEventListener('workflow-inbox-read', refresh);
+    return () => realtimeBus.removeEventListener('workflow-inbox-read', refresh);
   }, [fetchNotifications]);
 
   useEffect(() => {
@@ -160,12 +198,18 @@ export default function NotificationBell() {
     }
   }, [fetchNotifications, open, role, refetchHoldInbox]);
 
+  // Realtime delivers notifications; this poll is a safety net (rare while realtime
+  // is healthy, every NOTIFICATION_POLL_INTERVAL_MS when not) plus one catch-up
+  // read when realtime recovers.
+  const pollMs = useRealtimeAwareInterval(NOTIFICATION_POLL_INTERVAL_MS);
+  useRealtimeReconnect(() => { void fetchNotifications(); }, pollsHere);
   useEffect(() => {
+    if (!pollsHere) return;
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') void fetchNotifications();
-    }, NOTIFICATION_POLL_INTERVAL_MS);
+    }, pollMs);
     return () => window.clearInterval(timer);
-  }, [fetchNotifications]);
+  }, [fetchNotifications, pollsHere, pollMs]);
 
   useEffect(() => {
     // Processors approve cancellations alongside admins (getCancellationApproverRoles), so they
@@ -228,53 +272,58 @@ export default function NotificationBell() {
   }, [fetchNotifications, navigate, role, user]);
 
   const markAllRead = async () => {
-    if (!user) return;
-
-    // Scoped to what this user can actually see, so an operator cannot silently clear alerts
-    // for leads that were filtered out of their bell. No `read` filter: rows where `read` is
-    // NULL also count as unread here and would otherwise be impossible to clear.
-    const assignedLeadIdList = await operatorLeadScope();
-
-    const result = await applyOperatorScope(
-      supabase.from('notifications').update({ read: true }).eq('user_id', user.id),
-      assignedLeadIdList,
-    );
-    if (result.error) {
-      toast.error('Could not mark notifications read');
-      return;
-    }
-    if (isOperatorRole(role) && holdInbox.data) {
-      try {
-        await acknowledgeHoldInbox(holdInbox.data.alerts.filter((alert) => !alert.read));
-        await holdInbox.refetch();
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : 'Could not acknowledge hold alerts');
-      }
-    }
-    await fetchNotifications();
-  };
-
-  const acknowledgeSelectedHold = async (alert: HoldAlert) => {
-    setAcknowledgingHold(true);
+    if (!user || markAllLock.current || holdActions.isPending) return;
+    markAllLock.current = true;
+    setMarkingAllRead(true);
     try {
-      if (!await acknowledgeHoldAlert(alert)) toast.info('This job changed again. Review the latest alert.');
-      await holdInbox.refetch();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Could not acknowledge hold alert');
+      // Acquire the shared hold-mutation gate immediately, so a popup click
+      // cannot race ahead while ordinary-notification scope is being read.
+      if (isOperatorRole(role) && holdInbox.data) await holdActions.acknowledgeAll(holdInbox.data);
+      if (currentScope.current !== scope) return;
+      // Ordinary notifications retain their existing recipient/assignment scope.
+      const assignedLeadIdList = await operatorLeadScope();
+      if (currentScope.current !== scope) return;
+      const result = await applyOperatorScope(
+        supabase.from('notifications').update({ read: true }).eq('user_id', user.id),
+        assignedLeadIdList,
+      );
+      if (result.error) {
+        toast.error('Could not mark notifications read');
+        return;
+      }
+      if (currentScope.current !== scope) return;
+      if (currentScope.current === scope) await fetchNotifications();
+    } catch {
+      if (currentScope.current === scope) toast.error('Could not mark notifications read');
     } finally {
-      setAcknowledgingHold(false);
+      markAllLock.current = false;
+      setMarkingAllRead(false);
     }
   };
 
   const handleClick = async (n: Notification) => {
-    if (!n.read) {
-      await supabase.from('notifications').update({ read: true }).eq('id', n.id);
-      setUnreadCount((prev) => Math.max(0, prev - 1));
+    try {
+      if (canAccessNotifications(role)) {
+        const href = await openInboxNotification(n);
+        if (currentScope.current !== scope) return;
+        setOpen(false);
+        if (href) navigate(href);
+        realtimeBus.dispatchEvent(new Event('workflow-inbox-read'));
+      } else {
+        if (!n.read) {
+          const result = await supabase.from('notifications').update({ read: true }).eq('id', n.id);
+          if (currentScope.current !== scope) return;
+          if (result.error) throw new Error('Could not mark notification read');
+          setUnreadCount((prev) => Math.max(0, prev - 1));
+        }
+        setOpen(false);
+        const cxHref = cxNotificationHref(n.title);
+        if (cxHref) navigate(cxHref);
+        else if (n.lead_id) navigate(`/leads/${n.lead_id}`);
+      }
+    } catch (error) {
+      if (currentScope.current === scope) toast.error(error instanceof Error ? error.message : 'Could not open notification');
     }
-    setOpen(false);
-    const cxHref = cxNotificationHref(n.title);
-    if (cxHref) navigate(cxHref);
-    else if (n.lead_id) navigate(`/leads/${n.lead_id}`);
     void fetchNotifications();
   };
 
@@ -291,12 +340,12 @@ export default function NotificationBell() {
           )}
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-80 p-0 shadow-premium-xl border-border/40" align="end">
+      <PopoverContent className="z-[110] w-80 p-0 shadow-premium-xl border-border/40" align="end">
         <div className="flex items-center justify-between px-4 py-3 border-b border-border/30">
           <h4 className="text-sm font-semibold">Notifications</h4>
           {unreadCount > 0 && (
-            <Button variant="ghost" size="sm" className="h-7 text-[11px] gap-1 text-primary" onClick={markAllRead}>
-              <CheckCheck className="h-3 w-3" /> {(holdInbox.data?.unread_count ?? 0) > holdAlerts.filter((alert) => !alert.read).length ? 'Mark shown read' : 'Mark all read'}
+            <Button variant="ghost" size="sm" className="h-7 text-[11px] gap-1 text-primary" onClick={markAllRead} disabled={markingAllRead || holdActions.isPending}>
+              <CheckCheck className="h-3 w-3" /> {markingAllRead ? 'Marking read…' : 'Mark all read'}
             </Button>
           )}
         </div>
@@ -304,6 +353,15 @@ export default function NotificationBell() {
           <div role="alert" className="space-y-2 border-b px-4 py-3 text-xs text-destructive">
             <p>Job hold alerts unavailable. {holdInbox.error.message}</p>
             <Button variant="outline" size="sm" onClick={() => { void refetchHoldInbox(); }}>Retry hold alerts</Button>
+          </div>
+        )}
+        {isOperatorRole(role) && (holdInbox.data?.unread_count ?? 0) > 0 && (
+          <div className="flex items-center justify-between gap-2 border-b px-4 py-2">
+            <span className="text-xs font-medium">Hold This Job</span>
+            <Button variant="outline" size="sm" className="h-7 gap-1 text-[11px]" disabled={markingAllRead || holdActions.isPending || holdInbox.isError}
+              onClick={() => { void holdActions.acknowledgeAll(holdInbox.data); }}>
+              <CheckCheck className="h-3 w-3" /> Acknowledge All
+            </Button>
           </div>
         )}
         <div className="max-h-80 overflow-y-auto overscroll-contain">
@@ -345,6 +403,7 @@ export default function NotificationBell() {
             </div>
           )}
         </div>
+        {canAccessNotifications(role) && <div className="border-t p-2"><Button variant="ghost" className="w-full" onClick={() => { setOpen(false); navigate('/notifications'); }}>View all notifications</Button></div>}
       </PopoverContent>
     </Popover>
     <Dialog open={Boolean(selectedHold)} onOpenChange={(value) => { if (!value) setSelectedHoldId(null); }}>
@@ -353,8 +412,8 @@ export default function NotificationBell() {
           <DialogTitle>Hold This Job</DialogTitle>
           <DialogDescription>Read-only job card from the saved transition. Acknowledgement does not change the job.</DialogDescription>
         </DialogHeader>
-        {selectedHold && <HoldJobCard key={selectedHold.revision} alert={selectedHold} expanded saving={acknowledgingHold}
-          onAcknowledge={(alert) => { void acknowledgeSelectedHold(alert); }} />}
+        {selectedHold && <HoldJobCard key={selectedHold.revision} alert={selectedHold} role={role} expanded saving={holdActions.isPending || markingAllRead}
+          onAcknowledge={holdActions.acknowledgeOne} />}
       </DialogContent>
     </Dialog>
     </>

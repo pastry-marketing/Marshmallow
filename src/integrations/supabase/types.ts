@@ -567,7 +567,12 @@ export type Database = {
           request_kind: string
           request_text: string
           requested_by: string | null
+          resolution_owner: string | null
+          resolution_owner_assigned: boolean
+          resolved_by: string | null
+          resolved_by_name: string | null
           response_text: string | null
+          revision: number
           status: string
           thread: Json
         }
@@ -582,7 +587,12 @@ export type Database = {
           request_kind?: string
           request_text: string
           requested_by?: string | null
+          resolution_owner?: string | null
+          resolution_owner_assigned?: boolean
+          resolved_by?: string | null
+          resolved_by_name?: string | null
           response_text?: string | null
+          revision?: number
           status?: string
           thread?: Json
         }
@@ -597,7 +607,12 @@ export type Database = {
           request_kind?: string
           request_text?: string
           requested_by?: string | null
+          resolution_owner?: string | null
+          resolution_owner_assigned?: boolean
+          resolved_by?: string | null
+          resolved_by_name?: string | null
           response_text?: string | null
+          revision?: number
           status?: string
           thread?: Json
         }
@@ -647,6 +662,34 @@ export type Database = {
           {
             foreignKeyName: "lead_cx_update_requests_requested_by_fkey"
             columns: ["requested_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_cx_update_requests_resolution_owner_fkey"
+            columns: ["resolution_owner"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_cx_update_requests_resolution_owner_fkey"
+            columns: ["resolution_owner"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_cx_update_requests_resolved_by_fkey"
+            columns: ["resolved_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_cx_update_requests_resolved_by_fkey"
+            columns: ["resolved_by"]
             isOneToOne: false
             referencedRelation: "profiles_public"
             referencedColumns: ["id"]
@@ -726,10 +769,39 @@ export type Database = {
           },
         ]
       }
+      lead_note_reactions: {
+        Row: {
+          created_at: string
+          note_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          note_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          note_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lead_note_reactions_note_id_fkey"
+            columns: ["note_id"]
+            isOneToOne: false
+            referencedRelation: "lead_notes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       lead_notes: {
         Row: {
           content: string
           created_at: string | null
+          edited_at: string | null
+          edited_by: string | null
+          edited_by_name: string | null
           id: string
           lead_id: string
           note_type: string
@@ -739,6 +811,9 @@ export type Database = {
         Insert: {
           content: string
           created_at?: string | null
+          edited_at?: string | null
+          edited_by?: string | null
+          edited_by_name?: string | null
           id?: string
           lead_id: string
           note_type: string
@@ -748,6 +823,9 @@ export type Database = {
         Update: {
           content?: string
           created_at?: string | null
+          edited_at?: string | null
+          edited_by?: string | null
+          edited_by_name?: string | null
           id?: string
           lead_id?: string
           note_type?: string
@@ -755,6 +833,20 @@ export type Database = {
           user_name?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "lead_notes_edited_by_fkey"
+            columns: ["edited_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_notes_edited_by_fkey"
+            columns: ["edited_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "lead_notes_lead_id_fkey"
             columns: ["lead_id"]
@@ -841,6 +933,35 @@ export type Database = {
           },
         ]
       }
+      lead_paid_dates: {
+        Row: {
+          lead_id: string
+          paid_at: string
+          recorded_at: string
+          source: string
+        }
+        Insert: {
+          lead_id: string
+          paid_at: string
+          recorded_at?: string
+          source: string
+        }
+        Update: {
+          lead_id?: string
+          paid_at?: string
+          recorded_at?: string
+          source?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lead_paid_dates_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: true
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       lead_payment_requests: {
         Row: {
           amount: number
@@ -849,6 +970,7 @@ export type Database = {
           id: string
           lead_id: string
           previous_status: string
+          request_type: string
           requested_by: string | null
           requested_by_name: string | null
           requested_by_role: string
@@ -867,6 +989,7 @@ export type Database = {
           id?: string
           lead_id: string
           previous_status: string
+          request_type?: string
           requested_by?: string | null
           requested_by_name?: string | null
           requested_by_role: string
@@ -885,6 +1008,7 @@ export type Database = {
           id?: string
           lead_id?: string
           previous_status?: string
+          request_type?: string
           requested_by?: string | null
           requested_by_name?: string | null
           requested_by_role?: string
@@ -1339,15 +1463,21 @@ export type Database = {
           created_by_name: string | null
           cs_notes: string | null
           cs_tag: string | null
+          cs_tag_source: string | null
           customer_email: string | null
           customer_landline: string | null
           customer_name: string
           customer_phone: string
           customer_schedule_requirements: string | null
+          diagnostic_fee_amount: number | null
           direction: string | null
           expected_completion_date: string | null
           for_us_amount: number | null
+          for_us_diagnostic_amount: number | null
+          for_us_labor_percent: number | null
           for_you_amount: number | null
+          for_you_diagnostic_amount: number | null
+          for_you_labor_percent: number | null
           general_notes: string | null
           half_address: string | null
           id: string
@@ -1401,15 +1531,21 @@ export type Database = {
           created_by_name?: string | null
           cs_notes?: string | null
           cs_tag?: string | null
+          cs_tag_source?: string | null
           customer_email?: string | null
           customer_landline?: string | null
           customer_name: string
           customer_phone: string
           customer_schedule_requirements?: string | null
+          diagnostic_fee_amount?: number | null
           direction?: string | null
           expected_completion_date?: string | null
           for_us_amount?: number | null
+          for_us_diagnostic_amount?: number | null
+          for_us_labor_percent?: number | null
           for_you_amount?: number | null
+          for_you_diagnostic_amount?: number | null
+          for_you_labor_percent?: number | null
           general_notes?: string | null
           half_address?: string | null
           id?: string
@@ -1463,15 +1599,21 @@ export type Database = {
           created_by_name?: string | null
           cs_notes?: string | null
           cs_tag?: string | null
+          cs_tag_source?: string | null
           customer_email?: string | null
           customer_landline?: string | null
           customer_name?: string
           customer_phone?: string
           customer_schedule_requirements?: string | null
+          diagnostic_fee_amount?: number | null
           direction?: string | null
           expected_completion_date?: string | null
           for_us_amount?: number | null
+          for_us_diagnostic_amount?: number | null
+          for_us_labor_percent?: number | null
           for_you_amount?: number | null
+          for_you_diagnostic_amount?: number | null
+          for_you_labor_percent?: number | null
           general_notes?: string | null
           half_address?: string | null
           id?: string
@@ -1611,6 +1753,45 @@ export type Database = {
         }
         Relationships: []
       }
+      message_templates: {
+        Row: {
+          created_at: string
+          key: string
+          template: string
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          created_at?: string
+          key: string
+          template: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          created_at?: string
+          key?: string
+          template?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "message_templates_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "message_templates_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       navigation_permissions: {
         Row: {
           allowed: boolean | null
@@ -1635,28 +1816,37 @@ export type Database = {
       notifications: {
         Row: {
           created_at: string | null
+          entity_id: string | null
           id: string
+          kind: string | null
           lead_id: string | null
           message: string
           read: boolean
+          resolved_at: string | null
           title: string
           user_id: string
         }
         Insert: {
           created_at?: string | null
+          entity_id?: string | null
           id?: string
+          kind?: string | null
           lead_id?: string | null
           message: string
           read?: boolean
+          resolved_at?: string | null
           title: string
           user_id: string
         }
         Update: {
           created_at?: string | null
+          entity_id?: string | null
           id?: string
+          kind?: string | null
           lead_id?: string | null
           message?: string
           read?: boolean
+          resolved_at?: string | null
           title?: string
           user_id?: string
         }
@@ -1782,6 +1972,33 @@ export type Database = {
         }
         Relationships: []
       }
+      paid_lead_access: {
+        Row: {
+          end_date: string | null
+          granted_by: string | null
+          granted_by_name: string | null
+          start_date: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          end_date?: string | null
+          granted_by?: string | null
+          granted_by_name?: string | null
+          start_date?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          end_date?: string | null
+          granted_by?: string | null
+          granted_by_name?: string | null
+          start_date?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       processor_job_assessments: {
         Row: {
           checked_at: string
@@ -1843,6 +2060,7 @@ export type Database = {
       profiles: {
         Row: {
           can_add_manual_leads: boolean
+          can_edit_processor_notes: boolean
           can_manage_users: boolean | null
           can_view_tech_report: boolean
           created_at: string | null
@@ -1854,6 +2072,7 @@ export type Database = {
         }
         Insert: {
           can_add_manual_leads?: boolean
+          can_edit_processor_notes?: boolean
           can_manage_users?: boolean | null
           can_view_tech_report?: boolean
           created_at?: string | null
@@ -1865,6 +2084,7 @@ export type Database = {
         }
         Update: {
           can_add_manual_leads?: boolean
+          can_edit_processor_notes?: boolean
           can_manage_users?: boolean | null
           can_view_tech_report?: boolean
           created_at?: string | null
@@ -2715,6 +2935,61 @@ export type Database = {
         }
         Relationships: []
       }
+      workflow_notification_events: {
+        Row: {
+          event_key: string
+          event_type: string
+          job_id: string
+          lead_id: string | null
+          notification_id: string
+          request_id: string | null
+          request_kind: string | null
+          revision: number
+        }
+        Insert: {
+          event_key: string
+          event_type: string
+          job_id: string
+          lead_id?: string | null
+          notification_id: string
+          request_id?: string | null
+          request_kind?: string | null
+          revision: number
+        }
+        Update: {
+          event_key?: string
+          event_type?: string
+          job_id?: string
+          lead_id?: string | null
+          notification_id?: string
+          request_id?: string | null
+          request_kind?: string | null
+          revision?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "workflow_notification_events_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "workflow_notification_events_notification_id_fkey"
+            columns: ["notification_id"]
+            isOneToOne: true
+            referencedRelation: "notifications"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "workflow_notification_events_request_id_fkey"
+            columns: ["request_id"]
+            isOneToOne: false
+            referencedRelation: "lead_cx_update_requests"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       profiles_public: {
@@ -2806,6 +3081,7 @@ export type Database = {
       can_access_quo_ai: { Args: never; Returns: boolean }
       can_access_quote_approval: { Args: never; Returns: boolean }
       can_create_manual_lead: { Args: never; Returns: boolean }
+      can_edit_others_processor_notes: { Args: never; Returns: boolean }
       can_manage_map_coverage: { Args: { _user_id: string }; Returns: boolean }
       can_use_quick_chat: { Args: { _user_id: string }; Returns: boolean }
       claim_ai_status_refresh: {
@@ -2816,6 +3092,7 @@ export type Database = {
         Args: { p_lead_id: string; p_token: string }
         Returns: boolean
       }
+      claim_schedule_checks: { Args: never; Returns: Json }
       claim_sheets_sync_queue: {
         Args: { p_limit?: number }
         Returns: {
@@ -2918,6 +3195,18 @@ export type Database = {
       cron_quo_reconcile_sync: { Args: never; Returns: undefined }
       cron_quo_sync_contacts: { Args: never; Returns: undefined }
       cron_refresh_urgent_ai_status: { Args: never; Returns: undefined }
+      cs_team_performance: {
+        Args: { p_end: string; p_start: string }
+        Returns: {
+          completed: number
+          engaged: number
+          member_id: string
+          member_name: string
+          member_role: string
+          scheduled: number
+          total_added: number
+        }[]
+      }
       current_user_opr_code: { Args: never; Returns: string }
       cx_update_requests: {
         Args: {
@@ -2957,6 +3246,7 @@ export type Database = {
         Args: { p_lock_token: string }
         Returns: boolean
       }
+      finish_schedule_check: { Args: { p_input: Json }; Returns: boolean }
       finish_sheets_sync_job: {
         Args: {
           p_detail?: Json
@@ -2975,6 +3265,74 @@ export type Database = {
       get_lead_copy_access: { Args: never; Returns: boolean }
       get_lead_copy_settings: { Args: never; Returns: Json }
       get_operator_hold_alerts: { Args: never; Returns: Json }
+      get_operator_safe_leads: {
+        Args: never
+        Returns: {
+          address: string
+          amount: number
+          assigned_cs: string
+          booked_at: string
+          cancellation_reason: string
+          city: string
+          coverage_area_label: string
+          coverage_checked_at: string
+          coverage_level: string
+          coverage_tech_count: number
+          created_at: string
+          created_by: string
+          created_by_name: string
+          cs_notes: string
+          cs_tag: string
+          cs_tag_source: string
+          customer_email: string
+          customer_landline: string
+          customer_name: string
+          customer_phone: string
+          customer_schedule_requirements: string
+          direction: string
+          expected_completion_date: string
+          for_us_amount: number
+          for_you_amount: number
+          general_notes: string
+          half_address: string
+          id: string
+          job_id: string
+          labor_amount: number
+          last_edited_at: string
+          last_edited_by: string
+          last_edited_by_name: string
+          latitude: number
+          location_label: string
+          longitude: number
+          manual_entry: boolean
+          material_amount: number
+          nearby_areas: Json
+          number_name: string
+          operator_labor_amount: number
+          org_id: string
+          payment_amount: number
+          payment_screenshot_url: string
+          processor_notes: string
+          quote: string
+          quote_requested_by: string
+          reference_name: string
+          scheduled_date: string
+          scheduled_time_end: string
+          scheduled_time_start: string
+          service_details: string
+          service_type: string
+          show_quote_to_opr: boolean
+          source_url: string
+          state: string
+          status: string
+          tech_name: string
+          tech_number: string
+          terms: string
+          updated_at: string
+          urgent_at: string
+          zip_code: string
+        }[]
+      }
       get_opr_codes_summary: {
         Args: never
         Returns: {
@@ -3044,6 +3402,7 @@ export type Database = {
         Returns: number
       }
       healthcheck: { Args: never; Returns: Json }
+      ingest_quo_message: { Args: { p_input: Json }; Returns: Json }
       is_admin_user: { Args: { check_user_id: string }; Returns: boolean }
       is_assigned_opr_code: { Args: { _opr_code: string }; Returns: boolean }
       is_org_member: { Args: { _org_id: string }; Returns: boolean }
@@ -3087,6 +3446,15 @@ export type Database = {
           full_name: string
           opr_code: string
         }[]
+      }
+      list_processor_board_jobs: {
+        Args: {
+          p_ai_status?: string
+          p_offset?: number
+          p_search?: string
+          p_timezone?: string
+        }
+        Returns: Json
       }
       list_processor_jobs: {
         Args: {
@@ -3143,6 +3511,10 @@ export type Database = {
           status: string
         }[]
       }
+      location_label: {
+        Args: { l: Database["public"]["Tables"]["leads"]["Row"] }
+        Returns: string
+      }
       manual_lead_access: {
         Args: never
         Returns: {
@@ -3154,6 +3526,7 @@ export type Database = {
         Args: { p_conversation_id: string; p_handled?: boolean }
         Returns: undefined
       }
+      my_paid_lead_ids: { Args: never; Returns: string[] }
       optimized_areas_with_performance: {
         Args: never
         Returns: {
@@ -3215,10 +3588,35 @@ export type Database = {
           tech_count: number
         }[]
       }
+      processor_board_daily_candidates: {
+        Args: { p_limit?: number }
+        Returns: string[]
+      }
+      processor_board_due_jobs: {
+        Args: { p_limit?: number }
+        Returns: string[]
+      }
+      processor_board_status: {
+        Args: {
+          p_lead_status: string
+          p_now: string
+          p_result: Json
+          p_scheduled_date: string
+          p_scheduled_time: string
+          p_tech_number: string
+          p_timezone: string
+        }
+        Returns: string
+      }
       processor_can_view_status: {
         Args: { p_status: string }
         Returns: boolean
       }
+      processor_customer_last_message: {
+        Args: { p_customer_phone: string; p_lead_id: string }
+        Returns: string
+      }
+      processor_tech_phone_key: { Args: { p_number: string }; Returns: string }
       prune_sheets_sync_errors: { Args: { p_keep?: number }; Returns: number }
       quo_conversation_counts_by_number: {
         Args: never
@@ -3242,6 +3640,10 @@ export type Database = {
         }[]
       }
       recalculate_lead_coverage: { Args: { _lead_id: string }; Returns: string }
+      record_processor_check_attempt: {
+        Args: { p_code: string; p_lead_id: string; p_ok: boolean }
+        Returns: undefined
+      }
       record_quo_webhook_event: {
         Args: {
           _event_type: string
@@ -3266,6 +3668,14 @@ export type Database = {
       }
       record_sheets_sync_success: {
         Args: { p_lead_id?: string }
+        Returns: undefined
+      }
+      record_system_health: {
+        Args: { p_options?: Json; p_sample: Json }
+        Returns: Json
+      }
+      record_webhook_retention_run: {
+        Args: { p_result: Json }
         Returns: undefined
       }
       refresh_lead_coverage: { Args: { _lead_id: string }; Returns: undefined }
@@ -3323,6 +3733,7 @@ export type Database = {
         }
         Returns: boolean
       }
+      schedule_monitor_admin: { Args: { p_input: Json }; Returns: Json }
       search_technicians: {
         Args: { _limit: number; _offset: number; _q: string }
         Returns: {
@@ -3349,6 +3760,15 @@ export type Database = {
           p_user_id: string
         }
         Returns: undefined
+      }
+      set_paid_lead_access: {
+        Args: {
+          p_enabled: boolean
+          p_end: string
+          p_start: string
+          p_user_id: string
+        }
+        Returns: Json
       }
       sheets_sync_lag: {
         Args: never
@@ -3384,6 +3804,15 @@ export type Database = {
           state_code: string
         }[]
       }
+      technician_area_place_live: {
+        Args: { _area: string }
+        Returns: {
+          city: string
+          latitude: number
+          longitude: number
+          state_code: string
+        }[]
+      }
       update_requests: {
         Args: {
           p_action: string
@@ -3407,10 +3836,36 @@ export type Database = {
         }[]
       }
       us_state_code: { Args: { _text: string }; Returns: string }
+      webhook_retention_batch: {
+        Args: { p_cutoff: string; p_limit?: number }
+        Returns: {
+          created_at: string
+          error_message: string | null
+          event_type: string | null
+          id: string
+          processed_at: string | null
+          processing_status: string
+          quo_conversation_id: string | null
+          quo_event_id: string | null
+          quo_message_id: string | null
+          quo_phone_number_id: string | null
+          raw_payload: Json
+          received_at: string
+          signature_verified: boolean
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "quo_webhook_events"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
       withdraw_technician_change: {
         Args: { p_request_id: string }
         Returns: undefined
       }
+      workflow_notifications: { Args: { p_input: Json }; Returns: Json }
+      workflow_requests: { Args: { p_input: Json }; Returns: Json }
     }
     Enums: {
       app_role:

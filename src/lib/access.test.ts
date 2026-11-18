@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canAccessNavItem, canAddLeadViaExtension, canAddManualLead, canDeleteTechnicians, canSeeTechDetails, canViewLeadCoverageAnalytics, getDefaultNavAccess } from "@/lib/access";
+import { canAccessNavItem, canAddLeadViaExtension, canOpenAnalytics, canAddManualLead, canEditOthersProcessorNotes, canReactToProcessorNotes, canDeleteTechnicians, canSeeTechDetails, canViewLeadCoverageAnalytics, getDefaultNavAccess } from "@/lib/access";
 import type { NavigationPermission } from "@/types";
 
 describe("cancellation request navigation access", () => {
@@ -65,6 +65,25 @@ describe("lead coverage and source analytics", () => {
     for (const role of ["processor", "customer_service", "cs_admin", "opr", "opr_admin", null, undefined] as const) {
       expect(canViewLeadCoverageAnalytics(role)).toBe(false);
     }
+  });
+});
+
+describe("CS Team Performance access", () => {
+  const granted = [{ nav_section: "cs_team_performance", allowed: true }] as NavigationPermission[];
+  it("is Admin-only by default and grantable per user on its own", () => {
+    expect(canAccessNavItem("admin", "cs_team_performance")).toBe(true);
+    for (const role of ["processor", "customer_service", "cs_admin", "opr", "opr_admin"] as const) {
+      expect(canAccessNavItem(role, "cs_team_performance")).toBe(false);
+      expect(canAccessNavItem(role, "cs_team_performance", granted)).toBe(true);
+    }
+    expect(canAccessNavItem("customer_service", "cs_team_performance", [{ nav_section: "cs_team_performance", allowed: false }] as NavigationPermission[])).toBe(false);
+  });
+  it("opens Analytics with either grant, and an Analytics grant does not grant the team-wide section", () => {
+    const can = (permissions: NavigationPermission[]) => (item: string) => canAccessNavItem("customer_service", item, permissions);
+    expect(canOpenAnalytics(can(granted))).toBe(true);
+    expect(canOpenAnalytics(can([{ nav_section: "analytics", allowed: true }] as NavigationPermission[]))).toBe(true);
+    expect(can([{ nav_section: "analytics", allowed: true }] as NavigationPermission[])("cs_team_performance")).toBe(false);
+    expect(canOpenAnalytics(can([]))).toBe(false);
   });
 });
 
@@ -185,5 +204,31 @@ describe("add lead via extension", () => {
     expect(canAddLeadViaExtension("opr", notGranted)).toBe(false);
     expect(canAddLeadViaExtension("opr_admin", notGranted)).toBe(false);
     expect(canAddLeadViaExtension(null)).toBe(false);
+  });
+});
+
+describe("Edit Processor Notes grant", () => {
+  it("allows admin always and a processor only with the grant", () => {
+    expect(canEditOthersProcessorNotes("admin", null)).toBe(true);
+    expect(canEditOthersProcessorNotes("processor", { can_edit_processor_notes: true })).toBe(true);
+    expect(canEditOthersProcessorNotes("processor", { can_edit_processor_notes: false })).toBe(false);
+    expect(canEditOthersProcessorNotes("processor", null)).toBe(false);
+  });
+
+  it("never applies to other roles, even if the flag is set", () => {
+    for (const role of ["customer_service", "cs_admin", "opr", "opr_admin"] as const) {
+      expect(canEditOthersProcessorNotes(role, { can_edit_processor_notes: true })).toBe(false);
+    }
+    expect(canEditOthersProcessorNotes(null, { can_edit_processor_notes: true })).toBe(false);
+  });
+});
+
+describe("canReactToProcessorNotes", () => {
+  it("allows processor and admin only", () => {
+    expect(canReactToProcessorNotes("processor")).toBe(true);
+    expect(canReactToProcessorNotes("admin")).toBe(true);
+    for (const r of ["customer_service", "cs_admin", "opr", "opr_admin", null, undefined] as const) {
+      expect(canReactToProcessorNotes(r)).toBe(false);
+    }
   });
 });

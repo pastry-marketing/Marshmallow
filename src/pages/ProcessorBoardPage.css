@@ -1,0 +1,37 @@
+/* Scoped to the CRM Processor Board. Status colours come from the pill/filter classes. */
+.processor-board [data-processor-status] {
+  --processor-tone: var(--status-muted);
+}
+
+.processor-board [data-processor-status="take_job_update"] { --processor-tone: var(--warning); }
+.processor-board [data-processor-status="job_in_progress"] { --processor-tone: var(--status-blue); }
+.processor-board [data-processor-status="payment_pending"] { --processor-tone: var(--success); }
+.processor-board [data-processor-status="send_dose"] { --processor-tone: var(--destructive); }
+.processor-board [data-processor-status="not_enough_details"] { --processor-tone: 258 72% 60%; }
+
+.processor-board .processor-panel {
+  background: linear-gradient(180deg, hsl(var(--card) / 0.86), hsl(var(--muted) / 0.28));
+}
+
+/* A thin status-coloured edge keeps rows scannable without another column. */
+.processor-board tr.processor-row > td:first-child,
+.processor-board article.processor-row {
+  box-shadow: inset 2px 0 0 hsl(var(--processor-tone) / 0.45);
+}
+
+.processor-board .processor-table table {
+  min-width: 940px;
+}
+
+.processor-board .processor-filter {
+  transition: background-color 180ms, box-shadow 180ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .processor-board *,
+  .processor-board *::before,
+  .processor-board *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

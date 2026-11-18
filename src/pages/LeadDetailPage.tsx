@@ -1,3 +1,5 @@
+import { onScheduleRequirementSaved } from "@/lib/schedule-requirement";
+import { redactLeadForOperator, withOperatorLocation } from "@/lib/operator-privacy";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useCallback } from "react";
@@ -5,7 +7,6 @@ import type { ChangeEvent, ElementType } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { logActivity } from "@/lib/activity";
-import { dispatchLeadStatusNotification } from "@/lib/lead-notifications";
 import { formatUSPhone, hasContactNumber } from "@/lib/phone";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -40,6 +41,7 @@ import PaymentDialog from "@/components/leads/PaymentDialog";
 import ImageLightbox from "@/components/leads/ImageLightbox";
 import LeadPhotoActions from "@/components/leads/LeadPhotoActions";
 import CopyLeadButton from "@/components/leads/CopyLeadButton";
+import CheckTemplateButton from "@/components/leads/CheckTemplateButton";
 import CompleteLeadCopyButton from "@/components/leads/CompleteLeadCopyButton";
 import CxUpdateRequestButton from "@/components/leads/CxUpdateRequestButton";
 import TechUpdateRequestButton from "@/components/leads/TechUpdateRequestButton";
@@ -52,6 +54,11 @@ import { getChangeableStatuses, canChangeStatus } from "@/lib/constants";
 import { optimizeImageForUpload } from "@/lib/image-upload";
 import { updateLeadById } from "@/lib/lead-updates";
 import { requestQuoteApproval } from "@/lib/quote-approval-requests";
+import QuoteBreakdownFields from "@/components/leads/QuoteBreakdownFields";
+import { hasMaterialCharge, termsAllowMaterials, termsRecordAmount, validateDiagnosticFee, validateLaborPercent, validateQuoteBreakdown, type QuoteTerms } from "@/lib/quote-breakdown";
+import TechnicianShareFields from "@/components/leads/TechnicianShareFields";
+import { operatorQuoteFormValue } from "@/lib/operator-quote";
+import { createPaymentRequest, PAYMENT_REQUEST_TYPE_LABELS, type PaymentRequestType } from "@/lib/payment-requests";
 import StatusBadge from "@/components/leads/StatusBadge";
 import LeadCoverageBadge from "@/components/leads/LeadCoverageBadge";
 import { geocodeAndPersistLeadAddress } from "@/lib/lead-address-geocoding";
@@ -73,7 +80,9 @@ import {
 import NumberNameCombobox from "@/components/leads/NumberNameCombobox";
 import UrgentAICheckDialog from "@/components/leads/UrgentAICheckDialog";
 import { showsUrgentCheck } from "@/lib/urgent-verification";
+import { DateInput } from "@/components/ui/date-input";
 
+import { formatDateTime } from "@/lib/date-time-format";
 const PHOTO_PREVIEW_LIMIT = 1;
 
 interface ExistingPhoto {
@@ -152,6 +161,7 @@ export default function LeadDetailPage() {
 
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [paymentLoading, setPaymentLoading] = useState(false);
+  const [paymentRequestType, setPaymentRequestType] = useState<PaymentRequestType>("paid");
   const [cancelRequestOpen, setCancelRequestOpen] = useState(false);
   const [cancelRequestLoading, setCancelRequestLoading] = useState(false);
   const [adminCancelOpen, setAdminCancelOpen] = useState(false);
@@ -207,11 +217,17 @@ export default function LeadDetailPage() {
 
     tech_name: "",
     tech_number: "",
-    terms: "" as "" | "free_estimate" | "quoted",
+    terms: "" as "" | QuoteTerms,
     labor_amount: "",
     material_amount: "",
+    materials_included: false,
     for_you_amount: "",
     for_us_amount: "",
+    diagnostic_fee_amount: "",
+    for_you_labor_percent: "",
+    for_us_labor_percent: "",
+    for_you_diagnostic_amount: "",
+    for_us_diagnostic_amount: "",
 
     amount: "",
     payment_screenshot_url: "",
@@ -309,8 +325,14 @@ export default function LeadDetailPage() {
       terms: lead.terms || "",
       labor_amount: lead.labor_amount != null ? String(lead.labor_amount) : "",
       material_amount: lead.material_amount != null ? String(lead.material_amount) : "",
+      materials_included: hasMaterialCharge(lead.material_amount),
       for_you_amount: lead.for_you_amount != null ? String(lead.for_you_amount) : "",
       for_us_amount: lead.for_us_amount != null ? String(lead.for_us_amount) : "",
+      diagnostic_fee_amount: lead.diagnostic_fee_amount != null ? String(lead.diagnostic_fee_amount) : "",
+      for_you_labor_percent: lead.for_you_labor_percent != null ? String(lead.for_you_labor_percent) : "",
+      for_us_labor_percent: lead.for_us_labor_percent != null ? String(lead.for_us_labor_percent) : "",
+      for_you_diagnostic_amount: lead.for_you_diagnostic_amount != null ? String(lead.for_you_diagnostic_amount) : "",
+      for_us_diagnostic_amount: lead.for_us_diagnostic_amount != null ? String(lead.for_us_diagnostic_amount) : "",
 
       amount: lead.amount != null ? String(lead.amount) : "",
       payment_screenshot_url: lead.payment_screenshot_url || "",
@@ -322,7 +344,10 @@ export default function LeadDetailPage() {
 
     setLoading(true);
 
-    const { data: lead, error } = await supabase.from("leads").select("*").eq("id", id).single();
+    // Operators also get the server's City, ST ZIP; their copy is redacted below.
+    // location_label is a computed field the generated types do not list; the row
+    // shape is otherwise exactly "*".
+    const { data: lead, error } = await supabase.from("leads").select(withOperatorLocation("*", role) as "*").eq("id", id).single();
 
     if (error || !lead) {
       toast.error("Lead not found");
@@ -332,13 +357,14 @@ export default function LeadDetailPage() {
 
     setLeadId(lead.id);
     setExternalUpdateBy(null);
-    const typedLead = { ...lead, status: lead.status as LeadStatus } as Lead;
+    // Operators: City, ST ZIP only — no address, customer number or technician.
+    const typedLead = redactLeadForOperator({ ...(lead as unknown as Lead), status: lead.status as LeadStatus }, role);
     setOriginalLead(typedLead);
     setJobId(lead.job_id);
     setFormFromLead(typedLead);
     await fetchProfilesAndMeta(typedLead);
     setLoading(false);
-  }, [id, isNew, navigate]);
+  }, [id, isNew, navigate, role]);
 
   const fetchPhotos = async (currentLeadId: string) => {
     const { data } = await supabase
@@ -435,6 +461,17 @@ export default function LeadDetailPage() {
     };
   }, [leadId, isNew, user?.id, navigate]);
 
+  // A schedule requirement saved from a prompt in this tab updates this page too, so a
+  // later "Save Lead" cannot write the old value back.
+  useEffect(() => {
+    if (!leadId) return;
+    return onScheduleRequirementSaved(({ leadId: savedId, value }) => {
+      if (savedId !== leadId) return;
+      setForm((previous) => ({ ...previous, customer_schedule_requirements: value ?? "" }));
+      setOriginalLead((previous) => (previous ? { ...previous, customer_schedule_requirements: value } : previous));
+    });
+  }, [leadId]);
+
   const refreshPendingCancellationRequest = useCallback(async () => {
     if (!leadId) {
       setPendingCancellationRequest(null);
@@ -496,7 +533,8 @@ export default function LeadDetailPage() {
       return;
     }
 
-    if (key === "status" && value === "paid") {
+    if (key === "status" && (value === "paid" || value === "partial_paid")) {
+      setPaymentRequestType(value);
       setPaymentOpen(true);
       return;
     }
@@ -553,15 +591,36 @@ export default function LeadDetailPage() {
     setPhotos((prev) => prev.filter((p) => p.id !== photoId));
   };
 
-  const handlePaymentConfirm = async (amount: number, screenshotFile: File | null) => {
-    if (!leadId || !user) {
+  const handlePaymentConfirm = async (amount: number, screenshotFile: File | null, comment?: string) => {
+    if (!leadId || !user || !originalLead) {
       toast.error("Save the lead first before recording payment");
       setPaymentOpen(false);
       return;
     }
 
     setPaymentLoading(true);
+    const typeLabel = PAYMENT_REQUEST_TYPE_LABELS[paymentRequestType];
     try {
+      if (isProcessor) {
+        // Processor -> send a request (Admin must approve) for either outcome.
+        // Mirrors LeadCard.tsx's handlePaymentConfirm.
+        await createPaymentRequest({
+          lead: originalLead,
+          userId: user.id,
+          userName: profile?.full_name || user.email || "Unknown user",
+          requesterRole: role,
+          requestType: paymentRequestType,
+          amount,
+          comment,
+          screenshotFile,
+        });
+        setPaymentOpen(false);
+        setForm((prev) => ({ ...prev, status: "payment_requested" }));
+        await fetchLead();
+        toast.success(`${typeLabel} request sent for Admin approval`);
+        return;
+      }
+
       let screenshotUrl: string | null = null;
 
       if (screenshotFile) {
@@ -576,7 +635,7 @@ export default function LeadDetailPage() {
       }
 
       await updateLeadById(leadId, {
-        status: "paid",
+        status: paymentRequestType,
         amount,
         payment_amount: amount,
         payment_screenshot_url: screenshotUrl,
@@ -589,13 +648,13 @@ export default function LeadDetailPage() {
       setPaymentOpen(false);
       setForm((prev) => ({
         ...prev,
-        status: "paid",
+        status: paymentRequestType,
         amount: String(amount),
         payment_screenshot_url: screenshotUrl || prev.payment_screenshot_url,
       }));
 
       await fetchLead();
-      toast.success("Payment recorded & status updated to Paid");
+      toast.success(`Payment recorded & status updated to ${typeLabel}`);
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Failed to record payment");
     } finally {
@@ -668,6 +727,12 @@ export default function LeadDetailPage() {
   };
 
   const handleSave = async () => {
+    const quoteError = validateQuoteBreakdown({ terms: form.terms, laborAmount: form.labor_amount, materialAmount: form.material_amount, includesMaterials: form.materials_included });
+    if (quoteError) { toast.error(quoteError); return; }
+    const feeError = validateDiagnosticFee(form.diagnostic_fee_amount)
+      || validateLaborPercent(form.for_you_labor_percent) || validateLaborPercent(form.for_us_labor_percent)
+      || validateDiagnosticFee(form.for_you_diagnostic_amount) || validateDiagnosticFee(form.for_us_diagnostic_amount);
+    if (feeError) { toast.error(feeError); return; }
     if (!user) return;
     if (isOpr) {
       toast.error("Operators cannot edit leads");
@@ -772,15 +837,11 @@ export default function LeadDetailPage() {
 
       tech_name: !hideProcessorDetails ? form.tech_name || null : (originalLead?.tech_name ?? null),
       tech_number: !hideProcessorDetails ? form.tech_number || null : (originalLead?.tech_number ?? null),
-      terms: !hideProcessorDetails ? form.terms || null : (originalLead?.terms ?? null),
-      labor_amount:
-        !hideProcessorDetails
-          ? parseAmount(form.labor_amount)
-          : (originalLead?.labor_amount ?? null),
-      material_amount:
-        !hideProcessorDetails
-          ? parseAmount(form.material_amount)
-          : (originalLead?.material_amount ?? null),
+      // Every editing role (CS and CS Admin included) owns the customer quote
+      // split; only the internal For You/For Us technician split stays gated.
+      terms: form.terms || null,
+      labor_amount: termsRecordAmount(form.terms) ? parseAmount(form.labor_amount) : null,
+      material_amount: termsAllowMaterials(form.terms) && form.materials_included ? parseAmount(form.material_amount) : null,
       for_you_amount:
         !hideProcessorDetails
           ? parseAmount(form.for_you_amount)
@@ -789,6 +850,27 @@ export default function LeadDetailPage() {
         !hideProcessorDetails
           ? parseAmount(form.for_us_amount)
           : (originalLead?.for_us_amount ?? null),
+      // Lives beside For You / For Us and follows the same role gate (2026-11-16).
+      diagnostic_fee_amount:
+        !hideProcessorDetails
+          ? parseAmount(form.diagnostic_fee_amount)
+          : (originalLead?.diagnostic_fee_amount ?? null),
+      for_you_labor_percent:
+        !hideProcessorDetails
+          ? parseAmount(form.for_you_labor_percent)
+          : (originalLead?.for_you_labor_percent ?? null),
+      for_us_labor_percent:
+        !hideProcessorDetails
+          ? parseAmount(form.for_us_labor_percent)
+          : (originalLead?.for_us_labor_percent ?? null),
+      for_you_diagnostic_amount:
+        !hideProcessorDetails
+          ? parseAmount(form.for_you_diagnostic_amount)
+          : (originalLead?.for_you_diagnostic_amount ?? null),
+      for_us_diagnostic_amount:
+        !hideProcessorDetails
+          ? parseAmount(form.for_us_diagnostic_amount)
+          : (originalLead?.for_us_diagnostic_amount ?? null),
 
       last_edited_by: user.id,
       last_edited_by_name: currentUserName,
@@ -878,16 +960,7 @@ export default function LeadDetailPage() {
           }
         }
 
-        try {
-          await dispatchLeadStatusNotification({
-            leadId: newLeadId,
-            leadName: form.customer_name,
-            status: savedStatus,
-            expectedCompletionDate: form.expected_completion_date,
-          });
-        } catch (notifErr) {
-          console.warn("Notification dispatch failed:", notifErr);
-        }
+        // Status alerts are sent by the database (leads_notify_change).
 
         try {
           await logActivity(user.id, "created", "lead", newLeadId, { customer_name: form.customer_name });
@@ -959,21 +1032,7 @@ export default function LeadDetailPage() {
         }
       }
 
-      if (
-        (previousStatus !== savedStatus && (savedStatus === "urgent_job" || savedStatus === "need_tech" || savedStatus === "job_in_progress")) ||
-        (savedStatus === "job_in_progress" && originalLead?.expected_completion_date !== form.expected_completion_date && form.expected_completion_date)
-      ) {
-        try {
-          await dispatchLeadStatusNotification({
-            leadId: leadId,
-            leadName: form.customer_name,
-            status: savedStatus,
-            expectedCompletionDate: form.expected_completion_date,
-          });
-        } catch (notifErr) {
-          console.warn("Failed to dispatch notifications:", notifErr);
-        }
-      }
+      // Status alerts are sent by the database when the lead is saved (leads_notify_change).
 
       try {
         const changedDetails: Record<string, unknown> = { customer_name: form.customer_name };
@@ -1137,6 +1196,11 @@ export default function LeadDetailPage() {
       material_amount: form.material_amount ? parseFloat(form.material_amount) : null,
       for_you_amount: form.for_you_amount ? parseFloat(form.for_you_amount) : null,
       for_us_amount: form.for_us_amount ? parseFloat(form.for_us_amount) : null,
+      diagnostic_fee_amount: form.diagnostic_fee_amount ? parseFloat(form.diagnostic_fee_amount) : null,
+      for_you_labor_percent: form.for_you_labor_percent ? parseFloat(form.for_you_labor_percent) : null,
+      for_us_labor_percent: form.for_us_labor_percent ? parseFloat(form.for_us_labor_percent) : null,
+      for_you_diagnostic_amount: form.for_you_diagnostic_amount ? parseFloat(form.for_you_diagnostic_amount) : null,
+      for_us_diagnostic_amount: form.for_us_diagnostic_amount ? parseFloat(form.for_us_diagnostic_amount) : null,
       created_by: originalLead?.created_by || user?.id || null,
       created_by_name: originalLead?.created_by_name || profile?.full_name || user?.email || null,
       created_at: originalLead?.created_at || new Date().toISOString(),
@@ -1185,7 +1249,7 @@ export default function LeadDetailPage() {
     <div className="space-y-1.5">
       <Label className={labelClass}>{label}</Label>
       <div className="flex flex-wrap items-center gap-1.5">
-        <Select value={form[`${prefix}_hour` as keyof typeof form]} onValueChange={(v) => update(`${prefix}_hour`, v)}>
+        <Select value={form[`${prefix}_hour`]} onValueChange={(v) => update(`${prefix}_hour`, v)}>
           <SelectTrigger className="h-10 w-[72px] border-border/60 bg-background/90">
             <SelectValue />
           </SelectTrigger>
@@ -1201,7 +1265,7 @@ export default function LeadDetailPage() {
         <span className="text-muted-foreground/50">:</span>
 
         <Select
-          value={form[`${prefix}_minute` as keyof typeof form]}
+          value={form[`${prefix}_minute`]}
           onValueChange={(v) => update(`${prefix}_minute`, v)}
         >
           <SelectTrigger className="h-10 w-[72px] border-border/60 bg-background/90">
@@ -1216,7 +1280,7 @@ export default function LeadDetailPage() {
           </SelectContent>
         </Select>
 
-        <Select value={form[`${prefix}_ampm` as keyof typeof form]} onValueChange={(v) => update(`${prefix}_ampm`, v)}>
+        <Select value={form[`${prefix}_ampm`]} onValueChange={(v) => update(`${prefix}_ampm`, v)}>
           <SelectTrigger className="h-10 w-[76px] border-border/60 bg-background/90">
             <SelectValue />
           </SelectTrigger>
@@ -1238,6 +1302,11 @@ export default function LeadDetailPage() {
       </div>
     );
   }
+
+  // A plain Operator sees half the labor and parts/materials only (operator-quote.ts),
+  // never the full labor amount; an admin can hide the quote from Operators per lead.
+  const formQuote = { terms: form.terms, laborAmount: form.labor_amount, materialAmount: form.material_amount, includesMaterials: form.materials_included };
+  const quoteSection = isOpr ? operatorQuoteFormValue(formQuote, originalLead?.show_quote_to_opr) : formQuote;
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
@@ -1300,6 +1369,7 @@ export default function LeadDetailPage() {
                     <QuoPhoneTrigger
                       contactName={originalLead.customer_name || "Lead"}
                       phone={originalLead.customer_phone}
+                      showLastMessageTime
                       chatType="customer"
                       className="inline-flex items-center gap-1.5 rounded-xl border border-primary/25 bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary no-underline shadow-sm transition-all hover:bg-primary/20"
                     >
@@ -1311,6 +1381,7 @@ export default function LeadDetailPage() {
                     <QuoPhoneTrigger
                       contactName={originalLead.tech_name || "Technician"}
                       phone={originalLead.tech_number}
+                      showLastMessageTime
                       chatType="tech"
                       className="inline-flex items-center gap-1.5 rounded-xl border border-amber-500/30 bg-amber-500/12 px-2.5 py-1 text-[11px] font-semibold text-amber-700 no-underline shadow-sm transition-all hover:bg-amber-500/22 dark:text-amber-300"
                     >
@@ -1348,6 +1419,7 @@ export default function LeadDetailPage() {
           </div>
 
           <div className="grid gap-3 border-t border-border/50 pt-4 sm:grid-cols-2 xl:grid-cols-4">
+            {!isOpr && (
             <div className="crm-lead-card-inner rounded-2xl px-4 py-3">
               <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
                 <Phone className="h-3.5 w-3.5" />
@@ -1371,13 +1443,14 @@ export default function LeadDetailPage() {
                 </p>
               )}
             </div>
+            )}
             <div className="crm-lead-card-inner rounded-2xl px-4 py-3">
               <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
                 <MapPin className="h-3.5 w-3.5" />
                 Service
               </div>
               <p className="mt-2 text-sm font-semibold text-foreground">{form.service_type || "Service not set"}</p>
-              <p className="mt-1 text-[12px] text-muted-foreground">{form.address || "Address not entered yet"}</p>
+              <p className="mt-1 text-[12px] text-muted-foreground">{form.address || (isOpr ? "Location not available" : "Address not entered yet")}</p>
             </div>
             <div className="crm-lead-card-inner rounded-2xl px-4 py-3">
               <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
@@ -1399,7 +1472,7 @@ export default function LeadDetailPage() {
               </p>
               <p className="mt-1 text-[12px] text-muted-foreground">
                 {lastEditedBy && lastEditedAt
-                  ? `Last updated by ${lastEditedBy} on ${new Date(lastEditedAt).toLocaleString()}`
+                  ? `Last updated by ${lastEditedBy} on ${formatDateTime(lastEditedAt)}`
                   : `${visiblePhotoCount} photo${visiblePhotoCount !== 1 ? "s" : ""} attached`}
               </p>
             </div>
@@ -1451,6 +1524,7 @@ export default function LeadDetailPage() {
               </div>
             </div>
 
+            {!isOpr && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label className={labelClass}>Cell Phone</Label>
@@ -1492,6 +1566,7 @@ export default function LeadDetailPage() {
                 <p className="text-[11px] text-muted-foreground">A cell phone or a landline is required.</p>
               </div>
             </div>
+            )}
           </div>
 
           <Collapsible open={csOpen} onOpenChange={setCsOpen}>
@@ -1506,7 +1581,7 @@ export default function LeadDetailPage() {
 
             <CollapsibleContent className="mt-3 space-y-4 px-1">
               <div className="space-y-1.5">
-                <Label className={labelClass}>Address</Label>
+                <Label className={labelClass}>{isOpr ? "Location" : "Address"}</Label>
                 <Input
                   value={form.address}
                   onChange={(e) => update("address", e.target.value)}
@@ -1529,7 +1604,7 @@ export default function LeadDetailPage() {
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label className={labelClass}>Quote</Label>
+                  <Label className={labelClass}>Quote Notes</Label>
                   <Input
                     value={form.quote}
                     onChange={(e) => update("quote", e.target.value)}
@@ -1594,6 +1669,8 @@ export default function LeadDetailPage() {
             </CollapsibleContent>
           </Collapsible>
 
+          {quoteSection && <QuoteBreakdownFields readOnly={isOpr} value={quoteSection} onChange={(value) => setForm((previous) => ({ ...previous, terms: value.terms, labor_amount: value.laborAmount, material_amount: value.materialAmount, materials_included: value.includesMaterials }))} />}
+
           {!hideProcessorDetails && (
             <Collapsible open={processorOpen} onOpenChange={setProcessorOpen}>
               <CollapsibleTrigger className={collapsibleShellClass}>
@@ -1607,6 +1684,7 @@ export default function LeadDetailPage() {
 
               <CollapsibleContent className="mt-3 space-y-4 px-1">
                 <div className="flex flex-col gap-3 xl:flex-row xl:items-end">
+                  {!isOpr && (
                   <div className="grid min-w-0 flex-1 grid-cols-1 gap-3 md:grid-cols-2">
                     <div className="space-y-1.5">
                       <Label className={labelClass}>Tech Name</Label>
@@ -1639,6 +1717,7 @@ export default function LeadDetailPage() {
                     )}
                   </div>
                   </div>
+                  )}
 
                   {currentCopyLead && (
                     <div className="flex shrink-0 flex-wrap items-center gap-2">
@@ -1653,77 +1732,33 @@ export default function LeadDetailPage() {
                         lead={currentCopyLead}
                         className="h-9 rounded-xl px-2.5 text-[10px]"
                       />
+                      <CheckTemplateButton
+                        lead={currentCopyLead}
+                        className="h-9 rounded-xl px-2.5 text-[10px]"
+                      />
                     </div>
                   )}
                 </div>
 
-                <div className="space-y-1.5">
-                  <Label className={labelClass}>Terms</Label>
-                  <Select value={form.terms} onValueChange={(v) => update("terms", v)} disabled={isOpr}>
-                    <SelectTrigger className={fieldClass}>
-                      <SelectValue placeholder="Select terms..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="free_estimate">Free Estimate Visit</SelectItem>
-                      <SelectItem value="quoted">Quoted</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
 
-                {form.terms === "quoted" && (
+                {/* For You / For Us / Diagnostic Fee apply to every term (2026-11-16), not only Quoted. */}
+                {(
                   <div className="crm-lead-card-soft rounded-[22px] p-4 space-y-3 shadow-[0_18px_28px_-24px_rgba(59,130,246,0.12)] dark:shadow-none">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-foreground/60">
-                      Quoted Details
+                      Internal Technician Share
                     </p>
 
-                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                      <div className="space-y-1.5">
-                        <Label className={labelClass}>Customer Labor ($)</Label>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          value={form.labor_amount}
-                          onChange={(e) => update("labor_amount", e.target.value)}
-                          className={fieldClass}
-                          readOnly={isOpr}
-                        />
-                      </div>
-
-                      <div className="space-y-1.5">
-                        <Label className={labelClass}>Materials ($)</Label>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          value={form.material_amount}
-                          onChange={(e) => update("material_amount", e.target.value)}
-                          className={fieldClass}
-                          readOnly={isOpr}
-                        />
-                      </div>
-
-                      <div className="space-y-1.5">
-                        <Label className={labelClass}>For You ($ incl. material)</Label>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          value={form.for_you_amount}
-                          onChange={(e) => update("for_you_amount", e.target.value)}
-                          className={fieldClass}
-                          readOnly={isOpr}
-                        />
-                      </div>
-
-                      <div className="space-y-1.5">
-                        <Label className={labelClass}>For Us ($ from labor)</Label>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          value={form.for_us_amount}
-                          onChange={(e) => update("for_us_amount", e.target.value)}
-                          className={fieldClass}
-                          readOnly={isOpr}
-                        />
-                      </div>
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                      <TechnicianShareFields
+                        idPrefix="lead"
+                        terms={form.terms}
+                        materialsIncluded={form.materials_included}
+                        values={form}
+                        onChange={(field, value) => update(field, value)}
+                        readOnly={isOpr}
+                        labelClassName={labelClass}
+                        inputClassName={fieldClass}
+                      />
                     </div>
                   </div>
                 )}
@@ -1755,7 +1790,7 @@ export default function LeadDetailPage() {
             </Collapsible>
           )}
 
-          {!hideProcessorDetails && leadId && (
+          {!hideProcessorDetails && !isOpr && leadId && (
             <NearbyAreasList
               leadId={leadId}
               customerAddress={form.address ?? originalLead?.address ?? null}
@@ -1815,10 +1850,10 @@ export default function LeadDetailPage() {
 
               <div className="space-y-1.5">
                 <Label className={labelClass}>Job Scheduled For</Label>
-                <Input
-                  type="date"
+                <DateInput
+                  aria-label="Job Scheduled For"
                   value={form.scheduled_date}
-                  onChange={(e) => update("scheduled_date", e.target.value)}
+                  onChange={(value) => update("scheduled_date", value)}
                   className={fieldClass}
                 />
               </div>
@@ -1850,10 +1885,10 @@ export default function LeadDetailPage() {
                       </span>
                     )}
                   </div>
-                  <Input
-                    type="date"
+                  <DateInput
+                    aria-label="Expected Job Completion Date"
                     value={form.expected_completion_date}
-                    onChange={(e) => update("expected_completion_date", e.target.value)}
+                    onChange={(value) => update("expected_completion_date", value)}
                     className={fieldClass}
                   />
                   {(isAdmin || isProcessor) && (jobCompletionState === "overdue" || jobCompletionState === "due_today") && (
@@ -2022,6 +2057,8 @@ export default function LeadDetailPage() {
         onOpenChange={setPaymentOpen}
         onConfirm={handlePaymentConfirm}
         loading={paymentLoading}
+        mode={isProcessor ? "request" : "direct"}
+        requestType={paymentRequestType}
       />
 
       <CancellationRequestSheet

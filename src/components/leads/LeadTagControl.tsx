@@ -5,13 +5,15 @@ import { useAuth } from "@/contexts/AuthContext";
 import { isOperatorRole } from "@/lib/access";
 import { getAssignableLeadTags } from "@/lib/lead-tags";
 import { saveLeadTag } from "@/lib/lead-tag-actions";
+import { promptsForNewSchedule, requestScheduleRequirementPrompt } from "@/lib/schedule-requirement";
 import { CS_TAG_LABELS, type CsTag, type Lead } from "@/types";
 import BookingDateTimeDialog, { formatBookingCompact, isBookingExpired } from "./BookingDateTimeDialog";
+import AiTagBadge from "./AiTagBadge";
 
 interface Props {
   lead: Lead;
   /** Called with what was written, so the page can update its copy of the lead in place. */
-  onSaved: (patch: { cs_tag: CsTag | null; booked_at?: string | null }) => void;
+  onSaved: (patch: { cs_tag: CsTag | null; cs_tag_source: null; booked_at?: string | null }) => void;
   className?: string;
 }
 
@@ -37,8 +39,14 @@ export default function LeadTagControl({ lead, onSaved, className }: Props) {
     setSaving(false);
 
     if (ok) {
+      // Customer Require New Schedule: ask for the customer's new schedule right away.
+      if (promptsForNewSchedule(currentTag, newTag)) {
+        requestScheduleRequirementPrompt({ key: `tag:${lead.id}:${Date.now()}`, source: "manual", leadId: lead.id, customerName: lead.customer_name });
+      }
       onSaved({
         cs_tag: newTag,
+        // A person's tag change clears the AI marker in the database too.
+        cs_tag_source: null,
         ...(Object.prototype.hasOwnProperty.call(patch, "booked_at")
           ? { booked_at: patch.booked_at as string | null }
           : {}),
@@ -82,6 +90,8 @@ export default function LeadTagControl({ lead, onSaved, className }: Props) {
           ))}
         </SelectContent>
       </Select>
+
+      <AiTagBadge lead={lead} className="mt-2" />
 
       {currentTag === "booked" && lead.booked_at && (
         <button

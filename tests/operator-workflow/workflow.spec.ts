@@ -13,6 +13,7 @@ const savedLead = {
   scheduled_time_end: "15:00:00", created_by: USER_ID, created_at: "2026-10-12T05:00:00Z", updated_at: "2026-10-12T05:00:00Z",
   tech_name: "Synthetic Tech", tech_number: "5550100001", cs_tag: null, quote: "PRIVATE QUOTE", show_quote_to_opr: false,
   latitude: 25.76, longitude: -80.19, coverage_level: "good", coverage_tech_count: 12,
+  location_label: "Miami, FL 33101",
 };
 const snapshot = { ...savedLead, status: "scheduled", quote: null };
 
@@ -149,7 +150,89 @@ test("Request optimization: notes catch up when a hidden tab returns", async ({ 
   expect(reads).toBeGreaterThan(before);
 });
 
-async function mockSession(page: Page, role: "admin" | "opr" | "opr_admin", options: { copyAllowed?: boolean; hold?: boolean; photos?: boolean } = {}) {
+test.describe("Lead metadata batching", () => {
+  for (const role of ["admin", "opr"] as const) {
+    test(`${role}: delayed metadata mounts complete cards without per-card reads`, async ({ page }) => {
+      await mockSession(page, role, { photos: true });
+      let release = () => {};
+      const metadataReady = new Promise<void>((resolve) => { release = resolve; });
+      let batches = 0;
+      const fallbackReads: string[] = [];
+      page.on("request", (request) => {
+        const url = new URL(request.url());
+        if (["GET", "HEAD"].includes(request.method()) &&
+          ["/rest/v1/lead_notes", "/rest/v1/lead_photos", "/rest/v1/lead_cancellation_requests"].includes(url.pathname) &&
+          url.searchParams.get("lead_id")?.startsWith("eq.")) fallbackReads.push(url.pathname);
+      });
+      await page.route("**/rest/v1/lead_photos*", async (route) => {
+        if (new URL(route.request().url()).searchParams.get("lead_id")?.startsWith("in.")) {
+          batches++;
+          await metadataReady;
+        }
+        await route.fallback();
+      });
+      const hydrated = page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return url.pathname === "/rest/v1/leads" && Boolean(url.searchParams.get("id")?.startsWith("in."));
+      });
+      try {
+        await page.goto("/leads", { waitUntil: "domcontentloaded" });
+        await hydrated;
+        await expect.poll(() => batches).toBeGreaterThan(0);
+        // Let React commit the hydrated rows while the independent metadata read
+        // stays pending. All external HTTP and WebSocket traffic is mocked above.
+        await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+        expect(fallbackReads).toEqual([]);
+        await expect(page.locator(".crm-lead-card").filter({ hasText: "Synthetic Customer" })).toHaveCount(0);
+        release();
+        const card = page.locator(".crm-lead-card").filter({ hasText: "Synthetic Customer" });
+        await expect(card).toBeVisible();
+        const view = card.getByRole("button", { name: "View 2 photos", exact: true });
+        await expect(view).toBeEnabled();
+        expect(fallbackReads).toEqual([]);
+        await view.click();
+        await expect(page.getByRole("dialog", { name: "Photo preview" })).toBeVisible();
+        await page.keyboard.press("Escape");
+        await expect(view).toBeFocused();
+        if (role === "opr") await expect(card.getByRole("button", { name: "Send photos to tech" })).toHaveCount(0);
+      } finally {
+        release();
+      }
+    });
+  }
+
+  test("a failed batch still renders cards through the existing individual fallback", async ({ page }) => {
+    await mockSession(page, "admin");
+    const fallbackReads: string[] = [];
+    const failedBatchRetries: string[] = [];
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (["GET", "HEAD"].includes(request.method()) &&
+        ["/rest/v1/lead_notes", "/rest/v1/lead_photos", "/rest/v1/lead_cancellation_requests"].includes(url.pathname) &&
+        url.searchParams.get("lead_id")?.startsWith("eq.")) fallbackReads.push(url.pathname);
+    });
+    await page.route("**/rest/v1/lead_notes*", async (route) => {
+      const corsHeaders = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*", "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS", "Access-Control-Expose-Headers": "Retry-After" };
+      if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers: corsHeaders });
+      if (new URL(route.request().url()).searchParams.get("lead_id")?.startsWith("in.")) {
+        failedBatchRetries.push(route.request().headers()["x-retry-count"] ?? "0");
+        // The installed PostgREST client retries 503 reads three times. Honour
+        // that real retry path without spending seven seconds on its backoff.
+        return route.fulfill({ status: 503, headers: { ...corsHeaders, "Retry-After": "0" }, json: { code: "PGRST003", message: "Synthetic batch unavailable" } });
+      }
+      await route.fallback();
+    });
+    await page.goto("/leads", { waitUntil: "domcontentloaded" });
+    await expect(page.locator(".crm-lead-card").filter({ hasText: "Synthetic Customer" })).toBeVisible();
+    await expect.poll(() => [...fallbackReads].sort()).toEqual([
+      "/rest/v1/lead_cancellation_requests", "/rest/v1/lead_notes",
+      "/rest/v1/lead_photos", "/rest/v1/lead_photos", // Exact count and ordered paths.
+    ]);
+    expect(failedBatchRetries).toContain("3");
+  });
+});
+
+async function mockSession(page: Page, role: "admin" | "processor" | "customer_service" | "opr" | "opr_admin", options: { copyAllowed?: boolean; hold?: boolean; photos?: boolean } = {}) {
   let holdRead = false;
   let permission = options.copyAllowed ?? true;
   const roleDefaults = ["processor", "customer_service", "cs_admin", "opr", "opr_admin"].map((item) => ({ role: item, allowed: true }));
@@ -218,6 +301,144 @@ async function mockSession(page: Page, role: "admin" | "opr" | "opr_admin", opti
   }, { id: USER_ID });
 }
 
+test("Operator Todo: CS sees split customer quote but not internal technician shares", async ({ page }) => {
+  await mockSession(page, "customer_service");
+  const quoted = { ...savedLead, terms: "quoted", labor_amount: 200, material_amount: 60, for_you_amount: 777, for_us_amount: 888 };
+  await page.route("**/rest/v1/leads*", (route) => route.fulfill({ json: route.request().headers().accept?.includes("application/vnd.pgrst.object+json") ? quoted : [quoted] }));
+  await page.goto(`/leads/${JOB_ID}`);
+  const quote = page.getByRole("region", { name: "Quote breakdown" });
+  await expect(quote.getByText("Labor Section", { exact: true })).toBeVisible();
+  await expect(quote.getByText("$200.00", { exact: true })).toBeVisible();
+  await expect(quote.getByText("$60.00", { exact: true })).toBeVisible();
+  await expect(quote.getByRole("spinbutton")).toHaveCount(0);
+  await expect(page.getByText("Internal Technician Share", { exact: true })).toHaveCount(0);
+  await page.goto("/leads");
+  await expect(page.getByText("Quoted · Labor $200.00 · Parts/Materials $60.00", { exact: true })).toBeVisible();
+});
+
+test("Operator Todo: Admin Materials No saves null and keeps labor unchanged", async ({ page }) => {
+  await mockSession(page, "admin");
+  let quoted: Record<string, unknown> = { ...savedLead, number_name: "Synthetic Line", terms: "quoted", labor_amount: 200, material_amount: 60 };
+  const writes: Record<string, unknown>[] = [];
+  await page.route("**/rest/v1/leads*", async (route) => {
+    if (route.request().method() === "PATCH") { writes.push(route.request().postDataJSON()); quoted = { ...quoted, ...writes.at(-1) }; }
+    await route.fulfill({ json: route.request().headers().accept?.includes("application/vnd.pgrst.object+json") ? quoted : [quoted] });
+  });
+  await page.goto(`/leads/${JOB_ID}`);
+  const quote = page.getByRole("region", { name: "Quote breakdown" });
+  await quote.getByRole("combobox", { name: "Parts/Materials charges?" }).click();
+  await page.getByRole("option", { name: "No", exact: true }).click();
+  await expect(quote.getByRole("spinbutton", { name: "Parts/Materials ($)", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Save Lead", exact: true }).click();
+  await expect.poll(() => writes.length).toBe(1);
+  expect(writes[0]).toMatchObject({ labor_amount: 200, material_amount: null });
+});
+
+for (const role of ["opr", "opr_admin"] as const) {
+  test(`Operator Todo: ${role} has no Donut button; regular OPR sees only safe quote and no CS notes`, async ({ page }) => {
+    await mockSession(page, role);
+    const quoted = { ...savedLead, terms: "quoted", labor_amount: 200, material_amount: 60, show_quote_to_opr: true };
+    await page.route("**/rest/v1/leads*", (route) => route.fulfill({ json: route.request().headers().accept?.includes("application/vnd.pgrst.object+json") ? quoted : [quoted] }));
+    await page.goto("/leads");
+    await expect(page.getByText("MM-123", { exact: true }).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: "Donut extension version and update instructions" })).toHaveCount(0);
+    if (role === "opr") {
+      await expect(page.getByText("Quoted · Labor $100.00 · Materials $60.00", { exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "CS", exact: true })).toHaveCount(0);
+      await expect(page.getByText("Synthetic Customer", { exact: true })).toHaveCount(0);
+      await expect(page.getByText("PRIVATE QUOTE", { exact: true })).toHaveCount(0);
+    } else {
+      await expect(page.getByText("Synthetic Customer", { exact: true }).first()).toBeVisible();
+      await expect(page.getByRole("button", { name: "CS", exact: true }).first()).toBeVisible();
+    }
+  });
+
+  test(`Operator Todo: ${role} acknowledges one hold then all remaining holds in one batch`, async ({ page }) => {
+    await mockSession(page, role);
+    const holds = Array.from({ length: 4 }, (_, index) => ({
+      id: `00000000-0000-4000-8000-${String(index + 10).padStart(12, "0")}`, lead_id: JOB_ID,
+      revision: REVISION_ID, reason: "scheduled", snapshot: { ...snapshot, job_id: `MM-HOLD-${index}` },
+      read: false, created_at: "2026-11-13T07:00:00Z",
+    }));
+    const actions: Record<string, unknown>[] = [];
+    await page.route("**/rest/v1/rpc/get_operator_hold_alerts", (route) => route.fulfill({ json: { observed_at: "2026-11-13T07:01:00Z", unread_count: holds.filter((item) => !item.read).length, alerts: holds } }));
+    await page.route("**/rest/v1/rpc/acknowledge_operator_hold_alert", async (route) => {
+      const args = route.request().postDataJSON(); actions.push(args);
+      const pairs = args.p_alerts || [{ id: args.p_id, revision: args.p_revision }];
+      let count = 0;
+      for (const hold of holds) if (!hold.read && pairs.some((pair: { id: string; revision: string }) => pair.id === hold.id && pair.revision === hold.revision)) { hold.read = true; count++; }
+      await route.fulfill({ json: count });
+    });
+    await page.goto("/leads");
+    const popup = page.getByRole("complementary", { name: "Operator job hold notifications" });
+    await expect(popup.getByRole("article")).toHaveCount(3);
+    await popup.getByRole("button", { name: "Acknowledge", exact: true }).first().click();
+    await expect.poll(() => holds.filter((item) => item.read).length).toBe(1);
+    if (role === "opr_admin") {
+      await expect(popup.getByRole("button", { name: "Acknowledge All", exact: true })).toBeEnabled();
+      await page.getByRole("button", { name: "Notifications", exact: true }).click();
+      await page.getByRole("button", { name: "Mark all read", exact: true }).click();
+    } else {
+      await popup.getByRole("button", { name: "Acknowledge All", exact: true }).click();
+    }
+    await expect(popup).not.toBeVisible();
+    expect(holds.every((item) => item.read)).toBe(true);
+    expect(actions).toHaveLength(2);
+    expect(actions[0].p_alerts).toBeNull();
+    expect(actions[1].p_alerts).toHaveLength(3);
+  });
+}
+
+for (const surface of ["card", "detail"] as const) {
+  for (const denied of [false, true]) {
+    test(`Partial payment: Processor ${surface} ${denied ? "reports a denied request" : "requests Admin approval without setting Partial Paid"}`, async ({ page }) => {
+      await mockSession(page, "processor");
+      const requests: Record<string, unknown>[] = [];
+      const updates: Record<string, unknown>[] = [];
+      await page.route("**/rest/v1/lead_payment_requests*", async (route) => {
+        if (route.request().method() !== "POST") return route.fulfill({ json: null });
+        requests.push(route.request().postDataJSON());
+        if (denied) return route.fulfill({ status: 403, json: { message: "Synthetic payment denial", code: "42501" } });
+        await route.fulfill({ json: { id: ALERT_ID, ...requests[0] } });
+      });
+      await page.route("**/rest/v1/leads*", async (route) => {
+        if (route.request().method() === "PATCH") updates.push(route.request().postDataJSON());
+        const lead = { ...savedLead, ...(updates.at(-1) ?? {}) };
+        await route.fulfill({ json: route.request().headers().accept?.includes("application/vnd.pgrst.object+json") ? lead : [lead] });
+      });
+      await page.goto(surface === "card" ? "/leads" : `/leads/${JOB_ID}`);
+      await page.getByRole("combobox").filter({ hasText: /^Urgent Job$/ }).first().click();
+      await page.getByRole("option", { name: "Partial Paid", exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: "Request Partial Paid Approval" });
+      await expect(dialog).toBeVisible();
+      await dialog.getByRole("spinbutton").fill("25.50");
+      await dialog.getByRole("textbox").fill("Deposit received");
+      await dialog.getByRole("button", { name: "Send request" }).click();
+      if (denied) {
+        await expect(page.getByText("Synthetic payment denial", { exact: true }).first()).toBeVisible();
+        await expect(dialog).toBeVisible();
+        await expect(dialog.getByRole("spinbutton")).toHaveValue("25.50");
+        await expect(dialog.getByRole("textbox")).toHaveValue("Deposit received");
+        expect(updates).toEqual([]);
+      } else {
+        await expect(dialog).not.toBeVisible();
+        expect(updates).toHaveLength(1);
+        expect(updates[0].status).toBe("payment_requested");
+      }
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({ request_type: "partial_paid", amount: 25.5, comment: "Deposit received", requested_by_role: "processor" });
+    });
+  }
+
+  test(`Partial payment: Customer Service cannot select it on ${surface}`, async ({ page }) => {
+    await mockSession(page, "customer_service");
+    await page.goto(surface === "card" ? "/leads" : `/leads/${JOB_ID}`);
+    await page.getByRole("combobox").filter({ hasText: /^Urgent Job$/ }).first().click();
+    await expect(page.getByRole("option", { name: "Partial Paid", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("option", { name: "Paid", exact: true })).toHaveCount(0);
+  });
+}
+
 for (const role of ["opr", "opr_admin"] as const) {
   test(`${role}: saved-photo View action opens, navigates and closes without sending`, async ({ page }) => {
     await page.setViewportSize({ width: role === "opr" ? 1440 : 390, height: 900 });
@@ -283,28 +504,27 @@ for (const role of ["opr", "opr_admin"] as const) {
   });
 }
 
-test("Admin can change role default and apply user override", async ({ page }) => {
-  await mockSession(page, "admin");
-  // Include a non-admin target in the Settings users query without changing the caller's role query.
-  await page.route("**/rest/v1/user_roles?select=user_id%2Crole", (route) => route.fulfill({ json: [
-    { user_id: USER_ID, role: "admin" }, { user_id: JOB_ID, role: "opr" },
-  ] }));
-  await page.route("**/rest/v1/profiles?select=id%2Cemail%2Cfull_name%2C*", (route) => route.fulfill({ json: [
-    { id: USER_ID, full_name: "Synthetic Admin", email: "admin@example.invalid" },
-    { id: JOB_ID, full_name: "Synthetic Operator", email: "operator@example.invalid" },
-  ] }));
+test("Admin has one Copy Details switch per user after Manual Lead without duplicate panels", async ({ page }) => {
+  await page.setViewportSize({ width: 1366, height: 900 });
+  await mockSettingsUsers(page);
+  const writes: unknown[] = [];
+  page.on("request", (request) => {
+    if (request.url().endsWith("/rpc/set_lead_copy_permission")) writes.push(request.postDataJSON());
+  });
   await page.goto("/settings");
   await page.getByRole("tab", { name: "Feature Access", exact: true }).click();
-  const roleSwitch = page.getByRole("switch", { name: "Allow Copy Complete Details for Operator", exact: true });
-  await expect(roleSwitch).toBeChecked();
-  await roleSwitch.click();
-  await expect(roleSwitch).not.toBeChecked();
-  await page.getByRole("button", { name: /User overrides/ }).click();
-  const override = page.getByRole("combobox", { name: "Copy override for Synthetic Operator" });
-  await override.click();
-  await page.getByRole("option", { name: "Allow", exact: true }).click();
-  await expect(override).toContainText("Allow");
-  await expect(page.getByText("Operator · Effective access: Allowed", { exact: true })).toBeVisible();
+  const matrix = page.getByRole("table");
+  expect((await matrix.getByRole("columnheader").allTextContents()).slice(-2)).toEqual(["Manual Lead", "Copy Details"]);
+  await expect(matrix.getByRole("columnheader", { name: "Copy Details", exact: true })).toHaveCount(1);
+  await expect(page.getByRole("heading", { name: "Copy Complete Details", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /User overrides/ })).toHaveCount(0);
+  const control = matrix.getByRole("switch", { name: "Copy Details for Synthetic Operator With A Long Display Name", exact: true });
+  await expect(control).toBeChecked();
+  expect(writes).toEqual([]);
+  await control.click();
+  await expect(control).not.toBeChecked();
+  await expect(matrix.getByRole("switch", { name: "Copy Details for Synthetic Processor", exact: true })).toBeChecked();
+  expect(writes).toEqual([{ p_role: null, p_user_id: JOB_ID, p_allowed: false }]);
 });
 
 async function mockSettingsUsers(page: Page) {
@@ -326,25 +546,24 @@ for (const width of [1366, 390]) {
     await page.goto("/settings");
     await page.getByRole("tab", { name: "Feature Access", exact: true }).click();
     await page.getByLabel("Find feature", { exact: true }).fill("copy all details");
-    const control = page.getByRole("combobox", { name: "Copy All Details override for Synthetic Operator With A Long Display Name", exact: true }).filter({ visible: true });
-    await expect(control).toContainText("Inherit role default");
+    const control = page.getByRole("switch", { name: "Copy Details for Synthetic Operator With A Long Display Name", exact: true }).filter({ visible: true });
+    await expect(control).toBeChecked();
     const target = width >= 1024
       ? page.getByRole("table").getByRole("row").filter({ hasText: "Synthetic Operator With A Long Display Name" })
       : page.getByRole("region", { name: "Feature access for Synthetic Operator With A Long Display Name" });
-    await expect(target).toContainText("Effective access: Allowed");
+    await expect(target.getByRole("switch")).toHaveCount(1);
     const request = page.waitForRequest((request) => request.url().endsWith("/rpc/set_lead_copy_permission"));
     await control.click();
-    await page.getByRole("option", { name: "Deny", exact: true }).click();
     expect((await request).postDataJSON()).toEqual({ p_role: null, p_user_id: JOB_ID, p_allowed: false });
-    await expect(control).toContainText("Deny");
-    await expect(target).toContainText("Effective access: Denied");
-    await page.getByRole("button", { name: /User overrides/ }).click();
-    await expect(page.getByRole("combobox", { name: "Copy override for Synthetic Operator With A Long Display Name", exact: true })).toContainText("Deny");
+    await expect(control).not.toBeChecked();
     await page.reload();
     await page.getByRole("tab", { name: "Feature Access", exact: true }).click();
     await page.getByLabel("Find feature", { exact: true }).fill("Copy Complete Details");
-    await expect(control).toContainText("Deny");
-    await expect(target).toContainText("Effective access: Denied");
+    await expect(control).not.toBeChecked();
+    const allow = page.waitForRequest((request) => request.url().endsWith("/rpc/set_lead_copy_permission"));
+    await control.click();
+    expect((await allow).postDataJSON()).toEqual({ p_role: null, p_user_id: JOB_ID, p_allowed: true });
+    await expect(control).toBeChecked();
     expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
   });
 }
@@ -359,36 +578,56 @@ test("Copy All Details matrix preserves saved access after a backend rejection",
   await page.getByRole("tab", { name: "Feature Access", exact: true }).click();
   await page.getByLabel("Find feature", { exact: true }).fill("copy all details");
   const target = page.getByRole("table").getByRole("row").filter({ hasText: "Synthetic Operator With A Long Display Name" });
-  const control = target.getByRole("combobox");
+  const control = target.getByRole("switch");
   await expect(control).toBeEnabled();
   await control.click();
-  await page.getByRole("option", { name: "Deny", exact: true }).click();
   await expect(page.getByText("Synthetic copy permission denied", { exact: true }).first()).toBeVisible();
-  await expect(control).toContainText("Inherit role default");
-  await expect(target).toContainText("Effective access: Allowed");
+  await expect(control).toBeChecked();
   await expect(page.getByText("Copy Complete Details access updated", { exact: true })).toHaveCount(0);
 });
 
+test("Copy Details switches stay unverified after a read failure and recover through Retry", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 900 });
+  await mockSettingsUsers(page);
+  let failed = true;
+  await page.route("**/rest/v1/rpc/get_lead_copy_settings", (route) => route.fulfill(failed
+    ? { status: 403, json: { message: "Synthetic copy settings unavailable", code: "42501" } }
+    : { json: { roles: [], users: [] } }));
+  await page.goto("/settings");
+  await page.getByRole("tab", { name: "Feature Access", exact: true }).click();
+  await page.getByLabel("Find feature", { exact: true }).fill("Copy Details");
+  const control = page.getByRole("switch", { name: "Copy Details for Synthetic Operator With A Long Display Name", exact: true }).filter({ visible: true });
+  await expect(page.getByRole("alert")).toContainText("Synthetic copy settings unavailable");
+  await expect(control).toBeDisabled();
+  await expect(control).not.toBeChecked();
+  failed = false;
+  await page.getByRole("button", { name: "Retry permissions", exact: true }).click();
+  await expect(control).toBeEnabled();
+  await expect(control).toBeChecked();
+});
+
 for (const width of [1920, 1440, 1366, 1024, 390]) {
-  test(`Feature Access is usable without horizontal scrolling at ${width}px`, async ({ page }) => {
+  test(`Feature Access shows all options with contained scrolling at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 768 });
     await mockSettingsUsers(page);
     await page.goto("/settings");
     await page.getByRole("tab", { name: "Feature Access", exact: true }).click();
-    const next = page.getByRole("button", { name: "Next features" });
-    await next.scrollIntoViewIfNeeded();
-    await expect(page.getByRole("button", { name: "Previous features" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Next features" })).toHaveCount(0);
     if (width >= 1024) {
       const initialMatrix = page.getByRole("table");
-      await expect(initialMatrix.getByRole("columnheader")).toHaveCount(5);
+      expect(await initialMatrix.getByRole("columnheader").count()).toBeGreaterThan(20);
       const scroll = await initialMatrix.evaluate((element) => ({ width: element.parentElement!.clientWidth, content: element.parentElement!.scrollWidth }));
-      expect(scroll.content).toBeLessThanOrEqual(scroll.width);
+      expect(scroll.content).toBeGreaterThan(scroll.width);
+      const region = page.getByRole("region", { name: "Feature permissions table" });
+      await region.focus();
+      await page.keyboard.press("End");
+      await initialMatrix.getByRole("columnheader", { name: "Manual Lead", exact: true }).scrollIntoViewIfNeeded();
+      expect(await region.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+      await expect(initialMatrix.getByText("Synthetic Operator With A Long Display Name")).toBeVisible();
     }
     if (width === 1366) await page.screenshot({ path: test.info().outputPath("feature-access-desktop.png") });
-    await next.click();
-    await expect(page.getByRole("status").filter({ hasText: "Features" })).toContainText("Features 5–8");
     await page.getByLabel("Find feature", { exact: true }).fill("Quickchat");
-    await expect(page.getByRole("status").filter({ hasText: "Features" })).toContainText("Features 1–2 of 2");
+    await expect(page.getByRole("status").filter({ hasText: "features" })).toContainText("2 of");
     await page.getByLabel("Find user", { exact: true }).fill("Synthetic Operator");
     const targetSwitch = page.getByRole("switch", { name: "CX Quickchat for Synthetic Operator With A Long Display Name", exact: true }).filter({ visible: true });
     await expect(targetSwitch).toBeVisible();
@@ -407,10 +646,7 @@ for (const width of [1920, 1440, 1366, 1024, 390]) {
     await expect(page.getByText(/No matching users/)).toBeVisible();
     await page.getByRole("button", { name: "Clear filters" }).click();
     await expect(page.getByLabel("Find user", { exact: true })).toHaveValue("");
-    await next.focus();
-    await expect(next).toBeFocused();
-    await page.keyboard.press("Enter");
-    await expect(page.getByRole("status").filter({ hasText: "Features" })).toContainText("Features 5–8");
+    if (width >= 1024) expect(await page.getByRole("table").getByRole("columnheader").count()).toBeGreaterThan(20);
   });
 }
 
@@ -429,6 +665,41 @@ test("Feature Access labels fixed permissions instead of offering ineffective to
   await expect(processor).toContainText("Included with role");
   await expect(processor.getByRole("switch")).toHaveCount(0);
 });
+
+for (const width of [1366, 390]) {
+  test(`Feature Access grants and revokes only the selected user's feature at ${width}px`, async ({ page }) => {
+    await mockSettingsUsers(page);
+    await page.setViewportSize({ width, height: 900 });
+    const saved = { id: REVISION_ID, user_id: JOB_ID, nav_section: "quick_chat", allowed: false };
+    const writes: { allowed: boolean }[] = [];
+    await page.route("**/rest/v1/navigation_permissions*", async (route) => {
+      if (route.request().method() === "GET") return route.fulfill({ json: [saved] });
+      expect(route.request().method()).toBe("PATCH");
+      expect(new URL(route.request().url()).searchParams.get("id")).toBe(`eq.${REVISION_ID}`);
+      const change = route.request().postDataJSON();
+      writes.push(change);
+      saved.allowed = change.allowed;
+      return route.fulfill({ json: null });
+    });
+    await page.goto("/settings");
+    await page.getByRole("tab", { name: "Feature Access", exact: true }).click();
+    await page.getByLabel("Find feature", { exact: true }).fill("Quickchat");
+    const target = page.getByRole("switch", { name: "CX Quickchat for Synthetic Operator With A Long Display Name", exact: true }).filter({ visible: true });
+    const other = page.getByRole("switch", { name: "CX Quickchat for Synthetic Processor", exact: true }).filter({ visible: true });
+    await expect(target).not.toBeChecked();
+    await target.click();
+    await expect(target).toBeChecked();
+    await expect(other).not.toBeChecked();
+    await target.click();
+    await expect(target).not.toBeChecked();
+    await expect(other).not.toBeChecked();
+    expect(writes).toEqual([{ allowed: true }, { allowed: false }]);
+    await page.reload();
+    await page.getByRole("tab", { name: "Feature Access", exact: true }).click();
+    await page.getByLabel("Find feature", { exact: true }).fill("Quickchat");
+    await expect(target).not.toBeChecked();
+  });
+}
 
 test("Feature Access reports a failed navigation save without success or access change", async ({ page }) => {
   await mockSettingsUsers(page);

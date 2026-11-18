@@ -35,7 +35,9 @@ import { requestTechnicianChange } from "@/lib/tech-change-requests";
 import { logActivity } from "@/lib/activity";
 import { TECHNICIANS_ROOT_KEY } from "@/lib/technicians";
 import { REVIEW_STATES, technicianLabelClass, technicianReviewState } from "@/lib/technician-review";
+import { isBackgroundPollPaused } from "@/lib/overload-guard";
 
+import { formatDateTime } from "@/lib/date-time-format";
 const LABELS = [
   ["tech_dont_respond", "Tech don't respond"],
   ["tech_is_scammer", "Tech is scammer"],
@@ -128,7 +130,7 @@ export function TechnicianProcessingWorkflow({
         .then(({ data, error }) => { if (active && !error && typeof data?.aiConfigured === "boolean") setHealth(data); }).catch(() => undefined);
     };
     refresh();
-    const timer = window.setInterval(refresh, 60000);
+    const timer = window.setInterval(() => { if (!isBackgroundPollPaused()) refresh(); }, 60000);
     window.addEventListener("focus", refresh);
     return () => { active = false; window.clearInterval(timer); window.removeEventListener("focus", refresh); };
   }, []);
@@ -499,7 +501,7 @@ export function TechnicianProcessingWorkflow({
               <div className="flex flex-wrap gap-2 text-xs">
                 <Badge variant="outline">{report?.jobsCompleted ?? "—"} jobs completed</Badge>
                 <Badge variant="outline">{report?.jobsPaid ?? "—"} jobs paid</Badge>
-                 {assessment?.last_assessed_at && <span className="text-muted-foreground">Saved snapshot {new Date(assessment.last_assessed_at).toLocaleString()}</span>}
+                 {assessment?.last_assessed_at && <span className="text-muted-foreground">Saved snapshot {formatDateTime(assessment.last_assessed_at)}</span>}
               </div>
             </div>
             {report?.error && <p className="text-xs text-destructive">{report.error}</p>}
@@ -536,7 +538,7 @@ export function TechnicianProcessingWorkflow({
                     {result?.error ? "A Quo chat link is saved, but it was not reviewed. Configure the QUO_API_KEY Edge Function secret or sync the conversation to the CRM mirror." : "A Quo chat link is saved, but no messages were found in the CRM mirror or linked conversation."} {tech.chat_link.startsWith("https://my.quo.com/") && <a href={tech.chat_link} target="_blank" rel="noopener noreferrer" className="underline">Open Quo chat</a>}
                   </p>
                 )}
-               {(result?.evidence ?? assessment?.ai_evidence ?? []).map((item, index) => item.quote ? <blockquote key={index} className="border-l-2 border-primary/50 pl-2 text-xs italic text-muted-foreground">{item.source ? `${item.source}: ` : ""}{item.quote}{item.message_time && <span className="mt-1 block not-italic">{new Date(item.message_time).toLocaleString()}</span>}</blockquote> : null)}
+               {(result?.evidence ?? assessment?.ai_evidence ?? []).map((item, index) => item.quote ? <blockquote key={index} className="border-l-2 border-primary/50 pl-2 text-xs italic text-muted-foreground">{item.source ? `${item.source}: ` : ""}{item.quote}{item.message_time && <span className="mt-1 block not-italic">{formatDateTime(item.message_time)}</span>}</blockquote> : null)}
               </div>
             )}
 

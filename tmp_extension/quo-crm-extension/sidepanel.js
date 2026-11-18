@@ -99,6 +99,9 @@ const EDITABLE_FIELDS = [
   "leadStatus",
   "terms",
   "quote",
+  "laborAmount",
+  "materialsIncluded",
+  "materialAmount",
   "scheduleRequirement"
 ];
 
@@ -799,6 +802,11 @@ async function handleFormInput(event) {
     [target.name]: value
   };
 
+  if (target.name === "materialsIncluded" && value === "no") {
+    payload.materialAmount = "";
+    if (form.materialAmount) form.materialAmount.value = "";
+  }
+
   if (target.name === "terms" && value !== "quoted") {
     payload.quote = "";
     if (form.quote) {
@@ -1212,6 +1220,9 @@ function renderDraft(draft) {
     "referenceName",
     "serviceDetails",
     "quote",
+    "laborAmount",
+    "materialsIncluded",
+    "materialAmount",
     "scheduleRequirement"
   ];
 
@@ -1275,7 +1286,20 @@ function renderDraft(draft) {
 
 function updateQuoteFieldVisibility(terms) {
   if (!quoteField) return;
-  quoteField.hidden = terms !== "quoted";
+  // Diagnostic/Service Call records one fee (saved as labor_amount, like the CRM);
+  // Parts/Materials and Quote Notes stay Quoted-only.
+  const diagnostic = terms === "diagnostic_service_call";
+  quoteField.hidden = terms !== "quoted" && !diagnostic;
+  const legend = document.getElementById("quote-labor-legend");
+  if (legend) legend.textContent = diagnostic ? "Diagnostic/Service Call Section" : "Labor Section";
+  const laborLabel = document.getElementById("quote-labor-label");
+  if (laborLabel) laborLabel.textContent = diagnostic ? "Diagnostic/Service Call Fee ($)" : "Customer Labor ($)";
+  const materialsSection = document.getElementById("quote-materials-section");
+  if (materialsSection) materialsSection.hidden = diagnostic;
+  const notesField = document.getElementById("quote-notes-field");
+  if (notesField) notesField.hidden = diagnostic;
+  const materialsField = document.getElementById("materials-amount-field");
+  if (materialsField) materialsField.hidden = terms !== "quoted" || currentDraft?.materialsIncluded !== "yes";
 }
 
 function queueAddressSuggestions(rawValue) {
@@ -1451,7 +1475,8 @@ function formatCapturedAt(isoString) {
       day: "numeric",
       year: "numeric",
       hour: "2-digit",
-      minute: "2-digit"
+      minute: "2-digit",
+      hour12: true
     });
   } catch (e) {
     return isoString;

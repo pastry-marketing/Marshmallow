@@ -1,30 +1,47 @@
 import { useEffect } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
+import { useSharedQuery } from "@/hooks/useCrossTab";
 import { useAuth } from "@/contexts/AuthContext";
 import { canAccessCxUpdates } from "@/lib/access";
-import { fetchUpdateCount, fetchUpdateQueue, type UpdateRequestKind, type UpdateRequestView } from "@/lib/cx-update-requests";
-import { realtimeBus } from "@/lib/realtime";
+import { fetchUpdateCounts, fetchUpdateQueue, fetchUpdateRequest, type UpdateRequestKind, type UpdateRequestView } from "@/lib/cx-update-requests";
+import { realtimeBus, relayTableToBus } from "@/lib/realtime";
+import { useCoalescedRefresh } from "@/hooks/useCoalescedRefresh";
+import { useCallback } from "react";
 
 export const UPDATE_QUERY_KEY = ["lead-update-requests"] as const;
 export const CX_QUERY_KEY = UPDATE_QUERY_KEY;
-export function useUpdateCount(kind: UpdateRequestKind, requested = true) {
-  const { user, role } = useAuth();
+function useUpdateRefresh(enabled: boolean) {
   const client = useQueryClient();
-  const enabled = requested && Boolean(user) && canAccessCxUpdates(role);
+  const refresh = useCoalescedRefresh(useCallback(async () => {
+    await client.invalidateQueries({ queryKey: UPDATE_QUERY_KEY }, { cancelRefetch: false });
+  }, [client]));
   useEffect(() => {
     if (!enabled) return;
-    const refresh = () => { void client.invalidateQueries({ queryKey: UPDATE_QUERY_KEY }); };
-    realtimeBus.addEventListener("lead_cx_update_requests", refresh);
-    return () => realtimeBus.removeEventListener("lead_cx_update_requests", refresh);
-  }, [client, enabled]);
-  return useQuery({ queryKey: [...UPDATE_QUERY_KEY, kind, "count", user?.id, role], queryFn: () => fetchUpdateCount(kind), enabled, refetchInterval: 15000 });
+    const listener = () => { void refresh(); };
+    realtimeBus.addEventListener("lead_cx_update_requests", listener);
+    // Subscribed only for roles that see CX/Tech updates, once per browser.
+    const release = relayTableToBus("lead_cx_update_requests");
+    return () => {
+      realtimeBus.removeEventListener("lead_cx_update_requests", listener);
+      release();
+    };
+  }, [refresh, enabled]);
 }
-export function useUpdateQueue(kind: UpdateRequestKind, view: UpdateRequestView, offset: number) {
+export function useUpdateCount(kind: UpdateRequestKind, requested = true) {
   const { user, role } = useAuth();
-  return useQuery({ queryKey: [...UPDATE_QUERY_KEY, kind, "queue", user?.id, role, view, offset],
-    queryFn: () => fetchUpdateQueue(kind, view, offset),
-    enabled: Boolean(user) && canAccessCxUpdates(role),
-    refetchInterval: 15000,
+  const enabled = requested && Boolean(user) && canAccessCxUpdates(role);
+  useUpdateRefresh(enabled);
+  return useSharedQuery({ queryKey: [...UPDATE_QUERY_KEY, "counts", user?.id, role], queryFn: fetchUpdateCounts,
+    select: (counts) => counts[kind], enabled, sharedPoll: { intervalMs: 15000, realtimeBacked: true } });
+}
+export function useUpdateQueue(kind: UpdateRequestKind, view: UpdateRequestView, offset: number, requestId?: string | null) {
+  const { user, role } = useAuth();
+  const enabled = Boolean(user) && canAccessCxUpdates(role);
+  useUpdateRefresh(enabled);
+  return useSharedQuery({ queryKey: [...UPDATE_QUERY_KEY, kind, "queue", user?.id, role, view, offset, requestId],
+    queryFn: () => requestId ? fetchUpdateRequest(kind, requestId) : fetchUpdateQueue(kind, view, offset),
+    enabled,
+    sharedPoll: { intervalMs: 15000, realtimeBacked: true },
   });
 }
 

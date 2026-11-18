@@ -26,6 +26,7 @@ import {
 } from "@/lib/quo-dashboard";
 import ImageLightbox from "@/components/leads/ImageLightbox";
 import { cn } from "@/lib/utils";
+import { latestChatTime, quickChatStatus, type QuickChatStatus } from "@/lib/quick-chat-status";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -42,6 +43,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import RenderEmoji from "@/components/common/RenderEmoji";
+import { isBackgroundPollPaused } from "@/lib/overload-guard";
 
 interface QuoPhoneTriggerProps {
   contactName: string;
@@ -50,6 +52,14 @@ interface QuoPhoneTriggerProps {
   children?: ReactNode;
   chatType?: "customer" | "tech";
   initialMessage?: string;
+  /** Pinned CRM-only review; never resolve another conversation as a fallback. */
+  conversationId?: string;
+  readOnly?: boolean;
+  defaultOpen?: boolean;
+  hideTrigger?: boolean;
+  /** CX / Tech Quick Chat buttons: show the last message time (whoever sent it). */
+  showLastMessageTime?: boolean;
+  onClose?: () => void;
 }
 
 function getPhoneKey(value: string | null | undefined) {
@@ -64,7 +74,7 @@ const QUICK_CHAT_UNREAD_REFRESH_DELAY = 200;
 const QUICK_CHAT_UNREAD_CHUNK_SIZE = 50;
 const quickChatUnreadWatchers = new Map<
   string,
-  { phone: string; chatType?: "customer" | "tech"; setState: (value: boolean) => void }
+  { phone: string; chatType?: "customer" | "tech"; setState: (value: QuickChatStatus) => void }
 >();
 let quickChatUnreadRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 // Unread status is polled rather than driven by a realtime subscription on the
@@ -75,6 +85,10 @@ const QUICK_CHAT_UNREAD_POLL_MS = 60000;
 // used only as a fallback while that channel is disconnected.
 const QUICK_CHAT_THREAD_POLL_MS = 5000;
 let quickChatUnreadPollTimer: ReturnType<typeof setInterval> | null = null;
+// A hidden tab skips the unread poll (it only drives the lead-card badge, not an
+// alert) and catches up once when the user returns, if a tick was skipped.
+let quickChatUnreadMissedWhileHidden = false;
+const isDocumentHidden = () => typeof document !== "undefined" && document.visibilityState === "hidden";
 let nextQuickChatUnreadWatcherId = 0;
 let nextQuickChatRealtimeChannelId = 0;
 
@@ -88,14 +102,7 @@ function scheduleQuickChatUnreadRefresh() {
 async function refreshQuickChatUnreadStatuses() {
   const watchers = Array.from(quickChatUnreadWatchers.values());
   if (watchers.length === 0) {
-    if (quickChatUnreadRefreshTimer) {
-      clearTimeout(quickChatUnreadRefreshTimer);
-      quickChatUnreadRefreshTimer = null;
-    }
-    if (quickChatUnreadPollTimer) {
-      clearInterval(quickChatUnreadPollTimer);
-      quickChatUnreadPollTimer = null;
-    }
+    stopQuickChatUnreadPolling();
     return;
   }
 
@@ -136,27 +143,42 @@ async function refreshQuickChatUnreadStatuses() {
   watchers.forEach((watcher) => {
     const normalized = normalizePhoneE164(watcher.phone) ?? getPhoneKey(watcher.phone);
     const rows = normalized ? rowsByPhone.get(normalized) ?? [] : [];
-    let match: UnreadConversation | null = null;
-    if (rows.length > 0) {
-      match =
-        rows.find((row) => {
-          const numRow = row.quo_phone_numbers;
-          const isTech = isTechLineNumber(numRow?.number || numRow?.display_number || numRow?.name);
-          return watcher.chatType === "tech" ? isTech : !isTech;
-        }) ?? rows[0];
-    }
-
-    const customerAt = match?.last_customer_message_at ? new Date(match.last_customer_message_at).getTime() : 0;
-    const agentAt = match?.last_agent_message_at ? new Date(match.last_agent_message_at).getTime() : 0;
-    watcher.setState(customerAt > 0 && customerAt > agentAt);
+    watcher.setState(quickChatStatus(rows.map((row) => {
+      const numRow = row.quo_phone_numbers;
+      return { ...row, isTechLine: isTechLineNumber(numRow?.number || numRow?.display_number || numRow?.name) };
+    }), watcher.chatType));
   });
+}
+
+function onQuickChatUnreadVisibilityChange() {
+  if (isDocumentHidden() || !quickChatUnreadMissedWhileHidden) return;
+  quickChatUnreadMissedWhileHidden = false;
+  scheduleQuickChatUnreadRefresh();
 }
 
 function ensureQuickChatUnreadPolling() {
   if (quickChatUnreadPollTimer) return;
   quickChatUnreadPollTimer = setInterval(() => {
-    scheduleQuickChatUnreadRefresh();
+    if (isDocumentHidden()) {
+      quickChatUnreadMissedWhileHidden = true;
+      return;
+    }
+    if (!isBackgroundPollPaused()) scheduleQuickChatUnreadRefresh();
   }, QUICK_CHAT_UNREAD_POLL_MS);
+  if (typeof document !== "undefined") document.addEventListener("visibilitychange", onQuickChatUnreadVisibilityChange);
+}
+
+function stopQuickChatUnreadPolling() {
+  if (quickChatUnreadRefreshTimer) {
+    clearTimeout(quickChatUnreadRefreshTimer);
+    quickChatUnreadRefreshTimer = null;
+  }
+  if (quickChatUnreadPollTimer) {
+    clearInterval(quickChatUnreadPollTimer);
+    quickChatUnreadPollTimer = null;
+  }
+  quickChatUnreadMissedWhileHidden = false;
+  if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onQuickChatUnreadVisibilityChange);
 }
 
 function mergeQuoMessages(messages: QuoChatMessage[]) {
@@ -172,10 +194,19 @@ export default function QuoPhoneTrigger({
   children,
   chatType,
   initialMessage,
+  conversationId,
+  readOnly = false,
+  defaultOpen = false,
+  hideTrigger = false,
+  showLastMessageTime = false,
+  onClose,
 }: QuoPhoneTriggerProps) {
   const auth = useAuth();
   const role = auth.role;
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   const trimmedPhone = phone?.trim() ?? "";
   const normalizedPhone = useMemo(() => normalizePhoneE164(trimmedPhone), [trimmedPhone]);
@@ -221,22 +252,34 @@ export default function QuoPhoneTrigger({
   const requiredAccessKey = chatType === "tech" ? "tech_quick_chat" : "quick_chat";
   // Quick Chat is available to admins and to any user an admin granted access to.
   const canUseQuickChat = isAdmin || auth.canAccess?.(requiredAccessKey) === true;
-  const [lastFromCustomer, setLastFromCustomer] = useState(false);
+  const [chatStatus, setChatStatus] = useState<QuickChatStatus>({ fromContact: false, lastMessageAt: null });
+  const lastFromCustomer = chatStatus.fromContact;
+  const closeChat = () => { setOpen(false); onCloseRef.current?.(); };
 
   useEffect(() => {
-    if (open && initialMessage) setMessageDraft(initialMessage);
-  }, [initialMessage, open]);
+    if (!open || !readOnly || !canUseQuickChat) return;
+    closeButtonRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); setOpen(false); onCloseRef.current?.(); }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [open, readOnly, canUseQuickChat]);
+
+  useEffect(() => {
+    if (open && initialMessage && !readOnly) setMessageDraft(initialMessage);
+  }, [initialMessage, open, readOnly]);
 
   // Shared unread-status subscriber: batch all visible numbers to avoid one subscription per trigger.
   useEffect(() => {
-    if (!canUseQuickChat || !normalizedPhone) return;
+    if (!canUseQuickChat || !normalizedPhone || hideTrigger) return;
 
     const watcherId = ++nextQuickChatUnreadWatcherId;
     const watcherKey = `${chatType ?? "customer"}:${normalizedPhone}:${watcherId}`;
     quickChatUnreadWatchers.set(watcherKey, {
       phone: normalizedPhone,
       chatType,
-      setState: setLastFromCustomer,
+      setState: setChatStatus,
     });
 
     ensureQuickChatUnreadPolling();
@@ -245,19 +288,12 @@ export default function QuoPhoneTrigger({
     return () => {
       quickChatUnreadWatchers.delete(watcherKey);
       if (quickChatUnreadWatchers.size === 0) {
-        if (quickChatUnreadRefreshTimer) {
-          clearTimeout(quickChatUnreadRefreshTimer);
-          quickChatUnreadRefreshTimer = null;
-        }
-        if (quickChatUnreadPollTimer) {
-          clearInterval(quickChatUnreadPollTimer);
-          quickChatUnreadPollTimer = null;
-        }
+        stopQuickChatUnreadPolling();
       } else {
         scheduleQuickChatUnreadRefresh();
       }
     };
-  }, [canUseQuickChat, normalizedPhone, chatType]);
+  }, [canUseQuickChat, normalizedPhone, chatType, hideTrigger]);
 
 
   useEffect(() => {
@@ -270,7 +306,7 @@ export default function QuoPhoneTrigger({
       setError(null);
 
       try {
-        const response = await fetchQuoChatThread(normalizedPhone, chatType);
+        const response = conversationId ? await fetchQuoChatThread(normalizedPhone, chatType, conversationId) : await fetchQuoChatThread(normalizedPhone, chatType);
         if (!active) return;
         if (!response) throw new Error("Quick Chat returned no thread data");
         setMessages((prev) => {
@@ -321,7 +357,7 @@ export default function QuoPhoneTrigger({
     const shouldPoll = () =>
       active && !isMinimizedRef.current && (typeof document === "undefined" || document.visibilityState === "visible");
     const pollId = setInterval(() => {
-      if (shouldPoll() && !threadRealtimeHealthyRef.current) void loadThread(false);
+      if (shouldPoll() && !threadRealtimeHealthyRef.current && !isBackgroundPollPaused()) void loadThread(false);
     }, QUICK_CHAT_THREAD_POLL_MS);
     const onVisible = () => {
       if (document.visibilityState === "visible" && shouldPoll() && !threadRealtimeHealthyRef.current) {
@@ -336,7 +372,7 @@ export default function QuoPhoneTrigger({
       clearInterval(pollId);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [canUseQuickChat, normalizedPhone, open, chatType]);
+  }, [canUseQuickChat, normalizedPhone, open, chatType, conversationId]);
 
   useEffect(() => {
     const databaseConversationId = conversationMeta?.databaseId;
@@ -401,6 +437,7 @@ export default function QuoPhoneTrigger({
   // gives Quo time to load in its background tab while the user finishes the
   // message, without adding any database traffic.
   useEffect(() => {
+    if (readOnly) return;
     if (!messageDraft.trim()) {
       preparedChatUrlRef.current = "";
       return;
@@ -422,9 +459,11 @@ export default function QuoPhoneTrigger({
     normalizedPhone,
     conversationMeta?.quoConversationId,
     conversationMeta?.quoPhoneNumberId,
+    readOnly,
   ]);
 
   const handleSend = async () => {
+    if (readOnly) return;
     if (!normalizedPhone) {
       setError("This number could not be normalized to E.164.");
       return;
@@ -477,6 +516,7 @@ export default function QuoPhoneTrigger({
   };
 
   const handleSchedule = async (scheduleTime: string) => {
+    if (readOnly) return;
     if (!normalizedPhone) {
       setError("This number could not be normalized to E.164.");
       return;
@@ -528,13 +568,15 @@ export default function QuoPhoneTrigger({
 
   const latestMessage = messages.length > 0 ? messages[messages.length - 1] : null;
   const showCustomerDot = latestMessage ? latestMessage.direction === "incoming" : lastFromCustomer;
+  // Last message in this chat, whoever sent it (the open thread can be newer than the batched read).
+  const lastMessageAt = latestChatTime(chatStatus.lastMessageAt, latestMessage?.createdAt);
 
   const currentStatusKey = normalizeQuoLeadStatus(conversationMeta?.status);
   const statusCfg = QUO_LEAD_STATUS_CONFIG[currentStatusKey];
 
   return (
     <>
-      <button
+      {!hideTrigger && <button
         type="button"
         onClick={(event) => {
           event.stopPropagation();
@@ -547,6 +589,15 @@ export default function QuoPhoneTrigger({
       >
         <Phone className="h-3.5 w-3.5 shrink-0" />
         <span>{triggerLabel}</span>
+        {showLastMessageTime && lastMessageAt && (
+          <time
+            dateTime={lastMessageAt}
+            title="Last message in this chat"
+            className="whitespace-nowrap text-[10px] font-normal opacity-80"
+          >
+            {formatLocalRelativeTime(lastMessageAt, true)}
+          </time>
+        )}
         {showCustomerDot && (
           <span
             className="relative ml-0.5 flex h-2 w-2 shrink-0"
@@ -556,13 +607,16 @@ export default function QuoPhoneTrigger({
             <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
           </span>
         )}
-      </button>
+      </button>}
 
       {open &&
         createPortal(
           <div className="pointer-events-none fixed inset-0 z-[70] overflow-hidden">
             <AnimatePresence>
               <motion.div
+                role={readOnly ? "dialog" : undefined}
+                aria-label={readOnly ? `Tech Quick Chat: ${contactName}` : undefined}
+                tabIndex={readOnly ? -1 : undefined}
                 drag
                 dragMomentum={false}
                 dragElastic={0.05}
@@ -573,8 +627,9 @@ export default function QuoPhoneTrigger({
                 className="pointer-events-auto absolute w-[92vw] max-w-[500px] rounded-2xl border border-border/80 bg-background/95 backdrop-blur-xl shadow-[0_25px_60px_-15px_rgba(0,0,0,0.35)] dark:shadow-[0_25px_60px_-15px_rgba(0,0,0,0.75)] flex flex-col z-[70] overflow-hidden"
                 style={{
                   bottom: "20px",
-                  right: chatType === "tech" ? "530px" : "20px",
+                  right: chatType === "tech" && !readOnly ? "530px" : "20px",
                   height: isMinimized ? "auto" : "540px",
+                  maxHeight: readOnly ? "calc(100dvh - 40px)" : undefined,
                 }}
               >
                 {/* Header Bar - Drag handle */}
@@ -635,7 +690,8 @@ export default function QuoPhoneTrigger({
                       type="button"
                       variant="ghost"
                       size="icon"
-                      onClick={() => setOpen(false)}
+                      ref={closeButtonRef}
+                      onClick={closeChat}
                       className="h-7 w-7 rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
                       title="Close Chat"
                     >
@@ -749,7 +805,7 @@ export default function QuoPhoneTrigger({
                     </div>
 
                     {/* Chat Input Footer */}
-                    <form
+                    {readOnly ? <p className="border-t p-3 text-xs text-muted-foreground">CRM saved conversation · read-only review. No Quo login is needed to read; opening this chat sends nothing.</p> : <form
                       onSubmit={(e) => {
                         e.preventDefault();
                         void handleSend();
@@ -878,7 +934,7 @@ export default function QuoPhoneTrigger({
                           </PopoverContent>
                         </Popover>
                       </div>
-                    </form>
+                    </form>}
                   </>
                 )}
               </motion.div>

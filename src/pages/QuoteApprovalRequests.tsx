@@ -7,6 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
+import { subscribeToTableChanges } from "@/lib/realtime";
 import {
   canReviewQuoteApproval,
   reviewQuoteApproval,
@@ -15,6 +16,7 @@ import {
 } from "@/lib/quote-approval-requests";
 import type { Lead } from "@/types";
 import { toast } from "sonner";
+import { useRealtimeAwareInterval, useRealtimeReconnect } from "@/lib/realtime-health";
 
 type QuoteApprovalRow = LeadQuoteApprovalRequest & { lead: Lead | null };
 
@@ -26,6 +28,9 @@ export default function QuoteApprovalRequests() {
   const [search, setSearch] = useState("");
   const [reviewingId, setReviewingId] = useState<string | null>(null);
 
+  // Requests arrive by realtime, so this read is a safety net: rare while realtime
+  // is healthy, every 30s when not, and once when it recovers.
+  const approvalPollMs = useRealtimeAwareInterval(30_000);
   const { data: requests = [], isLoading, refetch } = useQuery<QuoteApprovalRow[]>({
     queryKey: ["quote-approval-requests"],
     queryFn: async () => {
@@ -48,8 +53,9 @@ export default function QuoteApprovalRequests() {
         lead: leadsById.get(request.lead_id) ?? null,
       }));
     },
-    refetchInterval: 30_000,
+    refetchInterval: approvalPollMs,
   });
+  useRealtimeReconnect(() => { void refetch(); });
 
   const { data: profiles = {} } = useQuery({
     queryKey: ["profiles-map"],
@@ -71,21 +77,14 @@ export default function QuoteApprovalRequests() {
   });
 
   useEffect(() => {
-    const channel = supabase
-      .channel("quote-approval-page-realtime")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "lead_quote_approval_requests" },
-        () => {
-          queryClient.invalidateQueries({ queryKey: ["quote-approval-requests"] });
-          queryClient.invalidateQueries({ queryKey: ["pending-quote-approval-count"] });
-        },
-      )
-      .subscribe();
-
-    return () => {
-      void supabase.removeChannel(channel);
-    };
+    // Shared with the sidebar badge and the user's other tabs (one subscription per browser).
+    return subscribeToTableChanges(
+      "lead_quote_approval_requests",
+      () => {
+        queryClient.invalidateQueries({ queryKey: ["quote-approval-requests"] });
+        queryClient.invalidateQueries({ queryKey: ["pending-quote-approval-count"] });
+      },
+    );
   }, [queryClient]);
 
   const filteredRequests = useMemo(() => {

@@ -30,7 +30,9 @@ import {
   type SyncStatus,
 } from "@/lib/sheets-sync-health";
 import { premiumEase, silkySpring, smoothSpring } from "@/lib/motion";
+import { backgroundInterval } from "@/lib/overload-guard";
 
+import { formatDateTime } from "@/lib/date-time-format";
 const HEALTH_POLL_MS = 30_000;
 
 /** Ring and dot colours, keyed to theme tokens so both themes stay readable. */
@@ -85,7 +87,7 @@ export function SyncHealthCard({ autoSync = true }: { autoSync?: boolean }) {
   const healthQuery = useQuery({
     queryKey: ["google-sheets-sync-health"],
     queryFn: () => fetchSyncHealth(),
-    refetchInterval: HEALTH_POLL_MS,
+    refetchInterval: backgroundInterval(HEALTH_POLL_MS),
     refetchIntervalInBackground: false,
   });
 
@@ -349,7 +351,7 @@ export function SyncHealthCard({ autoSync = true }: { autoSync?: boolean }) {
                           {entry.action}
                         </Badge>
                         <span className="text-muted-foreground">
-                          {new Date(entry.occurred_at).toLocaleString()}
+                          {formatDateTime(entry.occurred_at)}
                         </span>
                         {entry.lead_id ? (
                           <span className="font-mono text-[10px] text-muted-foreground/70">

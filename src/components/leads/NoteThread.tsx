@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
-import { isOperatorRole } from "@/lib/access";
+import { canEditOthersProcessorNotes, canReactToProcessorNotes, isOperatorRole } from "@/lib/access";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -9,9 +9,13 @@ import { Send, Pencil, Check, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { buildTechEntry, countTechs, formatTechCount, nextTechNumber } from "@/lib/lead-techs";
 import { formatUSPhone } from "@/lib/phone";
-import { realtimeBus } from "@/lib/realtime";
+import { realtimeBus, relayTableToBus } from "@/lib/realtime";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
+import { useRealtimeAwareInterval, useRealtimeReconnect } from "@/lib/realtime-health";
+
+import { formatDateTime } from "@/lib/date-time-format";
+const NOTE_POLL_MS = 15000;
 
 interface LeadNote {
   id: string;
@@ -21,6 +25,12 @@ interface LeadNote {
   note_type: string;
   content: string;
   created_at: string;
+  /** Stamped by the database when the text changes (20261223000000). */
+  edited_by?: string | null;
+  edited_by_name?: string | null;
+  edited_at?: string | null;
+  /** Thumbs-up reactions (processor thread only; 20261228000000). */
+  lead_note_reactions?: { user_id: string }[] | null;
 }
 
 interface Props {
@@ -66,10 +76,10 @@ export default function NoteThread({ leadId, noteType, label, profiles = {}, onN
   const canViewThread = useMemo(() => {
     if (isAdmin) return true;
     if (noteType === "general") return true;
-    if (noteType === "cs") return isCS || isCsAdmin || isProcessor || isOpr;
+    if (noteType === "cs") return role !== "opr" && (isCS || isCsAdmin || isProcessor || isOpr);
     if (noteType === "opr") return isProcessor || isOpr;
     return isProcessor;
-  }, [isAdmin, isCS, isCsAdmin, isProcessor, isOpr, noteType]);
+  }, [isAdmin, isCS, isCsAdmin, isProcessor, isOpr, role, noteType]);
 
   const canWriteThread = useMemo(() => {
     if (isAdmin) return true;
@@ -85,14 +95,26 @@ export default function NoteThread({ leadId, noteType, label, profiles = {}, onN
       return;
     }
 
-    const { data } = await supabase
-      .from("lead_notes")
-      .select("*")
-      .eq("lead_id", leadId)
-      .eq("note_type", noteType)
-      .order("created_at", { ascending: true });
+    const baseQuery = () =>
+      supabase.from("lead_notes").select("*").eq("lead_id", leadId).eq("note_type", noteType);
+    let data: unknown[] | null = null;
+    if (noteType === "processor") {
+      // Reactions ride along in the same request (no N+1). If the reactions table is not
+      // there yet, fall back to plain notes so the thread never goes blank.
+      const withReactions = await supabase
+        .from("lead_notes")
+        .select("*, lead_note_reactions(user_id)")
+        .eq("lead_id", leadId)
+        .eq("note_type", noteType)
+        .order("created_at", { ascending: true });
+      data = withReactions.error ? null : (withReactions.data as unknown[] | null);
+    }
+    if (!data) {
+      const plain = await baseQuery().order("created_at", { ascending: true });
+      data = plain.data as unknown[] | null;
+    }
     if (data) {
-      const next = data as LeadNote[];
+      const next = data as unknown as LeadNote[];
       // Avoid re-rendering (and losing textarea focus/cursor) when nothing changed
       setNotes((prev) =>
         JSON.stringify(prev) === JSON.stringify(next) ? prev : next,
@@ -107,20 +129,24 @@ export default function NoteThread({ leadId, noteType, label, profiles = {}, onN
 
   // Keep the same visible-tab fallback, without polling an unread background tab.
   // Catch up immediately on return even if Realtime missed an event while asleep.
+  // Notes arrive by realtime, so the fallback is rare while realtime is healthy,
+  // every 15s when it is not, and catches up once when realtime recovers.
+  const pollMs = useRealtimeAwareInterval(NOTE_POLL_MS);
+  useRealtimeReconnect(() => { void fetchNotes(); }, canViewThread);
   useEffect(() => {
     if (!canViewThread) return;
 
     const refreshWhenVisible = () => {
       if (document.visibilityState === "visible") void fetchNotes();
     };
-    const intervalId = setInterval(refreshWhenVisible, 15000);
+    const intervalId = setInterval(refreshWhenVisible, pollMs);
     document.addEventListener("visibilitychange", refreshWhenVisible);
 
     return () => {
       clearInterval(intervalId);
       document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
-  }, [fetchNotes, canViewThread]);
+  }, [fetchNotes, canViewThread, pollMs]);
 
   // Realtime subscription for notes
   useEffect(() => {
@@ -140,16 +166,23 @@ export default function NoteThread({ leadId, noteType, label, profiles = {}, onN
     };
 
     realtimeBus.addEventListener("lead_notes", handleNotes);
+    // Notes are only subscribed while a thread is open (shared across tabs).
+    const releaseNotes = relayTableToBus("lead_notes");
 
     return () => {
       realtimeBus.removeEventListener("lead_notes", handleNotes);
+      releaseNotes();
     };
   }, [leadId, noteType, fetchNotes, canViewThread]);
 
   const profilesKey = JSON.stringify(profiles);
 
   useEffect(() => {
-    const missingUserIds = Array.from(new Set(notes.map((note) => note.user_id).filter(Boolean) as string[])).filter((userId) => !profiles[userId]);
+    const missingUserIds = Array.from(new Set(notes.flatMap((note) => [
+      note.user_id,
+      note.edited_by,
+      ...(note.lead_note_reactions ?? []).map((r) => r.user_id),
+    ]).filter(Boolean) as string[])).filter((userId) => !profiles[userId]);
 
     if (missingUserIds.length === 0) {
       setResolvedProfiles((prev) => (Object.keys(prev).length === 0 ? prev : {}));
@@ -281,18 +314,53 @@ export default function NoteThread({ leadId, noteType, label, profiles = {}, onN
 
   const handleSaveEdit = async () => {
     if (!editContent.trim() || !editingId) return;
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from("lead_notes")
       .update({ content: editContent.trim() })
-      .eq("id", editingId);
-    if (error) {
-      toast.error("Failed to update note");
+      .eq("id", editingId)
+      .select("id");
+    // RLS that refuses an UPDATE returns no rows rather than an error.
+    if (error || !data?.length) {
+      toast.error(error ? "Failed to update note" : "You don't have permission to edit this note");
     } else {
       setEditingId(null);
       setEditContent("");
       await fetchNotes();
       onNotesChanged?.();
     }
+  };
+
+  // One thumbs-up per person per note, toggled. Optimistic, with a per-note guard so a
+  // double click cannot insert twice; a refused write rolls back and says so.
+  const [reactingIds, setReactingIds] = useState<Set<string>>(new Set());
+  const canReact = noteType === "processor" && canReactToProcessorNotes(role);
+
+  const handleToggleThumbsUp = async (note: LeadNote) => {
+    if (!canReact || !user || note.user_id === user.id || reactingIds.has(note.id)) return;
+    const had = (note.lead_note_reactions ?? []).some((r) => r.user_id === user.id);
+    setReactingIds((prev) => new Set(prev).add(note.id));
+    const apply = (add: boolean) =>
+      setNotes((prev) =>
+        prev.map((n) => {
+          if (n.id !== note.id) return n;
+          const others = (n.lead_note_reactions ?? []).filter((r) => r.user_id !== user.id);
+          return { ...n, lead_note_reactions: add ? [...others, { user_id: user.id }] : others };
+        }),
+      );
+    apply(!had);
+    const { error } = had
+      ? await supabase.from("lead_note_reactions").delete().eq("note_id", note.id).eq("user_id", user.id)
+      : await supabase.from("lead_note_reactions").insert({ note_id: note.id, user_id: user.id });
+    // A duplicate (23505-style) insert means the thumbs-up is already there: not a failure.
+    if (error && !(error as { code?: string }).code?.startsWith("23505")) {
+      apply(had);
+      toast.error("Couldn't update your 👍");
+    }
+    setReactingIds((prev) => {
+      const next = new Set(prev);
+      next.delete(note.id);
+      return next;
+    });
   };
 
   const handleCancelEdit = () => {
@@ -307,9 +375,13 @@ export default function NoteThread({ leadId, noteType, label, profiles = {}, onN
     }
   };
 
+  // Others' processor notes are editable only with the Feature Access grant
+  // (content only - the database keeps author, lead and thread fixed).
+  const canEditOthers = noteType === "processor" && canEditOthersProcessorNotes(role, profile);
+
   const canEdit = (note: LeadNote) => {
     if (!canWriteThread) return false;
-    if (isAdmin) return true;
+    if (isAdmin || canEditOthers) return true;
     return note.user_id === user?.id;
   };
 
@@ -355,7 +427,7 @@ export default function NoteThread({ leadId, noteType, label, profiles = {}, onN
                       {getName(note)}
                     </span>
                     <span className="text-[9px] text-muted-foreground/40">
-                      {new Date(note.created_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                      {formatDateTime(note.created_at, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                     </span>
                     {canEdit(note) && !isEditing && (
                       <button
@@ -393,6 +465,13 @@ export default function NoteThread({ leadId, noteType, label, profiles = {}, onN
                       }`}
                     >
                       {note.content}
+                      {note.edited_at && (
+                        <span className={`mt-1 block text-[10px] italic ${isMe ? "text-primary-foreground/75" : "text-muted-foreground"}`}>
+                          Edited by {(note.edited_by ? profiles[note.edited_by] || resolvedProfiles[note.edited_by] : null) || note.edited_by_name || "Unknown"}
+                          {" · "}
+                          {formatDateTime(note.edited_at, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      )}
                       {canEdit(note) && (
                         <button
                           onClick={() => handleEdit(note)}
@@ -404,6 +483,36 @@ export default function NoteThread({ leadId, noteType, label, profiles = {}, onN
                       )}
                     </div>
                   )}
+                  {noteType === "processor" && !isEditing && (() => {
+                    const reactions = note.lead_note_reactions ?? [];
+                    const mine = reactions.some((r) => r.user_id === user?.id);
+                    const names = reactions
+                      .map((r) => profiles[r.user_id] || resolvedProfiles[r.user_id] || (r.user_id === user?.id ? "You" : "A processor"))
+                      .join(", ");
+                    if (!canReact || isMe) {
+                      return reactions.length > 0 ? (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-border/50 px-1.5 text-[11px] text-muted-foreground" title={names}>
+                          <span aria-hidden>👍</span>{reactions.length}
+                          <span className="sr-only">{`${reactions.length} thumbs up: ${names}`}</span>
+                        </span>
+                      ) : null;
+                    }
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => void handleToggleThumbsUp(note)}
+                        disabled={reactingIds.has(note.id)}
+                        aria-pressed={mine}
+                        aria-label={mine ? "Remove your thumbs up" : "Give a thumbs up"}
+                        title={names || "Thumbs up"}
+                        className={`inline-flex items-center gap-1 rounded-full border px-1.5 text-[11px] transition-colors ${
+                          mine ? "border-primary/40 bg-primary/10 text-foreground" : "border-border/50 text-muted-foreground opacity-60 hover:opacity-100"
+                        }`}
+                      >
+                        <span aria-hidden>👍</span>{reactions.length > 0 ? reactions.length : null}
+                      </button>
+                    );
+                  })()}
                 </div>
               </motion.div>
             );

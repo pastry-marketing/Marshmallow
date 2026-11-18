@@ -1,0 +1,98 @@
+import { useCallback, useEffect, useRef } from "react";
+import { useNavigate } from "react-router-dom";
+import { toast } from "sonner";
+import { useAuth } from "@/contexts/AuthContext";
+import { canAccessNotifications } from "@/lib/access";
+import { fetchWorkflowAlerts, openInboxNotification } from "@/lib/workflow-inbox";
+import { claimWorkflowAlert, claimWorkflowChime, loadAlertCursor, pollAlertDelay, saveAlertCursor } from "@/lib/workflow-alerts";
+import { isRealtimeHealthy, onRealtimeReconnected, subscribeRealtimeHealth } from "@/lib/realtime-health";
+import { playAssignmentSound } from "@/lib/notification-sound";
+import { subscribeToNotifications, realtimeBus } from "@/lib/realtime";
+import { useCoalescedRefresh } from "@/hooks/useCoalescedRefresh";
+import { useCrossTabOwner } from "@/hooks/useCrossTab";
+import { customerSaidFromAlert, isNewScheduleAlert, requestScheduleRequirementPrompt } from "@/lib/schedule-requirement";
+import WorkflowToast from "./WorkflowToast";
+import { activeNotificationSince, laterOf } from "@/lib/notification-window";
+import { backgroundDelay, subscribeOverload } from "@/lib/overload-guard";
+
+export default function WorkflowAlerts() {
+  const { user, role } = useAuth();
+  const navigate = useNavigate();
+  const baseline = useRef(new Date().toISOString());
+  const displayed = useRef(new Set<string>());
+  const failedPolls = useRef(0);
+  const refresh = useCoalescedRefresh(useCallback(async (isCurrent: () => boolean) => {
+    if (!user || !canAccessNotifications(role)) return;
+    try {
+      // Never toast anything older than the 3-day window or the account itself.
+      const after = laterOf(loadAlertCursor(user.id, baseline.current), activeNotificationSince(user.created_at));
+      const until = new Date().toISOString();
+      let offset = 0;
+      let more = true;
+      while (more && isCurrent()) {
+        const result = await fetchWorkflowAlerts(after, until, offset);
+        if (!isCurrent()) return;
+        // Oldest first within a page, and each event has its own persistent claim.
+        for (const notification of [...result.rows].reverse()) {
+          if (!isCurrent()) return;
+          await claimWorkflowAlert(user.id, notification, () => {
+            const toastId = `workflow:${notification.id}`;
+            displayed.current.add(toastId);
+            const dismiss = () => { toast.dismiss(toastId); displayed.current.delete(toastId); };
+            if (claimWorkflowChime(user.id)) playAssignmentSound();
+            // AI set "Customer Require New Schedule": CS and CS Admin also get the
+            // schedule requirement prompt for that lead (shown once, like the alert).
+            if (isNewScheduleAlert(notification) && (role === "customer_service" || role === "cs_admin") && notification.job_id) {
+              requestScheduleRequirementPrompt({ key: `alert:${notification.id}`, source: "ai", jobId: notification.job_id, customerSaid: customerSaidFromAlert(notification.message) });
+            }
+            toast.custom(() => <WorkflowToast notification={notification} onDismiss={dismiss} onOpen={() => {
+              void openInboxNotification(notification).then((href) => {
+                if (!isCurrent()) return;
+                if (href) navigate(href);
+                dismiss();
+                realtimeBus.dispatchEvent(new Event("workflow-inbox-read"));
+              }).catch((error: unknown) => { if (isCurrent()) toast.error(error instanceof Error ? error.message : "Could not open notification"); });
+            }} />, { id: toastId, duration: Infinity, position: "bottom-right" });
+          }, isCurrent);
+        }
+        offset += result.rows.length;
+        more = result.rows.length > 0 && offset < result.total;
+      }
+      if (isCurrent()) saveAlertCursor(user.id, until);
+      failedPolls.current = 0;
+    } catch (error) {
+      // A degraded backend backs off instead of being polled every 15 seconds.
+      failedPolls.current += 1;
+      throw error;
+    }
+  }, [user, role, navigate]));
+  // The alert cursor and per-event claims are shared through localStorage, so a
+  // single tab per browser (the one the user is looking at, when possible) reads
+  // alerts for all of them; it keeps polling while hidden so alerts still arrive.
+  const eligible = Boolean(user) && canAccessNotifications(role);
+  const readsHere = useCrossTabOwner(eligible && user ? `workflow-alerts:${user.id}:${role}` : null);
+  useEffect(() => {
+    if (!user || !canAccessNotifications(role) || !readsHere) return;
+    void refresh();
+    const unsubscribe = subscribeToNotifications(user.id, () => { void refresh(); });
+    let timer = 0;
+    const poll = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => { void refresh().then(poll); }, backgroundDelay(pollAlertDelay(failedPolls.current, isRealtimeHealthy())));
+    };
+    poll();
+    // Reschedule at once when realtime health changes (fast again the moment it
+    // drops), and catch up on anything missed when it recovers.
+    const stopHealth = subscribeRealtimeHealth(poll);
+    const stopOverload = subscribeOverload(poll);
+    const stopReconnect = onRealtimeReconnected(() => { void refresh(); });
+    return () => { unsubscribe(); stopHealth(); stopOverload(); stopReconnect(); window.clearTimeout(timer); };
+  }, [user, role, refresh, readsHere]);
+  // Shown toasts stay up when another tab takes over reading (they were claimed
+  // here and are not shown again); they close when the user or role changes.
+  useEffect(() => {
+    const activeToasts = displayed.current;
+    return () => { activeToasts.forEach((id) => toast.dismiss(id)); activeToasts.clear(); };
+  }, [user, role]);
+  return null;
+}

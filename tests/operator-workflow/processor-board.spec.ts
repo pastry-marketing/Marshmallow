@@ -3,13 +3,30 @@ import { readFileSync } from "node:fs";
 const version = JSON.parse(readFileSync(new URL("../../public/extension-release.json", import.meta.url), "utf8")).version;
 const USER = "00000000-0000-4000-8000-000000000001";
 const LEAD = "00000000-0000-4000-8000-000000000002";
-async function isolatedBoard(page: Page, role = "processor", fail = false, options: { setup?: boolean; retryOnce?: boolean } = {}) {
+const openFilters = async (page: Page) => page.getByText("Filters & tracking", { exact: true }).first().click();
+async function isolatedBoard(page: Page, role = "processor", fail = false, options: { setup?: boolean; retryOnce?: boolean; showcase?: boolean; auto?: boolean; noEvidence?: boolean; context?: boolean; callEvidence?: boolean; noNewUpdate?: boolean; chatGrant?: boolean; failChat?: boolean; location?: "full" | "partial" | "missing"; missingChat?: boolean } = {}) {
   const actions: Record<string, unknown>[] = [];
   let reviewed = false;
   let failures = 0;
   const row = () => ({ id: LEAD, job_id: "JOB-1001", customer_name: "John Sample", customer_phone: "4155550101", service_type: "Garage Door Service", address: "10 Sample St Apt 2", city: "Miami", state: "FL", tech_name: "Alex Technician", tech_number: "4155550199", scheduled_date: "2026-01-01", scheduled_time_start: "10:00:00", scheduled_time_end: "12:00:00", customer_schedule_requirements: "Afternoons only; call before arrival", terms: "Quoted", status: "scheduled", updated_at: "2026-01-01T00:00:00Z", checked_at: reviewed ? new Date().toISOString() : null,
-    assessment: reviewed ? { status: "payment_pending", evidence: [{ signal: "completed", quote: "JOB-1001 is completed and ready for payment.", message_id: "m1", message_time: "2026-01-01T18:00:00Z", sender: "customer" }], messages_reviewed: 534, matched_messages: 4, source: "Quo current history", history_complete: true, timezone: "America/New_York", checked_at: new Date().toISOString(), summary: "Job-specific source quotes verified.", lead_updated_at: "2026-01-01T00:00:00Z" } : null,
-    ...(options.setup ? { tech_number: null, scheduled_date: null, scheduled_time_start: null } : {}) });
+    assessment: reviewed ? { status: options.noEvidence ? "take_job_update" : "payment_pending", evidence: options.noEvidence ? [] : [{ signal: "completed", quote: options.context ? "I finished the installation and cleaned up." : "JOB-1001 is completed and ready for payment.", message_id: "m1", message_time: "2026-01-01T18:00:00Z", sender: "customer", identity_basis: options.context ? "thread_context" : undefined, ...(options.callEvidence ? { source: "call_transcript", call_id: "ACsynthetic", source_message_id: "saved-call-transcript" } : {}) }], ...(options.callEvidence ? { call_transcripts: { state: "available", checked: 1, missing: 0, skipped_segments: 0 }, ai_scope: "all_job_linked_messages" } : {}), ...(options.noNewUpdate ? { job_messages_changed: false, ai_extraction_reused: true } : {}), matched_technician_messages: options.noEvidence || options.context ? 0 : 1, context_technician_messages: options.context ? 2 : 0, unattributed_technician_messages: options.noEvidence ? 8 : 0, extraction_messages: options.noEvidence ? 0 : 1, messages_reviewed: 534, matched_messages: 4, source: "Quo current history", history_complete: true, ai_used: !options.noEvidence, chat_fingerprint: options.auto ? "verified-setup" : undefined, timezone: "America/New_York", checked_at: new Date().toISOString(), summary: options.noEvidence ? "No verified technician outcome for this job. Generic replies were not assigned to the nearest dispatch." : "Job-specific source quotes verified.", lead_updated_at: "2026-01-01T00:00:00Z" } : null,
+    chat_setup: options.auto ? { state: "ready", code: "ready", message: "Exact saved technician chat verified", fingerprint: "verified-setup", conversation_id: "00000000-0000-4000-8000-000000000010", last_message_at: null, source: "verified_mirror", chat_url: "https://my.quo.com/inbox/PN12345678/c/CN12345678" } : undefined,
+    ...(options.setup ? { tech_number: null, scheduled_date: null, scheduled_time_start: null } : {}),
+    ...(options.location ? { city: null, state: null, address: options.location === "full" ? "House 10, Sample Street" : null, half_address: options.location === "partial" ? "House 12, Side Street" : null } : {}),
+    ...(options.missingChat ? { chat_setup: { state: "blocked", code: "missing_chat_link", message: "Chat not found — verify the assigned technician number and saved conversation.", fingerprint: "blocked", conversation_id: null, last_message_at: null, source: null } } : {}) });
+  const rows = () => {
+    const base = row();
+    if (!options.showcase) return [base];
+    const checkedAt = new Date().toISOString();
+    const assessment = (status: string) => ({ status, evidence: [], messages_reviewed: 12, matched_messages: 2, source: "Quo current history", history_complete: true, timezone: "America/New_York", checked_at: checkedAt, summary: "Synthetic job-specific review.", lead_updated_at: base.updated_at });
+    return [base,
+      { ...base, id: "00000000-0000-4000-8000-000000000003", job_id: "JOB-1002", customer_name: "Jordan Example", service_type: "Pool service", status: "job_in_progress" },
+      { ...base, id: "00000000-0000-4000-8000-000000000004", job_id: "JOB-1003", customer_name: "Casey Sample", service_type: "Roof repair", status: "payment_pending" },
+      { ...base, id: "00000000-0000-4000-8000-000000000005", job_id: "JOB-1004", customer_name: "Morgan Demo", service_type: "Handyman service", checked_at: checkedAt, assessment: assessment("send_dose") },
+      { ...base, id: "00000000-0000-4000-8000-000000000006", job_id: "JOB-1005", customer_name: "Riley Example", service_type: "Carpet cleaning", tech_number: null },
+      { ...base, id: "00000000-0000-4000-8000-000000000007", job_id: "JOB-1006", customer_name: "Taylor Sample", service_type: "Sofa cleaning", checked_at: checkedAt, assessment: assessment("unavailable") },
+    ];
+  };
   await page.context().routeWebSocket(/supabase\.co/, (socket) => socket.close());
   await page.context().route("**/*", async (route) => {
     const url = new URL(route.request().url());
@@ -17,7 +34,7 @@ async function isolatedBoard(page: Page, role = "processor", fail = false, optio
     if (!url.hostname.endsWith("supabase.co")) return route.abort();
     if (url.pathname.endsWith("/functions/v1/processor-board")) {
       const body = route.request().postDataJSON(); actions.push(body);
-      if (body.action === "list") return route.fulfill({ json: { rows: [row()], total: 1, observed_at: new Date().toISOString(), timezone: body.timezone } });
+      if (body.action === "list") { const jobs = rows(); return route.fulfill({ json: { rows: jobs, total: jobs.length, observed_at: new Date().toISOString(), timezone: body.timezone, monitoring: options.auto ? { ai_configured: true, current_history_configured: true, evidence_policy: 7 } : undefined } }); }
       if (fail || (options.retryOnce && failures++ === 0)) return route.fulfill({ status: 503, json: { error: "Synthetic AI provider unavailable. Previous review retained.", code: "ai_provider", retryable: true } });
       reviewed = true; return route.fulfill({ json: { result: row().assessment, cached: false } });
     }
@@ -26,6 +43,12 @@ async function isolatedBoard(page: Page, role = "processor", fail = false, optio
     if (url.pathname.startsWith("/auth/v1/")) data = { id: USER, email: "synthetic@example.invalid" };
     else if (endpoint === "profiles" || endpoint === "profiles_public") data = [{ id: USER, full_name: "Synthetic User", email: "synthetic@example.invalid" }];
     else if (endpoint === "user_roles") data = [{ user_id: USER, role }];
+    else if (endpoint === "navigation_permissions") data = [{ user_id: USER, nav_section: "tech_quick_chat", allowed: options.chatGrant !== false }];
+    else if (endpoint === "quo_conversations") data = [{ id: "00000000-0000-4000-8000-000000000010", quo_conversation_id: "CN12345678", customer_number: "+14155550199", customer_name: "Alex Technician", number_id: "tech-line", quo_phone_numbers: { id: "tech-line", quo_phone_number_id: "PN12345678", number: "+17475887812", display_number: "(747) 588-7812", name: "Technician Communications", label: null } }];
+    else if (endpoint === "quo_messages") {
+      if (options.failChat) return route.fulfill({ status: 403, json: { message: "Synthetic saved CRM chat unavailable", code: "42501" } });
+      data = [{ id: "stored-tech-reply", sender: "customer", text: "Synthetic technician update from the saved CRM conversation.", direction: "incoming", status: "received", conversation_id: "00000000-0000-4000-8000-000000000010", message_time: "2026-01-01T18:00:00Z", recipients: [], media: [], raw_payload: null }];
+    }
     else if (endpoint === "get_lead_copy_access") data = false;
     else if (url.pathname.endsWith("/functions/v1/cx-update-requests")) data = { count: 0 };
     else if (url.pathname.endsWith("/functions/v1/marshmallow-copilot")) data = { allowed: false, aiEnabled: false, role, timezone: "UTC", sections: [] };
@@ -42,11 +65,190 @@ async function isolatedBoard(page: Page, role = "processor", fail = false, optio
   }, { id: USER, version });
   return actions;
 }
+for (const width of [1440, 390]) {
+  test(`call evidence and unchanged-result wording stay clear without extra action tags at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    const actions = await isolatedBoard(page, "processor", false, { callEvidence: true, noNewUpdate: true });
+    await page.goto("/processor-board");
+    await openFilters(page);
+    await page.getByLabel("Confirm schedule timezone").check();
+    await expect(page.getByText("Includes other saved statuses, not just Scheduled.", { exact: false })).toBeVisible();
+    await expect(page.getByLabel("Filter this page").getByRole("option")).toHaveCount(7);
+    await expect(page.getByLabel("Filter this page")).not.toContainText("No action yet");
+    await page.getByRole("button", { name: "Refresh AI · this page" }).click();
+    await expect(page.getByText("AI · call transcript: job completed · no new update.", { exact: true }).filter({ visible: true })).toHaveCount(1);
+    await page.getByRole("button", { name: "Refresh AI · this page" }).click();
+    await expect.poll(() => actions.filter((a) => a.action === "assess").length).toBe(2);
+    await page.getByRole("button", { name: "Review JOB-1001" }).filter({ visible: true }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toContainText("Payment Pending");
+    await expect(dialog).toContainText("The verified evidence below still supports this action");
+    await expect(dialog.getByLabel("Call transcript coverage")).toContainText("1 saved call transcript checked");
+    await expect(dialog).toContainText("Call transcript · Technician");
+    await expect(dialog).not.toContainText("No action yet");
+    await expect(dialog).not.toContainText("AI · previous review");
+    await expect.poll(async () => Math.round((await dialog.boundingBox())!.x)).toBe(width - Math.min(width, 512));
+    await expect.poll(async () => Math.round((await dialog.boundingBox())!.y)).toBe(0);
+    const checkBox = await dialog.getByRole("button", { name: "Check this job" }).boundingBox();
+    expect(checkBox!.y).toBeGreaterThanOrEqual(0);
+    expect(checkBox!.y + checkBox!.height).toBeLessThanOrEqual(900);
+    await page.screenshot({ path: test.info().outputPath(`processor-call-evidence-${width}.png`), fullPage: false });
+  });
+  test(`action filters explain their job-specific rules on hover and focus at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    const actions = await isolatedBoard(page, "processor", false, { showcase: true });
+    await page.goto("/processor-board");
+    await openFilters(page);
+    const help = [
+      ["Take Job Update", "appointment date and start time have passed"],
+      ["Job In Progress", "explicitly reported arriving, starting or working"],
+      ["Payment Pending", "completing this specific appointment"],
+      ["Send Dose", "at least 60 minutes"],
+    ];
+    for (const [label, explanation] of help) {
+      const button = page.getByLabel("Action counts on this page").getByRole("button", { name: new RegExp(label) });
+      await button.hover();
+      const tooltip = page.getByRole("tooltip", { name: new RegExp(`^${label}`) });
+      await expect(tooltip).toContainText(explanation);
+      await expect(tooltip).toContainText("not a saved status change");
+      const box = await tooltip.locator("..").boundingBox();
+      expect(box!.x).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+      await page.keyboard.press("Escape");
+      await expect(tooltip).toHaveCount(0);
+      await page.mouse.move(0, 0);
+      await button.focus();
+      await expect(tooltip).toContainText(explanation);
+      if (label === "Send Dose") await page.screenshot({ path: test.info().outputPath(`processor-action-help-${width}.png`), fullPage: true });
+      await page.keyboard.press("Escape");
+      await button.blur();
+      await expect(page.getByRole("tooltip")).toHaveCount(0);
+    }
+    expect(actions.filter((action) => action.action === "assess")).toHaveLength(0);
+  });
+  test(`new chat activity refreshes only the focused job and keeps no-outcome schedules clear at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    const actions = await isolatedBoard(page, "processor", false, { auto: true });
+    const ids = [LEAD, "00000000-0000-4000-8000-000000000003"];
+    let revision = 0;
+    let activityAt = new Date().toISOString();
+    const results = new Map<string, object>();
+    const fixture = (id: string, index: number) => ({ id, job_id: `LIVE-${index + 1}`, customer_name: `Synthetic Customer ${index + 1}`, customer_phone: null, service_type: "Repair", address: "10 Sample St", city: "Synthetic", state: "FL", half_address: null, tech_name: "Alex Technician", tech_number: "4155550199", scheduled_date: index ? "2099-01-01" : "2026-01-01", scheduled_time_start: "10:00:00", scheduled_time_end: "12:00:00", customer_schedule_requirements: null, terms: "Quoted", status: "scheduled", updated_at: "2026-01-01T00:00:00Z", checked_at: results.has(id) ? new Date().toISOString() : null, assessment: results.get(id) ?? null,
+      chat_setup: { state: "ready", code: "ready", message: "Verified", fingerprint: `live-${revision}`, conversation_id: "00000000-0000-4000-8000-000000000010", last_message_at: revision ? activityAt : null, source: "verified_mirror" } });
+    await page.route("**/functions/v1/processor-board", async (route) => {
+      const body = route.request().postDataJSON(); actions.push(body);
+      if (body.action === "list") return route.fulfill({ json: { rows: ids.map(fixture), total: 2, observed_at: new Date().toISOString(), timezone: "America/New_York", monitoring: { ai_configured: true, current_history_configured: true, evidence_policy: 8 } } });
+      const result = { status: revision ? "payment_pending" : "needs_review", ...(revision ? {} : { review_reason: "no_verified_update" }), evidence: revision ? [{ signal: "completed", message_id: "new-message", message_time: activityAt, sender: "customer", quote: "LIVE-1 is completed and ready for payment." }] : [], messages_reviewed: 12 + revision, matched_messages: 2, matched_technician_messages: 1, context_technician_messages: 0, ai_used: true, source: "Quo current history", history_complete: true, chat_fingerprint: `live-${revision}`, timezone: "America/New_York", lead_updated_at: "2026-01-01T00:00:00Z", checked_at: new Date().toISOString(), summary: revision ? "Synthetic completion verified" : "Synthetic chatter, no work outcome verified" };
+      results.set(body.leadId, result);
+      return route.fulfill({ json: { result, cached: false } });
+    });
+    await page.clock.install();
+    await page.goto("/processor-board");
+    await page.getByLabel("Confirm schedule timezone").check();
+    await expect.poll(() => actions.filter((a) => a.action === "assess").length).toBe(2);
+    await expect(page.getByRole("progressbar")).toHaveCount(0);
+    await expect(page.getByText("Appointment upcoming", { exact: true }).filter({ visible: true })).toHaveCount(1);
+    await expect(page.locator('.processor-status[data-processor-status="scheduled"]')).toHaveCount(0);
+    await expect(page.getByText("Reply found", { exact: false }).filter({ visible: true })).toHaveCount(1);
+    await expect(page.getByText("Appointment has not started", { exact: false }).filter({ visible: true })).toHaveCount(1);
+    await page.getByRole("button", { name: "Review LIVE-1" }).filter({ visible: true }).click();
+    const readsBefore = actions.filter((a) => a.action === "list").length;
+    revision = 1;
+    activityAt = new Date().toISOString();
+    await page.clock.fastForward(30_001);
+    await expect.poll(() => actions.filter((a) => a.action === "list").length).toBeGreaterThan(readsBefore);
+    await expect.poll(() => actions.filter((a) => a.action === "assess").length).toBe(3);
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toContainText("Payment Pending");
+    await expect(dialog).toContainText("LIVE-1 is completed and ready for payment.");
+    await expect(dialog.getByRole("button", { name: "Check this job" })).toBeEnabled();
+    expect(actions.filter((a) => a.action === "assess").map((a) => a.leadId)).toEqual([ids[0], ids[1], ids[0]]);
+    await page.clock.fastForward(30_001);
+    await expect(dialog.getByRole("button", { name: "Check this job" })).toBeEnabled();
+    expect(actions.filter((a) => a.action === "assess")).toHaveLength(3);
+  });
+}
+for (const width of [1440, 390]) test(`single-job review takes priority and keeps actions visible at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 800 });
+  const actions = await isolatedBoard(page, "processor", false, { auto: true });
+  const ids = [LEAD, "00000000-0000-4000-8000-000000000003", "00000000-0000-4000-8000-000000000004"];
+  const results = new Map<string, object>();
+  const finish = new Map<string, () => void>();
+  const fixture = (id: string, index: number) => ({ id, job_id: `FOCUS-${index + 1}`, customer_name: `Synthetic Customer ${index + 1}`, customer_phone: null, service_type: "Synthetic Repair", address: "House 10, Sample Street", half_address: null, city: null, state: null, tech_name: "Alex Technician", tech_number: "4155550199", scheduled_date: "2026-01-01", scheduled_time_start: "10:00:00", scheduled_time_end: "12:00:00", customer_schedule_requirements: "Call before arrival", terms: "Quoted", status: "scheduled", updated_at: "2026-01-01T00:00:00Z", checked_at: results.has(id) ? new Date().toISOString() : null, assessment: results.get(id) ?? null,
+    chat_setup: { state: "ready", code: "ready", message: "Verified", fingerprint: "focus-chat", conversation_id: "00000000-0000-4000-8000-000000000010", last_message_at: null, source: "verified_mirror" } });
+  await page.route("**/functions/v1/processor-board", async (route) => {
+    const body = route.request().postDataJSON(); actions.push(body);
+    if (body.action === "list") return route.fulfill({ json: { rows: ids.map(fixture), total: ids.length, observed_at: new Date().toISOString(), timezone: "America/New_York", monitoring: { ai_configured: true, current_history_configured: true, evidence_policy: 7 } } });
+    await new Promise<void>((resolve) => { finish.set(body.leadId, resolve); });
+    const result = { status: "take_job_update", evidence: [], messages_reviewed: 7, matched_messages: 1, matched_technician_messages: 0, context_technician_messages: 0, ai_used: false, source: "Quo current history", history_complete: true, chat_fingerprint: "focus-chat", timezone: "America/New_York", lead_updated_at: "2026-01-01T00:00:00Z", checked_at: new Date().toISOString(), summary: "Synthetic detailed explanation. ".repeat(50) };
+    results.set(body.leadId, result);
+    return route.fulfill({ json: { result, cached: false } });
+  });
+  await page.goto("/processor-board");
+  await page.getByLabel("Confirm schedule timezone").check();
+  await expect.poll(() => finish.has(ids[0])).toBe(true);
+  await page.getByRole("button", { name: "Review FOCUS-2" }).filter({ visible: true }).click();
+  const dialog = page.getByRole("dialog");
+  const check = dialog.getByRole("button", { name: "Check this job" });
+  await expect(check).toHaveAttribute("aria-busy", "false");
+  await check.click();
+  await expect(dialog.getByLabel("This job check")).toContainText("Waiting for #FOCUS-1");
+  finish.get(ids[0])!();
+  await expect.poll(() => finish.has(ids[1])).toBe(true);
+  await expect(check).toHaveAttribute("aria-busy", "true");
+  expect(actions.filter((a) => a.action === "assess").map((a) => a.leadId)).toEqual(ids.slice(0, 2));
+  finish.get(ids[1])!();
+  await expect(check).toBeEnabled();
+  const details = dialog.getByText("Check details & safety", { exact: true });
+  await expect(dialog.getByText("Synthetic detailed explanation.", { exact: false })).not.toBeVisible();
+  await details.click();
+  const content = dialog.getByRole("region", { name: "Job review content" });
+  await content.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+  const checkBox = await check.boundingBox();
+  expect(checkBox!.y).toBeGreaterThanOrEqual(0);
+  expect(checkBox!.y + checkBox!.height).toBeLessThanOrEqual(800);
+  await expect(dialog.getByRole("button", { name: "Open technician chat in CRM" })).toBeVisible();
+  expect(actions.filter((a) => a.action === "assess").map((a) => a.leadId)).toEqual(ids.slice(0, 2));
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+  await page.screenshot({ path: test.info().outputPath(`processor-job-focus-${width}.png`), fullPage: true });
+  await dialog.getByRole("button", { name: "Close", exact: true }).click();
+  await expect.poll(() => finish.has(ids[2])).toBe(true);
+  finish.get(ids[2])!();
+  await expect(page.getByRole("progressbar")).toHaveCount(0);
+});
+for (const width of [1440, 390]) {
+  for (const location of ["full", "partial", "missing"] as const) test(`saved ${location} customer location is honest at ${width}px without extra requests`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 1000 });
+    const actions = await isolatedBoard(page, "processor", false, { location });
+    await page.goto("/processor-board");
+    const expected = location === "full" ? "House 10, Sample Street" : location === "partial" ? "House 12, Side Street" : "Job location missing";
+    const text = page.getByText(expected, { exact: true }).filter({ visible: true });
+    await expect(text).toBeVisible();
+    if (location !== "missing") await expect(page.getByText("Job location missing")).toHaveCount(0);
+    expect(actions.filter((a) => a.action === "assess")).toHaveLength(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+    await page.screenshot({ path: test.info().outputPath(`processor-location-${location}-${width}.png`), fullPage: true });
+  });
+  test(`missing assigned technician chat has readable remediation at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 1000 });
+    const actions = await isolatedBoard(page, "processor", false, { auto: true, missingChat: true });
+    await page.goto("/processor-board");
+    await page.getByLabel("Confirm schedule timezone").check();
+    const note = page.getByText("Chat not found — verify the assigned technician number and saved conversation.", { exact: true }).filter({ visible: true });
+    await expect(note).toBeVisible();
+    expect(await note.evaluate((element) => element.scrollHeight <= element.clientHeight + 1)).toBe(true);
+    await expect(page.getByRole("button", { name: "Refresh AI · this page" })).toBeDisabled();
+    expect(actions.filter((a) => a.action === "assess")).toHaveLength(0);
+  });
+}
 for (const width of [1440, 390]) test(`Processor reviews the correct job and evidence at ${width}px without changing lead status`, async ({ page }) => {
   await page.setViewportSize({ width, height: 1000 });
   const actions = await isolatedBoard(page); await page.goto("/processor-board");
+  await page.getByLabel("Confirm schedule timezone").check();
   await expect(page.getByRole("heading", { name: "Processor Board", exact: true })).toBeVisible();
   await expect(page.getByText("Alex Technician").filter({ visible: true })).toBeVisible();
+  await expect(page.getByText("Not checked yet").filter({ visible: true }).first()).toBeVisible();
+  expect(actions.filter((a) => a.action === "assess")).toHaveLength(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
   await page.screenshot({ path: test.info().outputPath(`processor-board-${width}.png`), fullPage: true });
   await page.getByRole("button", { name: "Review JOB-1001" }).filter({ visible: true }).click();
@@ -55,20 +257,169 @@ for (const width of [1440, 390]) test(`Processor reviews the correct job and evi
   await page.getByRole("button", { name: "Check this job" }).click();
   await expect(page.getByRole("dialog")).toContainText("JOB-1001 is completed and ready for payment.");
   await expect(page.getByRole("dialog")).toContainText("Saved lead status: Scheduled");
-  await expect(page.getByRole("dialog")).toContainText("534 conversation events examined");
+  await expect(page.getByRole("dialog")).toContainText("534 messages examined");
   expect(actions.filter((a) => a.action === "assess")).toEqual([{ action: "assess", leadId: LEAD, timezone: "America/New_York" }]);
+  await page.keyboard.press("Escape");
+  await expect(page.locator("[role=dialog]")).toHaveCount(0);
+  const status = width >= 768 ? page.locator("tbody tr").first().locator("td").nth(3) : page.locator("article").filter({ visible: true }).first();
+  const checked = status.locator("time");
+  await expect(checked).toHaveText("Checked just now");
+  await expect(checked).toHaveAttribute("title", /.+/);
+  await expect(status.getByLabel("Last checked date and time")).toContainText(new Date().getUTCFullYear().toString());
+  await expect(status).toContainText("AI · technician message: job completed.");
+  const checkedBox = await checked.boundingBox();
+  const statusBox = await status.getByText("Payment Pending", { exact: true }).boundingBox();
+  expect(checkedBox!.y + checkedBox!.height).toBeLessThanOrEqual(statusBox!.y);
+  await page.screenshot({ path: test.info().outputPath(`processor-checked-${width}.png`), fullPage: true });
 });
 test("failed provider review remains explicit and does not advance the job", async ({ page }) => {
   await isolatedBoard(page, "processor", true); await page.goto("/processor-board");
+  await page.getByLabel("Confirm schedule timezone").check();
   await page.getByRole("button", { name: "Review JOB-1001" }).filter({ visible: true }).click();
   await page.getByRole("button", { name: "Check this job" }).click();
   await expect(page.getByRole("alert")).toContainText("Synthetic AI provider unavailable");
   await expect(page.getByRole("dialog")).toContainText("Saved lead status: Scheduled");
 });
+for (const width of [1440, 390]) test(`automatic tracking requires timezone confirmation and preserves saved status at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 1000 });
+  const actions = await isolatedBoard(page, "processor", false, { auto: true });
+  await page.goto("/processor-board");
+  await openFilters(page);
+  await expect(page.getByLabel("Automatic AI tracking")).toBeChecked();
+  await expect(page.getByLabel("Confirm schedule timezone")).not.toBeChecked();
+  await expect(page.getByLabel("Automatic tracking state")).toContainText("Tracking not started");
+  await page.getByRole("button", { name: "Refresh AI · this page" }).click();
+  await expect(page.getByRole("status")).toContainText("Confirm the saved schedules' timezone below once");
+  await expect(page.getByLabel("Confirm schedule timezone")).toBeFocused();
+  expect(actions.filter((action) => action.action === "assess")).toHaveLength(0);
+  await page.getByLabel("Confirm schedule timezone").check();
+  await expect(page.getByRole("status")).toContainText("Automatic check: 1 reviewed");
+  await expect(page.getByLabel("Evidence quality on this page")).toContainText("1 with a technician reply tied to the job");
+  await expect(page.getByText("AI · technician message: job completed.").filter({ visible: true })).toBeVisible();
+  await expect(page.getByText("Saved: Scheduled", { exact: false }).filter({ visible: true })).toBeVisible();
+  await page.getByRole("button", { name: "Refresh AI · this page" }).click();
+  await expect(page.getByRole("status")).toContainText("1 reviewed · 0 failed · 0 skipped");
+  expect(actions.filter((action) => action.action === "assess")).toHaveLength(2);
+  await page.reload();
+  await expect(page.getByLabel("Confirm schedule timezone")).toBeChecked();
+  await expect(page.getByLabel("Automatic tracking state")).toContainText("Tracking enabled");
+  expect(actions.filter((action) => action.action === "assess")).toHaveLength(2);
+  await page.screenshot({ path: test.info().outputPath(`processor-auto-${width}.png`), fullPage: true });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+});
+for (const width of [1440, 390]) test(`zero-verified-outcome checks stay explicit with a safe manual chat path at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 1000 });
+  const actions = await isolatedBoard(page, "processor", false, { auto: true, noEvidence: true });
+  await page.goto("/processor-board");
+  await expect(page.getByLabel("Automatic tracking state")).toContainText("Tracking not started");
+  await page.getByRole("button", { name: "Refresh AI · this page" }).click();
+  expect(actions.filter((action) => action.action === "assess")).toHaveLength(0);
+  await page.getByRole("button", { name: "Review JOB-1001" }).filter({ visible: true }).click();
+  await expect(page.getByRole("button", { name: "Check this job" })).toBeDisabled();
+  await expect(page.getByRole("dialog")).toContainText("Close this review and confirm the schedule timezone");
+  await page.keyboard.press("Escape");
+  await page.getByLabel("Confirm schedule timezone").check();
+  await expect(page.getByRole("status")).toContainText("1 reviewed · 0 failed");
+  await expect(page.getByRole("status")).toContainText("0 with a technician reply tied to the job · 1 without a tied technician reply");
+  await openFilters(page);
+  await expect(page.getByLabel("Evidence quality on this page")).toContainText("0 with a technician reply tied to the job");
+  await page.getByRole("button", { name: "Review JOB-1001" }).filter({ visible: true }).click();
+  await expect(page.getByRole("dialog")).toContainText(/8 technician replies were not tied to this job/);
+  await expect(page.getByRole("dialog")).toContainText("No verified technician outcome for this job");
+  await expect(page.getByRole("button", { name: "Open technician chat in CRM" })).toBeEnabled();
+  await expect(page.getByRole("link", { name: "Open verified technician chat" })).toHaveCount(0);
+  expect(actions.filter(a => a.action === "assess")).toHaveLength(1);
+  await page.keyboard.press("Escape");
+  await page.screenshot({ path: test.info().outputPath(`processor-attribution-${width}.png`), fullPage: true });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+});
+test("automatic tracking can be paused before starting and setup problems never invoke the provider", async ({ page }) => {
+  const actions = await isolatedBoard(page, "processor", false, { auto: true, setup: true });
+  await page.goto("/processor-board");
+  await openFilters(page);
+  await page.getByLabel("Automatic AI tracking").uncheck();
+  await page.getByLabel("Confirm schedule timezone").check();
+  await expect(page.getByText("Paused. Manual checks remain available.")).toBeVisible();
+  await page.getByLabel("Automatic AI tracking").check();
+  await expect(page.getByText(/Save a valid technician number/).filter({ visible: true })).toBeVisible();
+  expect(actions.filter((action) => action.action === "assess")).toHaveLength(0);
+});
+for (const width of [1440, 390]) test(`opens the exact stored technician chat inside CRM without login, navigation or AI at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 1000 });
+  const actions = await isolatedBoard(page, "processor", false, { auto: true });
+  await page.goto("/processor-board");
+  await page.getByRole("button", { name: "Review JOB-1001" }).filter({ visible: true }).click();
+  await page.getByRole("button", { name: "Open technician chat in CRM" }).click();
+  const chat = page.getByRole("dialog", { name: "Tech Quick Chat: Alex Technician" });
+  await expect(chat).toContainText("Synthetic technician update from the saved CRM conversation.");
+  await expect(chat).toContainText("No Quo login is needed");
+  await expect(chat.getByRole("textbox")).toHaveCount(0);
+  await expect(chat.getByRole("button", { name: "Send", exact: true })).toHaveCount(0);
+  expect(page.context().pages()).toHaveLength(1);
+  await expect(page).toHaveURL(/\/processor-board$/);
+  const box = await chat.boundingBox();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+  expect(actions.filter((action) => action.action === "assess")).toHaveLength(0);
+  await page.screenshot({ path: test.info().outputPath(`processor-crm-chat-${width}.png`), fullPage: true });
+  await chat.getByRole("button", { name: "Close Chat" }).click();
+  await expect(page.getByRole("button", { name: "Open technician chat in CRM" })).toBeVisible();
+});
+test("does not bypass Tech Quick Chat permission or navigate externally on a failed CRM read", async ({ page }) => {
+  const actions = await isolatedBoard(page, "processor", false, { auto: true, chatGrant: false });
+  await page.goto("/processor-board");
+  await page.getByRole("button", { name: "Review JOB-1001" }).filter({ visible: true }).click();
+  await expect(page.getByRole("button", { name: "Open technician chat in CRM" })).toBeDisabled();
+  expect(actions.filter((action) => action.action === "assess")).toHaveLength(0);
+  expect(page.context().pages()).toHaveLength(1);
+});
+test("reports a failed mirrored chat read without opening Quo or claiming an empty chat", async ({ page }) => {
+  await isolatedBoard(page, "processor", false, { auto: true, failChat: true });
+  await page.goto("/processor-board");
+  await page.getByRole("button", { name: "Review JOB-1001" }).filter({ visible: true }).click();
+  await page.getByRole("button", { name: "Open technician chat in CRM" }).click();
+  const chat = page.getByRole("dialog", { name: "Tech Quick Chat: Alex Technician" });
+  await expect(chat).toContainText("Synthetic saved CRM chat unavailable");
+  await expect(chat).not.toContainText("No messages in this chat yet");
+  expect(page.context().pages()).toHaveLength(1);
+});
+for (const width of [1440, 390]) test(`context-attributed completion is labelled for manual verification at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 1000 });
+  const actions = await isolatedBoard(page, "processor", false, { auto: true, context: true });
+  await page.goto("/processor-board");
+  await page.getByLabel("Confirm schedule timezone").check();
+  await expect(page.getByRole("status")).toContainText("1 with a technician reply tied to the job");
+  await expect(page.getByText("AI · technician message: job completed · context match—verify in chat.").filter({ visible: true })).toBeVisible();
+  await page.getByRole("button", { name: "Review JOB-1001" }).filter({ visible: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("2 follow this job's saved dispatch");
+  await expect(dialog).toContainText("This reply does not name the job");
+  await expect(dialog).toContainText("Quo current history · saved Tech Quick Chat");
+  await expect(dialog).toContainText("Saved lead status: Scheduled");
+  await expect(dialog).toContainText("I finished the installation and cleaned up.");
+  expect(actions.filter((action) => action.action === "assess")).toHaveLength(1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+});
+for (const width of [1440, 390]) test(`saved-status filtering preserves the board and makes no AI calls at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 1000 });
+  const actions = await isolatedBoard(page, "processor", false, { showcase: true });
+  await page.goto("/processor-board");
+  await openFilters(page);
+  await page.getByLabel("Saved status on this page").selectOption("job_in_progress");
+  const job = page.getByRole("button", { name: "Review JOB-1002" }).filter({ visible: true });
+  await expect(job).toBeVisible();
+  await expect(page.getByRole("button", { name: "Review JOB-1001" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Clear filter" }).click();
+  await expect(page.getByRole("button", { name: "Review JOB-1001" }).filter({ visible: true })).toBeVisible();
+  expect(actions.filter((action) => action.action === "list")).toHaveLength(1);
+  expect(actions.filter((action) => action.action === "assess")).toHaveLength(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+});
 for (const width of [1440, 390]) {
   test(`incomplete jobs show a repair path without an AI request at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 1000 });
     const actions = await isolatedBoard(page, "processor", false, { setup: true }); await page.goto("/processor-board");
+    await openFilters(page);
     await page.getByLabel("Filter this page").selectOption("setup");
     await expect(page.getByRole("button", { name: "Refresh AI · this page" })).toBeDisabled();
     await expect(page.getByText(/Save a valid technician number/).filter({ visible: true })).toBeVisible();
@@ -79,9 +430,11 @@ for (const width of [1440, 390]) {
     expect(actions.filter((action) => action.action === "assess")).toEqual([]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
   });
-  test(`failed-only retry recovers and fresh page reviews avoid repeat requests at ${width}px`, async ({ page }) => {
+  test(`failed-only retry recovers and explicit page reviews recheck fresh history at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 1000 });
     const actions = await isolatedBoard(page, "processor", false, { retryOnce: true }); await page.goto("/processor-board");
+    await openFilters(page);
+    await page.getByLabel("Confirm schedule timezone").check();
     await page.getByRole("button", { name: "Refresh AI · this page" }).click();
     await expect(page.getByRole("button", { name: "Retry failed · 1" })).toBeEnabled();
     await expect(page.getByText(/Synthetic AI provider unavailable/).filter({ visible: true })).toBeVisible();
@@ -89,8 +442,8 @@ for (const width of [1440, 390]) {
     await expect(page.getByRole("status")).toContainText("1 reviewed · 0 failed");
     await expect(page.getByRole("button", { name: /Retry failed/ })).toHaveCount(0);
     await page.getByRole("button", { name: "Refresh AI · this page" }).click();
-    await expect(page.getByRole("status")).toContainText("0 reviewed · 0 failed · 1 skipped");
-    expect(actions.filter((action) => action.action === "assess")).toHaveLength(2);
+    await expect(page.getByRole("status")).toContainText("1 reviewed · 0 failed · 0 skipped");
+    expect(actions.filter((action) => action.action === "assess")).toHaveLength(3);
     await page.screenshot({ path: test.info().outputPath(`processor-recovery-${width}.png`), fullPage: true });
   });
 }
@@ -99,4 +452,125 @@ for (const role of ["opr", "opr_admin", "customer_service", "cs_admin"]) test(`$
   await expect(page).toHaveURL(/\/leads$/);
   await expect(page.getByRole("link", { name: "Processor Board" })).toHaveCount(0);
   expect(actions).toEqual([]);
+});
+
+for (const theme of ["dark", "light"] as const) {
+  test(`colored queue supports keyboard filtering, reduced motion and ${theme} theme`, async ({ page }) => {
+    await page.setViewportSize({ width: 1366, height: 1000 });
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.addInitScript((theme) => localStorage.setItem("theme", theme), theme);
+    const actions = await isolatedBoard(page, "processor", false, { showcase: true });
+    await page.goto("/processor-board");
+    await page.getByLabel("Confirm schedule timezone").check();
+    await openFilters(page);
+    await expect(page.locator("html")).toHaveClass(new RegExp(theme));
+    await expect(page.locator("tbody tr")).toHaveCount(6);
+    const accents = await page.locator("tbody tr td:first-child").evaluateAll((cells) => cells.map((cell) => getComputedStyle(cell).boxShadow));
+    expect(new Set(accents).size).toBe(5);
+    // Setup failures and unavailable checks are one Needs Review action, not
+    // two hidden status/color categories. The four actions remain distinct.
+    expect(accents[4]).toBe(accents[5]);
+    expect(new Set(accents.slice(0, 4)).size).toBe(4);
+    expect(accents.slice(0, 4)).not.toContain(accents[4]);
+    const panel = page.getByRole("region", { name: "Scheduled jobs" });
+    await expect(panel).toHaveCSS("opacity", "1");
+    await expect(panel).toHaveCSS("transform", "none");
+    const filter = page.getByRole("button", { name: /Payment Pending/ });
+    await filter.hover();
+    await expect(filter).toHaveCSS("transform", "none");
+    await expect(filter).toHaveCSS("transition-duration", "0s");
+    await filter.focus(); await page.keyboard.press("Enter");
+    await expect(filter).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator("tbody tr")).toHaveCount(1);
+    await expect(page.locator("tbody")).toContainText("Casey Sample");
+    await page.getByRole("button", { name: "Clear filter" }).click();
+    await expect(page.locator("tbody tr")).toHaveCount(6);
+    await page.screenshot({ path: test.info().outputPath(`processor-colors-${theme}.png`), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 900 });
+    await expect(page.getByText("Casey Sample").filter({ visible: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+    await page.screenshot({ path: test.info().outputPath(`processor-colors-mobile-${theme}.png`), fullPage: true });
+    await page.getByRole("button", { name: "Review JOB-1001" }).filter({ visible: true }).click();
+    await expect(page.getByRole("dialog")).toHaveCSS("animation-name", "none");
+    await expect(page.getByRole("dialog")).toHaveCSS("transition-duration", "0s");
+    await expect(page.getByRole("dialog")).toContainText("Saved lead status: Scheduled");
+    expect(actions.filter((action) => action.action === "assess")).toEqual([]);
+    expect(actions.filter((action) => action.action === "list")).toHaveLength(1);
+  });
+}
+
+test("standard motion adds a restrained hover lift without new data or provider requests", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  const actions = await isolatedBoard(page);
+  await page.goto("/processor-board");
+  await openFilters(page);
+  const filter = page.getByRole("button", { name: /Take Job Update/ });
+  await filter.hover();
+  await expect(filter).toHaveCSS("transform", /matrix/);
+  await page.mouse.move(0, 0);
+  await expect(filter).toHaveCSS("transform", "none");
+  expect(actions.filter((action) => action.action === "assess")).toEqual([]);
+  expect(actions.filter((action) => action.action === "list")).toHaveLength(1);
+});
+
+test("five-row viewport scrolls to later jobs with sticky headings and an adjustable visible-row limit", async ({ page }) => {
+  await page.setViewportSize({ width: 1366, height: 1000 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const actions = await isolatedBoard(page, "processor", false, { showcase: true });
+  await page.goto("/processor-board");
+  await openFilters(page);
+  await page.getByLabel("Confirm schedule timezone").check();
+  const viewport = page.getByRole("region", { name: "Scrollable jobs" }).filter({ visible: true });
+  await expect(page.getByLabel("Rows in view")).toHaveValue("5");
+  await expect(page.locator("tbody tr")).toHaveCount(6);
+  const bounds = await viewport.boundingBox();
+  const fifth = await page.locator("tbody tr").nth(4).boundingBox();
+  const sixth = await page.locator("tbody tr").nth(5).boundingBox();
+  expect(fifth!.y + fifth!.height).toBeLessThanOrEqual(bounds!.y + bounds!.height + 1);
+  expect(sixth!.y).toBeGreaterThanOrEqual(bounds!.y + bounds!.height - 1);
+  await viewport.focus(); await page.keyboard.press("End");
+  await expect.poll(() => viewport.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  const header = await page.locator("thead").boundingBox();
+  const scrolledBounds = await viewport.boundingBox();
+  expect(Math.abs(header!.y - scrolledBounds!.y)).toBeLessThan(3);
+  await page.getByRole("button", { name: "Review JOB-1006" }).filter({ visible: true }).click();
+  await expect(page.getByRole("dialog")).toContainText("Taylor Sample");
+  await page.keyboard.press("Escape");
+  await expect(page.locator("[role=dialog]")).toHaveCount(0);
+  await page.getByLabel("Rows in view").selectOption("10");
+  expect(await viewport.evaluate((element) => element.scrollTop)).toBe(0);
+  expect(await viewport.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(2);
+  await page.getByLabel("Rows in view").selectOption("5");
+  await page.getByLabel("Filter this page").selectOption("setup");
+  await expect(page.locator("tbody tr")).toHaveCount(1);
+  await expect(page.locator("tbody")).toContainText("Riley Example");
+  expect(await viewport.evaluate((element) => element.scrollTop)).toBe(0);
+  await page.getByRole("button", { name: "Clear filter" }).click();
+  await expect(page.locator("tbody tr")).toHaveCount(6);
+  await page.screenshot({ path: test.info().outputPath("processor-five-rows.png"), fullPage: true });
+  expect(actions.filter((action) => action.action === "list")).toHaveLength(1);
+  expect(actions.filter((action) => action.action === "assess")).toHaveLength(0);
+});
+
+test("mobile jobs remain reachable inside a bounded keyboard-accessible scroll region", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const actions = await isolatedBoard(page, "processor", false, { showcase: true });
+  await page.goto("/processor-board");
+  const viewport = page.getByRole("region", { name: "Scrollable jobs" }).filter({ visible: true });
+  await openFilters(page);
+  await expect(viewport).toHaveAttribute("tabindex", "0");
+  expect(await viewport.evaluate((element) => element.clientHeight)).toBeLessThanOrEqual(630);
+  await viewport.focus(); await page.keyboard.press("End");
+  await expect.poll(() => viewport.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await page.getByRole("button", { name: "Review JOB-1006" }).filter({ visible: true }).click();
+  await expect(page.getByRole("dialog")).toContainText("Taylor Sample");
+  await page.keyboard.press("Escape");
+  await expect(page.locator("[role=dialog]")).toHaveCount(0);
+  await page.getByLabel("Rows in view").selectOption("25");
+  expect(await viewport.evaluate((element) => element.scrollTop)).toBe(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+  await page.screenshot({ path: test.info().outputPath("processor-scroll-mobile.png"), fullPage: true });
+  expect(actions.filter((action) => action.action === "list")).toHaveLength(1);
+  expect(actions.filter((action) => action.action === "assess")).toHaveLength(0);
 });

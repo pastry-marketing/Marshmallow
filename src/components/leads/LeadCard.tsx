@@ -1,4 +1,7 @@
-import { useState, useEffect, useRef } from "react";
+import ScheduleRequirementDialog from "./ScheduleRequirementDialog";
+import { promptsForNewSchedule, requestScheduleRequirementPrompt } from "@/lib/schedule-requirement";
+import { redactLeadForOperator } from "@/lib/operator-privacy";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { memo } from "react";
 import { differenceInCalendarDays, startOfDay, isBefore } from "date-fns";
@@ -34,6 +37,7 @@ import {
   Clipboard,
   ExternalLink,
   UserPlus,
+  DollarSign,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -54,7 +58,6 @@ import LeadShareDialog from "./LeadShareDialog";
 import CancelledStatusBadge from "./CancelledStatusBadge";
 import NearbyUrgentLeads from "./NearbyUrgentLeads";
 import type { ProximityLead } from "@/lib/lead-proximity";
-import MultiDateTimePicker from "./MultiDateTimePicker";
 import {
   Dialog,
   DialogContent,
@@ -77,14 +80,16 @@ import {
   createCancellationRequest,
   fetchPendingCancellationRequest,
 } from "@/lib/cancellation-requests";
-import { createPaymentRequest } from "@/lib/payment-requests";
+import { createPaymentRequest, PAYMENT_REQUEST_TYPE_LABELS, type PaymentRequestType } from "@/lib/payment-requests";
 import type { LeadCancellationRequest } from "@/types";
 import { optimizeImageForUpload } from "@/lib/image-upload";
 import { getAssignableLeadTags, isQuotationMaster } from "@/lib/lead-tags";
 import { countTechs } from "@/lib/lead-techs";
-import { dispatchLeadStatusNotification } from "@/lib/lead-notifications";
 import { saveLeadTag } from "@/lib/lead-tag-actions";
+import AiTagBadge from "@/components/leads/AiTagBadge";
 import { canSeeTechDetails, isOperatorRole } from "@/lib/access";
+import { operatorQuoteSummary } from "@/lib/operator-quote";
+import { customerQuoteSummary } from "@/lib/quote-breakdown";
 import BookingDateTimeDialog, { formatBookingCompact, isBookingExpired } from "./BookingDateTimeDialog";
 import AssignLeadToOperatorDialog from "./AssignLeadToOperatorDialog";
 import ActivateCustomerNoteDialog from "./ActivateCustomerNoteDialog";
@@ -96,6 +101,7 @@ import LeadCoverageBadge from "./LeadCoverageBadge";
 import UrgentAICheckDialog from "./UrgentAICheckDialog";
 import { showsUrgentCheck } from "@/lib/urgent-verification";
 
+import { formatDateTime as formatDateTime12h } from "@/lib/date-time-format";
 interface LeadCardProps {
   lead: Lead;
   profiles: Record<string, string>;
@@ -135,7 +141,7 @@ const NOTE_INDICATOR_START_AT = new Date("2026-06-12T12:01:26.000Z").getTime();
 function formatDateTime(value?: string | null) {
   if (!value) return null;
   try {
-    return new Date(value).toLocaleString();
+    return formatDateTime12h(value);
   } catch {
     return value;
   }
@@ -696,7 +702,7 @@ function NoteCollapsible({
 }
 
 function LeadCard({
-  lead,
+  lead: incomingLead,
   profiles,
   onRefresh,
   photoUrls,
@@ -713,6 +719,9 @@ function LeadCard({
   quoteApproval = null,
 }: LeadCardProps) {
   const { user, role, profile, canAccess } = useAuth();
+  // Operators see City, ST ZIP only: no address, customer number or technician.
+  // The original phone is used only for the attention/blink signals, never shown.
+  const lead = useMemo(() => redactLeadForOperator(incomingLead, role), [incomingLead, role]);
   const navigate = useNavigate();
   const [changingStatus, setChangingStatus] = useState(false);
   const [csOpen, setCsOpen] = useState(false);
@@ -726,8 +735,6 @@ function LeadCard({
   // Schedule requirement is editable straight from the card, so CS does not have to open the
   // lead just to add a date.
   const [scheduleOpen, setScheduleOpen] = useState(false);
-  const [scheduleDraft, setScheduleDraft] = useState("");
-  const [savingSchedule, setSavingSchedule] = useState(false);
   const [deleting, setDeleting] = useState(false);
   // Service details shows on the card surface, clamped until the user expands it.
   const [serviceDetailsExpanded, setServiceDetailsExpanded] = useState(false);
@@ -742,6 +749,7 @@ function LeadCard({
   const [oprPinned, setOprPinned] = useState(false);
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [paymentLoading, setPaymentLoading] = useState(false);
+  const [paymentRequestType, setPaymentRequestType] = useState<PaymentRequestType>("paid");
   const [cancelRequestOpen, setCancelRequestOpen] = useState(false);
   const [cancelRequestLoading, setCancelRequestLoading] = useState(false);
   const [cancelReviewLoading, setCancelReviewLoading] = useState(false);
@@ -776,7 +784,7 @@ function LeadCard({
   const reduceMotion = useReducedMotion();
   const { needsAttention: quoNeedsAttention } = useQuoAttention({
     leadId: lead.id,
-    phone: lead.customer_phone,
+    phone: incomingLead.customer_phone,
     status: lead.status,
     updatedAt: lead.updated_at,
   });
@@ -908,7 +916,7 @@ function LeadCard({
     currentTag === "waiting_schedule_confirmation" ||
     currentTag === "booked";
 
-  const { isFromCustomer } = useIsLastMessageFromCustomer(lead.customer_phone, hasScheduleTag);
+  const { isFromCustomer } = useIsLastMessageFromCustomer(incomingLead.customer_phone, hasScheduleTag);
   const needsScheduleBlink = hasScheduleTag && isFromCustomer;
   const isActivateCustomer = lead.status === "activate_customer";
   const isQuoteUpdatedForMe = lead.status === "quote_updated" && (role === "cs_admin" || lead.quote_requested_by === user?.id);
@@ -930,6 +938,19 @@ function LeadCard({
       icon: Phone,
       wrap: false,
     },
+    // Plain Operators never see the free-text quote, the full labor amount, or the
+    // For You/For Us split — only the terms, half the labor, and materials if any.
+    ...(role === "opr"
+      ? [
+        {
+          key: "operator_quote",
+          label: "Quote",
+          value: operatorQuoteSummary(lead) ?? "",
+          icon: DollarSign,
+          wrap: true,
+        },
+        ]
+      : [{ key: "customer_quote", label: "Quote", value: customerQuoteSummary(lead) ?? "", icon: DollarSign, wrap: true }]),
     // CS Admins never see technician details.
     ...(canSeeTechDetails(role)
       ? [
@@ -1037,7 +1058,8 @@ function LeadCard({
       return;
     }
 
-    if (newStatus === "paid") {
+    if (newStatus === "paid" || newStatus === "partial_paid") {
+      setPaymentRequestType(newStatus);
       setPaymentOpen(true);
       return;
     }
@@ -1120,15 +1142,7 @@ function LeadCard({
 
     onRefresh();
     
-    // Job in Progress reminders stay owned by the detail views, same as before.
-    if (newStatus === "urgent_job" || newStatus === "need_tech" || newStatus === "quote_updated") {
-      await dispatchLeadStatusNotification({
-        leadId: lead.id,
-        leadName: lead.customer_name,
-        status: newStatus,
-        quoteRequestedBy: lead.quote_requested_by,
-      });
-    }
+    // Status alerts are sent by the database when the status changes (leads_notify_change).
 
     onRefresh();
   };
@@ -1185,24 +1199,27 @@ function LeadCard({
     if (!user) return;
     setPaymentLoading(true);
     try {
+      const typeLabel = PAYMENT_REQUEST_TYPE_LABELS[paymentRequestType];
+
       if (isProcessor) {
-        // Processor -> send Paid approval request (Admin must approve)
+        // Processor -> send a request (Admin must approve) for either outcome
         await createPaymentRequest({
           lead,
           userId: user.id,
           userName: profile?.full_name || user.email || "Unknown user",
           requesterRole: role,
+          requestType: paymentRequestType,
           amount,
           comment,
           screenshotFile,
         });
-        toast.success("Paid request sent for Admin approval");
+        toast.success(`${typeLabel} request sent for Admin approval`);
         setPaymentOpen(false);
         onRefresh();
         return;
       }
 
-      // Admin (or any other bypass) -> mark Paid directly
+      // Admin (or any other bypass) -> mark Paid/Partial Paid directly
       let screenshotUrl: string | null = null;
       if (screenshotFile) {
         const optimizedScreenshot = await optimizeImageForUpload(screenshotFile);
@@ -1220,7 +1237,7 @@ function LeadCard({
       const { error } = await supabase
         .from("leads")
         .update({
-          status: "paid" as LeadStatus,
+          status: paymentRequestType as LeadStatus,
           amount,
           payment_amount: amount,
           payment_screenshot_url: screenshotUrl,
@@ -1242,10 +1259,10 @@ function LeadCard({
         job_id: lead.job_id,
         amount,
         status_from: lead.status,
-        status_to: "paid",
+        status_to: paymentRequestType,
       });
 
-      toast.success("Payment recorded & status updated to Paid");
+      toast.success(`Payment recorded & status updated to ${typeLabel}`);
       setPaymentOpen(false);
       onRefresh();
     } catch (err: unknown) {
@@ -1286,32 +1303,7 @@ function LeadCard({
   };
 
   const openScheduleDialog = () => {
-    setScheduleDraft(lead.customer_schedule_requirements || "");
     setScheduleOpen(true);
-  };
-
-  const saveScheduleRequirement = async () => {
-    setSavingSchedule(true);
-    const next = scheduleDraft.trim() ? scheduleDraft.trim() : null;
-    const patch = {
-      customer_schedule_requirements: next,
-      last_edited_by: user?.id,
-      last_edited_by_name: profile?.full_name || user?.email || "Unknown user",
-      updated_at: new Date().toISOString(),
-      last_edited_at: new Date().toISOString(),
-    };
-
-    const { error } = await supabase.from("leads").update(patch as never).eq("id", lead.id);
-    setSavingSchedule(false);
-
-    if (error) {
-      toast.error("Failed to update schedule requirement");
-      return;
-    }
-
-    toast.success(next ? "Schedule requirement updated" : "Schedule requirement cleared");
-    setScheduleOpen(false);
-    onRefresh();
   };
 
   const persistCsTag = async (
@@ -1325,7 +1317,14 @@ function LeadCard({
       editor: { id: user?.id, name: profile?.full_name || user?.email || "Unknown user" },
       options: opts,
     });
-    if (ok) onRefresh();
+    if (ok) {
+      onRefresh();
+      // Customer Require New Schedule: ask for the customer's new schedule right away.
+      // Shown app-wide, so it stays open if this card leaves the list after the change.
+      if (promptsForNewSchedule(lead.cs_tag, newTag)) {
+        requestScheduleRequirementPrompt({ key: `tag:${lead.id}:${Date.now()}`, source: "manual", leadId: lead.id, customerName: lead.customer_name });
+      }
+    }
     return ok;
   };
 
@@ -1446,7 +1445,7 @@ function LeadCard({
             <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 flex-wrap">
                   <p className="truncate text-lg font-semibold text-foreground">
-                    {lead.customer_name}
+                    {lead.customer_name || lead.job_id}
                   </p>
                   {lead.source_url && (
                     <a
@@ -1580,6 +1579,7 @@ function LeadCard({
                 <QuoPhoneTrigger
                   contactName={lead.customer_name}
                   phone={lead.customer_phone}
+                  showLastMessageTime
                   chatType="customer"
                   className="inline-flex items-center gap-1.5 rounded-xl border border-primary/25 bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary hover:bg-primary/20 transition-all no-underline shadow-sm"
                 >
@@ -1597,6 +1597,7 @@ function LeadCard({
                 <QuoPhoneTrigger
                   contactName={lead.tech_name || "Technician"}
                   phone={lead.tech_number}
+                  showLastMessageTime
                   chatType="tech"
                   className="inline-flex items-center gap-1.5 rounded-xl border border-amber-500/30 bg-amber-500/12 px-2.5 py-1 text-[11px] font-semibold text-amber-700 dark:text-amber-300 hover:bg-amber-500/22 transition-all no-underline shadow-sm"
                 >
@@ -1802,6 +1803,7 @@ function LeadCard({
                   >
                     📌 {CS_TAG_LABELS[currentTag] ?? currentTag}
                   </p>
+                  <AiTagBadge lead={lead} />
                 </>
               )}
             </div>
@@ -1856,7 +1858,7 @@ function LeadCard({
             hasNotes: hasNotes.general,
           })}
 
-          {(isCS || isCsAdmin || isProcessor || isAdmin || isOpr) &&
+          {role !== "opr" && (isCS || isCsAdmin || isProcessor || isAdmin || isOpr) &&
             renderCollapsible({
               open: csOpen,
               setOpen: setCsOpen,
@@ -2102,6 +2104,7 @@ function LeadCard({
           onConfirm={handlePaymentConfirm}
           loading={paymentLoading}
           mode={isProcessor ? "request" : "direct"}
+          requestType={paymentRequestType}
         />
 
         <CancellationRequestSheet
@@ -2114,27 +2117,15 @@ function LeadCard({
           leadId={lead.id}
         />
 
-        <Dialog open={scheduleOpen} onOpenChange={setScheduleOpen}>
-          <DialogContent className="sm:max-w-[460px]" onClick={(e) => e.stopPropagation()}>
-            <DialogHeader>
-              <DialogTitle className="text-base">Customer Schedule Requirement</DialogTitle>
-              <DialogDescription className="text-xs">
-                {lead.customer_name} - add or remove the dates the customer is available.
-              </DialogDescription>
-            </DialogHeader>
-
-            <MultiDateTimePicker value={scheduleDraft} onChange={setScheduleDraft} />
-
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setScheduleOpen(false)} disabled={savingSchedule}>
-                Cancel
-              </Button>
-              <Button onClick={saveScheduleRequirement} disabled={savingSchedule}>
-                {savingSchedule ? "Saving..." : "Save"}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <ScheduleRequirementDialog
+          open={scheduleOpen}
+          onOpenChange={setScheduleOpen}
+          leadId={lead.id}
+          customerName={lead.customer_name}
+          initialValue={lead.customer_schedule_requirements}
+          editor={{ id: user?.id, name: profile?.full_name || user?.email || "Unknown user" }}
+          onSaved={() => onRefresh()}
+        />
 
         <BookingDateTimeDialog
           open={bookingDialogOpen}

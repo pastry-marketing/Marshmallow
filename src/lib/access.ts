@@ -3,8 +3,8 @@ import { ALL_LEAD_STATUSES, ALL_NAV_ITEMS, type NavItem } from "@/lib/constants"
 
 const DEFAULT_NAV_ACCESS: Record<AppRole, Set<NavItem>> = {
   admin: new Set(ALL_NAV_ITEMS),
-  processor: new Set(["leads", "schedule", "processor_board", "cancellation_requests", "map_view", "technicians", "cx_updates"]),
-  customer_service: new Set(["leads", "schedule", "quote_approval_requests", "ai_assistance", "cx_updates"]),
+  processor: new Set(["leads", "schedule", "processor_board", "cancellation_requests", "map_view", "technicians", "cx_updates", "notifications"]),
+  customer_service: new Set(["leads", "schedule", "quote_approval_requests", "ai_assistance", "cx_updates", "notifications"]),
   opr: new Set(["leads"]),
   // The urgent review queue is the CS Admin side of the AI check. customer_service
     // is left out on purpose: they raise requests, they do not clear them, and a
@@ -13,7 +13,7 @@ const DEFAULT_NAV_ACCESS: Record<AppRole, Set<NavItem>> = {
     // ai_assistance (the CS Missed-Lead Tracker) is a shared CS shift-start
     // worklist — admin, cs_admin and customer_service. See the gate in
     // canAccessNavItem below; it is not grantable to processor/opr.
-    cs_admin: new Set(["leads", "schedule", "quote_approval_requests", "urgent_review_requests", "ai_assistance", "cx_updates"]),
+    cs_admin: new Set(["leads", "schedule", "quote_approval_requests", "urgent_review_requests", "ai_assistance", "cx_updates", "notifications"]),
   // opr_admin mirrors opr's default access; the Technicians tab is granted per
   // user via navigation permissions, and unlocks add/import for this role.
   opr_admin: new Set(["leads"]),
@@ -29,6 +29,13 @@ export function canAccessProcessorBoard(role: AppRole | null | undefined): boole
 
 export function canAccessCxUpdates(role: AppRole | null | undefined): boolean {
   return canRequestCxUpdate(role) || role === "cs_admin" || role === "customer_service";
+}
+
+/** Full notification history is recipient-only, not an organization-wide inbox. */
+export const canAccessNotifications = canAccessCxUpdates;
+
+export function canResolveUpdateRequest(role: AppRole | null | undefined, userId: string | undefined, ownerId: string | null) {
+  return canAccessCxUpdates(role) && Boolean(userId) && userId === ownerId;
 }
 
 export function canCompleteCxUpdate(role: AppRole | null | undefined): boolean {
@@ -62,6 +69,14 @@ export function canDeleteTechnicians(role: AppRole | null | undefined): boolean 
 /** Only admins may export data anywhere in the app. */
 export function canExportData(role: AppRole | null | undefined): boolean {
   return role === "admin";
+}
+
+/**
+ * Analytics opens for the whole page ("analytics") or for the CS Team Performance
+ * section alone ("cs_team_performance"), which can be granted without Analytics.
+ */
+export function canOpenAnalytics(canAccess: (navItem: string) => boolean): boolean {
+  return canAccess("analytics") || canAccess("cs_team_performance");
 }
 
 /** Full lead intake coverage/source reporting is an Admin-only Analytics view. */
@@ -107,6 +122,29 @@ export function canAddLeadViaExtension(
   profile?: { can_add_manual_leads?: boolean | null } | null,
 ): boolean {
   return role === "customer_service" && !canAddManualLead(role, profile);
+}
+
+/**
+ * Whether this user may edit notes written by other people in a lead's Processor
+ * Notes thread. Admin always may; a Processor needs the per-user
+ * `can_edit_processor_notes` grant from Settings -> Feature Access. Everyone can
+ * still edit their own notes in threads they can write to. The database enforces
+ * the same rule (policy "Granted processors can edit processor notes").
+ */
+export function canEditOthersProcessorNotes(
+  role: AppRole | null | undefined,
+  profile?: { can_edit_processor_notes?: boolean | null } | null,
+): boolean {
+  if (role === "admin") return true;
+  return role === "processor" && Boolean(profile?.can_edit_processor_notes);
+}
+
+/**
+ * Who may give the single thumbs-up to another user's note in a lead's Processor
+ * Notes thread. Mirrors the `lead_note_reactions` RLS policies (processor/admin).
+ */
+export function canReactToProcessorNotes(role: AppRole | null | undefined): boolean {
+  return role === "processor" || role === "admin";
 }
 
 /** Roles that manage technicians across OPRs must choose an OPR code. */
@@ -164,6 +202,7 @@ export function canAccessNavItem(
   }
 
   if (navItem === "cx_updates") return canAccessCxUpdates(role);
+  if (navItem === "notifications") return canAccessNotifications(role);
   if (navItem === "processor_board") return canAccessProcessorBoard(role);
 
   if (navItem === "ai_assistance") {
